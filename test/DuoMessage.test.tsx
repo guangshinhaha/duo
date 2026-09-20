@@ -49,7 +49,7 @@ describe("OwnerMessage — the only component that may carry the owner's identit
           <OwnerMessage>should never render</OwnerMessage>
         </DuoMessage>,
       ),
-    ).toThrow(/must never render inside DuoMessage/);
+    ).toThrow(/must never render inside a duo-authored message/);
     consoleError.mockRestore();
   });
 
@@ -69,7 +69,7 @@ describe("OwnerMessage — the only component that may carry the owner's identit
     }
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => render(<Bubble><OwnerMessage>should never render</OwnerMessage></Bubble>)).toThrow(
-      /must never render inside DuoMessage/,
+      /must never render inside a duo-authored message/,
     );
     consoleError.mockRestore();
   });
