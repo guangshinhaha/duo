@@ -7,6 +7,7 @@ import type { DuoApiConfig } from "./api/client.js";
 import { useDraftReadySocket } from "./api/ws.js";
 import { SyncStatusProvider } from "./sync.js";
 import { OfflineBar } from "./components/OfflineBar.js";
+import { notifyDraftReady } from "./notifications.js";
 import { Setup } from "./routes/Setup.js";
 import { Review } from "./routes/Review.js";
 import { Mirror } from "./routes/Mirror.js";
@@ -43,7 +44,10 @@ function AppShell() {
   const [api, setApiRaw] = useApiConfig();
   // The one push channel (C7): keeps a socket open while paired, so a draft
   // that lands without this device asking refreshes Review on its own.
-  useDraftReadySocket(api);
+  // The native notification rides on the push message — in the Tauri shell
+  // (C5) it posts "a new draft is waiting"; in a plain browser tab
+  // notifyDraftReady quietly no-ops (feature-detected, never throws).
+  useDraftReadySocket(api, () => void notifyDraftReady());
 
   // Wraps the raw setter so the cache is cleared *before* the next
   // render, not reactively after it in a useEffect: React Query's
