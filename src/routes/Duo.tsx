@@ -8,6 +8,8 @@ import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { DuoMessage } from "../components/DuoMessage.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
 import { SourceList } from "../components/SourceList.js";
+import { StructuredText } from "../components/StructuredText.js";
+import { Timestamp } from "../components/Timestamp.js";
 
 /** §3.1's `threadContext: null` home — one group, so unthreaded questions are never scattered singles. */
 const DEFAULT_THREAD_LABEL = "General";
@@ -59,10 +61,13 @@ function ThreadEntry({ draft }: { draft: DraftRecord }) {
             {draft.escalationReason}
           </div>
         ) : (
-          <DuoMessage>{responseText(draft)}</DuoMessage>
+          <DuoMessage>
+            <StructuredText text={responseText(draft)} />
+          </DuoMessage>
         )}
-        <p className="text-xs text-[var(--faint)]" data-testid="entry-outcome">
+        <p className="flex items-center gap-2 text-xs text-[var(--faint)]" data-testid="entry-outcome">
           {outcomeLabel(draft)}
+          <Timestamp iso={draft.createdAt} />
         </p>
         <SourceList sources={draft.sources} />
       </div>
