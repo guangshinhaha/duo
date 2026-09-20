@@ -40,6 +40,11 @@ in this pass).
   and on `draft-ready` it invalidates `["drafts"]` + `["review"]` (§3.2) and fires the native
   notification callback. Contract-first against digital-duo #162 — the daemon doesn't serve
   `GET /ws` yet, so the socket is exercised against a fake until the core lands.
+- **`src-tauri/` / `src/notifications.ts`** (C5) — the Tauri v2 macOS shell: Rust wrapper +
+  WKWebView around the same web build, with the notification plugin wired so a `draft-ready` push
+  posts a native "A new draft is waiting for your review." In a plain browser tab every
+  notifications call feature-detects and quietly no-ops — the web client carries no shell
+  dependency.
 
 ## Running it
 
@@ -54,10 +59,19 @@ npm run lint
 There's no build-time coupling to the CLI/daemon package — this is a separate npm project talking
 to `duo serve` over HTTP, the same way the Tauri-wrapped Mac and phone apps eventually will.
 
+The Mac shell needs a Rust toolchain (≥1.89 in practice — the current tauri dependency tree):
+
+```
+npm run tauri -- dev            # web dev server inside the native shell
+npm run tauri -- build --no-bundle   # compile src-tauri to a release binary, no .app/.dmg step
+```
+
 ## Deliberately not here yet
 
-- **Tauri wrapping** (C5, macOS; C8, iOS/Android) — needs a macOS host with Xcode for the real
-  builds, which this environment doesn't have.
+- **Tauri iOS/Android targets** (C8) — blocked twice over: `tauri build` for iOS needs a full
+  Xcode with signing certificates this machine doesn't have, and the build order pairs C8 with
+  C7's *live* push channel, which still waits on the daemon (`GET /ws`, digital-duo #162). The
+  macOS shell (C5) is here; the phone halves are not.
 - **Live draft-ready push** — the client half of C7 is in (`useDraftReadySocket`), but the
   daemon's `GET /ws` doesn't exist yet (digital-duo #162); until it does, Review refreshes by
   refetch, which was always the floor.
