@@ -11,6 +11,7 @@ import { notifyDraftReady } from "./notifications.js";
 import { Setup } from "./routes/Setup.js";
 import { Review } from "./routes/Review.js";
 import { Duo } from "./routes/Duo.js";
+import { Trust } from "./routes/Trust.js";
 import { Mirror } from "./routes/Mirror.js";
 
 // §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
@@ -29,7 +30,7 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * fresh launch opens with — stays the default surface: Review is the thing
  * the app exists to open (client-design.md §1.5).
  */
-type Route = "review" | "duo" | "mirror";
+type Route = "review" | "duo" | "trust" | "mirror";
 
 function routeFromHash(hash: string): Route {
   if (hash === "#mirror") {
@@ -37,6 +38,9 @@ function routeFromHash(hash: string): Route {
   }
   if (hash === "#duo") {
     return "duo";
+  }
+  if (hash === "#trust") {
+    return "trust";
   }
   return "review";
 }
@@ -67,6 +71,20 @@ function NavLink({ active, href, children }: { active: boolean; href: string; ch
       {children}
     </a>
   );
+}
+
+/** The §3.1 route tree as one switch — each route's surface, exactly once. */
+function routeSurface(route: Route, api: DuoApiConfig) {
+  switch (route) {
+    case "mirror":
+      return <Mirror api={api} />;
+    case "duo":
+      return <Duo api={api} />;
+    case "trust":
+      return <Trust api={api} />;
+    case "review":
+      return <Review api={api} />;
+  }
 }
 
 function AppShell() {
@@ -107,6 +125,9 @@ function AppShell() {
           <NavLink active={route === "duo"} href="#duo">
             Duo
           </NavLink>
+          <NavLink active={route === "trust"} href="#trust">
+            Trust
+          </NavLink>
           <NavLink active={route === "mirror"} href="#mirror">
             Mirror
           </NavLink>
@@ -118,9 +139,7 @@ function AppShell() {
           {/* §3.3's bar rides above every surface — it is the one state that
               is true of the whole app, not of whichever route is mounted. */}
           <OfflineBar />
-          <main className="flex-1 overflow-y-auto">
-            {route === "mirror" ? <Mirror api={api} /> : route === "duo" ? <Duo api={api} /> : <Review api={api} />}
-          </main>
+          <main className="flex-1 overflow-y-auto">{routeSurface(route, api)}</main>
         </div>
       </div>
     </SyncStatusProvider>
