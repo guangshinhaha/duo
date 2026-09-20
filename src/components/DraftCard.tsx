@@ -71,7 +71,15 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
   // vocabulary, and so do legacy rows (`origin: "unknown"`) — they
   // predate provenance and today's wording is the only honest default
   // for history that may well be channel-borne.
-  const selfAsked = draft.provenance.origin === "owner";
+  // The `?.` is not the wire being optional — the daemon always sends the
+  // field — it is the persisted cache being older than the field: a
+  // record rehydrated from duo-cache as written before #169 has no
+  // `provenance` at all, renders BEFORE the refetch replaces it, and a
+  // bare dereference would crash that first render with no boundary to
+  // catch it (killing the very refetch that heals the data). An absent
+  // field reads as not-owner, i.e. today's vocabulary — the same honest
+  // default the daemon itself gives a legacy row.
+  const selfAsked = draft.provenance?.origin === "owner";
   // AR-15 (§3.3): when the daemon is unreachable every mutation control is
   // disabled, not queued — a Send firing hours later against moved context
   // is worse than no Send. Editing the text stays possible (a local buffer);

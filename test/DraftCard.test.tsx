@@ -313,6 +313,20 @@ describe("#30 — a self-asked draft answers you, it doesn't reply to anyone", (
     expect(postedOutcomeBody("drafts/c1/outcome")).toEqual({ outcome: "edited", sentText: "Actually, ten days." });
   });
 
+  it("a record the stale cache served before provenance existed renders with today's vocabulary, not a crash", () => {
+    // duo-cache rehydrates up to a week of history, and a record cached
+    // before #169 carries no provenance key at all — that rehydrated
+    // render happens BEFORE the refetch replaces the data, so it must
+    // succeed or the healing refetch never fires. The wire type stays
+    // required; the cache is simply older than the field.
+    const staleCached = { ...draftRecord, provenance: undefined } as unknown as DraftRecord;
+    renderWithClient(<DraftCard api={api} draft={staleCached} />);
+    expect(screen.getByText("Send", { selector: "button" })).toBeInTheDocument();
+    expect(screen.getByText("Edit", { selector: "button" })).toBeInTheDocument();
+    expect(screen.getByText("Ignore", { selector: "button" })).toBeInTheDocument();
+    expect(screen.queryByText(/Keep/, { selector: "button" })).toBeNull();
+  });
+
   it("a channel-borne draft's ignore window still says \"not sent yet\" — the wording split is provenance-based, not cosmetic", () => {
     vi.useFakeTimers();
     try {

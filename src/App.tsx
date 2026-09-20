@@ -26,6 +26,18 @@ import { Mirror } from "./routes/Mirror.js";
 // "cached views render" would silently be true only for the route you were
 // last on.
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+// The persisted cache's schema buster (#30). Change the string whenever a
+// wire shape gains a field this client dereferences at render: a record
+// cached before the field existed rehydrates and renders BEFORE the
+// refetch heals it, and `provenance` was the first dereference-grade field
+// (a bare `.origin` read would crash that first render with no boundary to
+// catch it — killing the very refetch that heals the data). A persisted
+// cache whose buster doesn't match is dropped wholesale, so every
+// pre-provenance cache dies at launch instead of rendering wrong shapes;
+// the per-field render guards are the belt, this is the braces — the
+// durable pattern for every future wire-shape change. The value names the
+// last field that forced a bump.
+const CACHE_BUSTER = "provenance";
 // A 401 is exempt from the retry default: a revoked token never
 // re-authenticates on attempt two, so retrying only delays the return to
 // Setup by TanStack's full backoff window (~7s). A 404 is exempt with it
@@ -274,7 +286,7 @@ function AppShell() {
 
 export function App() {
   return (
-    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, maxAge: ONE_WEEK_MS }}>
+    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, maxAge: ONE_WEEK_MS, buster: CACHE_BUSTER }}>
       <AppShell />
     </PersistQueryClientProvider>
   );
