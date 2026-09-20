@@ -20,10 +20,10 @@ export function RoomDuoMessage({ ownerName, children }: { ownerName: string; chi
   return (
     <div
       data-testid="room-duo-message"
-      className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] bg-[var(--surface-2)] px-4 py-3 text-[var(--text)]"
+      className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] bg-[var(--surface-2)] px-4 py-3 text-[var(--text)]"
     >
       <div
-        className="mb-1 text-xs font-medium tracking-wide text-[var(--muted)]"
+        className="mb-1 type-provenance text-[var(--muted)]"
         data-testid="room-duo-message-attribution"
       >
         {ownerName}&#39;s duo

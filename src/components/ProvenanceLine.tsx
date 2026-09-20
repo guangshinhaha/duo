@@ -18,7 +18,7 @@ export function ProvenanceLine({ provenance }: { provenance: DraftProvenance | u
     return null;
   }
   return (
-    <p className="text-xs text-[var(--faint)]" data-testid="draft-origin">
+    <p className="type-provenance text-[var(--faint)]" data-testid="draft-origin">
       Asked by {provenance.askerRef} in {provenance.channelKind}
       {provenance.permalink ? (
         <>

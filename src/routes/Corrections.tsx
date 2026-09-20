@@ -26,12 +26,12 @@ function CandidateCard({ api, candidate }: { api: DuoApiConfig; candidate: Corre
   const { reachable } = useSyncStatus();
 
   return (
-    <div className="flex flex-row gap-3 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="candidate">
+    <div className="flex flex-row gap-3 shape-entry p-4" data-testid="candidate">
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         {/* The kind is the daemon's own string, verbatim — style and
             substance mean different things downstream (a voice correction
             vs a rule), and this client re-words neither. */}
-        <div className="flex items-baseline gap-2 text-xs text-[var(--faint)]">
+        <div className="flex items-baseline gap-2 type-provenance text-[var(--faint)]">
           <span data-testid="candidate-kind">{candidate.kind}</span>
           <span>correction</span>
           <Timestamp iso={candidate.createdAt} />
@@ -90,10 +90,14 @@ export function Corrections({ api }: { api: DuoApiConfig }) {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-6" data-testid="corrections-list">
-      {candidates.map((candidate) => (
-        <CandidateCard key={candidate.id} api={api} candidate={candidate} />
-      ))}
+    // #33: the second queue reads as one panel, like the first — the
+    // container shape is what makes a queue a thing rather than a pile.
+    <div className="p-6">
+      <div className="shape-container flex flex-col gap-4 p-4" data-testid="corrections-list">
+        {candidates.map((candidate) => (
+          <CandidateCard key={candidate.id} api={api} candidate={candidate} />
+        ))}
+      </div>
     </div>
   );
 }

@@ -52,7 +52,7 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
   return (
     <div className="flex h-screen items-center justify-center bg-[var(--bg)] px-4">
       <form
-        className="flex w-full max-w-sm flex-col gap-3 rounded-[var(--r-lg)] border border-[var(--edge)] bg-[var(--surface)] p-6"
+        className="shape-entry flex w-full max-w-sm flex-col gap-3 p-6"
         onSubmit={(e) => {
           e.preventDefault();
           const normalized = normalizeBaseUrl(baseUrlInput);
@@ -77,20 +77,20 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
           onConnect({ baseUrl: normalized, token: trimmedToken });
         }}
       >
-        <h1 className="text-lg font-medium">Connect to your duo</h1>
+        <h1 className="type-heading">Connect to your duo</h1>
         {notice && (
           <p
-            className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--escalate)]"
+            className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-3 py-2 type-body text-[var(--escalate)]"
             data-testid="setup-notice"
             role="status"
           >
             {notice}
           </p>
         )}
-        <p className="text-sm text-[var(--muted)]">
+        <p className="type-body text-[var(--muted)]">
           Run <code>duo pair new &quot;this device&apos;s name&quot;</code> on your Mac, then paste its address and token here.
         </p>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="flex flex-col gap-1 type-body">
           Daemon address
           <input
             className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2 py-1"
@@ -102,7 +102,7 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
             }}
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="flex flex-col gap-1 type-body">
           Token
           <input
             className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2 py-1"
@@ -111,7 +111,7 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
           />
         </label>
         {error && (
-          <p className="text-sm text-[var(--refused)]" data-testid="setup-error">
+          <p className="type-body text-[var(--refused)]" data-testid="setup-error">
             {error}
           </p>
         )}

@@ -140,20 +140,20 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
     return (
       // flex-row so the hairline can lead the card (#32: Part 4's leading
       // edge), with the card's own stack inside the column beside it.
-      <div className="flex flex-row gap-3 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="draft-card">
+      <div className="flex flex-row gap-3 shape-entry p-4" data-testid="draft-card">
         <ConfidenceHairline result={result} />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <OwnerMessage>{draft.question}</OwnerMessage>
           {/* #20: a channel-borne question carries its asker even when it
               escalated — judging the escalation still means judging who asked. */}
           <ProvenanceLine provenance={draft.provenance} />
-          <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] px-4 py-3 text-[var(--muted)]" data-testid="escalation-reason">
+          <div className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] px-4 py-3 type-body text-[var(--muted)]" data-testid="escalation-reason">
             {draft.escalationReason}
           </div>
           <SourceList sources={draft.sources} />
           {!draft.refused &&
             (answerEscalation.isSuccess ? (
-              <p className="text-xs text-[var(--confident)]" data-testid="answer-confirmation">
+              <p className="type-provenance text-[var(--confident)]" data-testid="answer-confirmation">
                 Queued as a standing-order candidate.
               </p>
             ) : (
@@ -180,7 +180,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
   }
 
   return (
-    <div className="flex flex-row gap-3 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="draft-card">
+    <div className="flex flex-row gap-3 shape-entry p-4" data-testid="draft-card">
       <ConfidenceHairline result={result} />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <OwnerMessage>{draft.question}</OwnerMessage>
@@ -204,7 +204,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
             <StructuredText text={draft.draftText ?? ""} />
           )}
         </DuoMessage>
-        <div className="text-xs text-[var(--faint)]">
+        <div className="type-provenance text-[var(--faint)]">
           <Timestamp iso={draft.createdAt} />
         </div>
         {/* #21: the single-draft address renders cards Review has passed by —
@@ -219,7 +219,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
           // nothing was ever being sent anywhere; "final" is the word
           // that carries the same warning.
           <div className="flex items-center gap-2" data-testid="ignore-window">
-            <span className="text-xs text-[var(--muted)]">{selfAsked ? "Ignoring — not final yet." : "Ignoring — not sent yet."}</span>
+            <span className="type-provenance text-[var(--muted)]">{selfAsked ? "Ignoring — not final yet." : "Ignoring — not sent yet."}</span>
             <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={undoIgnore}>
               Undo
             </button>

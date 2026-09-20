@@ -23,9 +23,9 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
 
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-testid="settings">
-      <section className="flex flex-col gap-3 rounded-[var(--r-lg)] border border-[var(--edge)] p-4">
-        <h2 className="text-sm font-medium">Connection</h2>
-        <div className="flex flex-col gap-1 text-xs text-[var(--muted)]">
+      <section className="shape-container flex flex-col gap-3 p-4">
+        <h2 className="type-heading">Connection</h2>
+        <div className="flex flex-col gap-1 type-provenance text-[var(--muted)]">
           <div data-testid="settings-address">{api.baseUrl}</div>
           <div data-testid="settings-token">{maskedToken(api.token)}</div>
         </div>
@@ -44,45 +44,45 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
             onConfigChange({ baseUrl: normalized, token: api.token });
           }}
         >
-          <label className="text-xs text-[var(--muted)]" htmlFor="settings-address-input">
+          <label className="type-provenance text-[var(--muted)]" htmlFor="settings-address-input">
             Daemon address
           </label>
           <div className="flex gap-2">
             <input
-              className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)]"
+              className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
               id="settings-address-input"
               onChange={(e) => setAddressInput(e.target.value)}
               value={addressInput}
             />
-            <button className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1.5 text-sm text-[var(--bg)] disabled:opacity-40" disabled={!addressInput.trim()} type="submit">
+            <button className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40" disabled={!addressInput.trim()} type="submit">
               Save
             </button>
           </div>
           {error && (
-            <p className="text-xs text-[var(--refused)]" data-testid="settings-error">
+            <p className="type-provenance text-[var(--refused)]" data-testid="settings-error">
               {error}
             </p>
           )}
         </form>
       </section>
 
-      <section className="flex flex-col gap-3 rounded-[var(--r-lg)] border border-[var(--edge)] p-4">
-        <h2 className="text-sm font-medium">This device</h2>
+      <section className="shape-container flex flex-col gap-3 p-4">
+        <h2 className="type-heading">This device</h2>
         {confirmingUnpair ? (
           <div className="flex flex-col gap-3" data-testid="settings-unpair-confirmation">
-            <p className="text-xs text-[var(--muted)]">
+            <p className="type-provenance text-[var(--muted)]">
               Forget this device's stored connection? The daemon keeps its own record — this removes the address and token here, on this device only.
             </p>
             <div className="flex gap-2">
               <button
-                className="rounded-[var(--r-sm)] bg-[var(--refused)] px-3 py-1.5 text-sm text-white"
+                className="rounded-[var(--r-sm)] bg-[var(--refused)] px-3 py-1 text-white"
                 data-testid="settings-unpair-confirm"
                 onClick={() => onConfigChange(null)}
               >
                 Forget this device
               </button>
               <button
-                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1.5 text-sm"
+                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1"
                 data-testid="settings-unpair-cancel"
                 onClick={() => setConfirmingUnpair(false)}
               >
@@ -92,7 +92,7 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
           </div>
         ) : (
           <button
-            className="self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1.5 text-sm text-[var(--muted)]"
+            className="self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)]"
             data-testid="settings-unpair"
             onClick={() => setConfirmingUnpair(true)}
           >

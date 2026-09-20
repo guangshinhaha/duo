@@ -7,6 +7,16 @@
  * targets, because --muted carries provenance text that is load-bearing.
  */
 
+/*
+ * #33: Tailwind v4 derives every spacing utility from --spacing, so
+ * pointing it at --sp makes the whole utility scale token-derived — a
+ * whole step IS the 4px multiple Part 4 mandates, and the half steps
+ * (0.5/1.5/…) have no generator left to come from.
+ */
+@theme {
+  --spacing: var(--sp);
+}
+
 :root {
   --bg: #0b0c0e;
   --surface: #141619;
@@ -81,4 +91,74 @@ h1,
 h2,
 h3 {
   letter-spacing: -0.011em;
+}
+
+/*
+ * #33 — the type scale, set once. Four roles, nothing between them: body
+ * 14/22 (Part 4's stated density), headings 16/22 tightened to -0.011em,
+ * and the two 12px roles Part 4 implies but never spelled out —
+ * provenance (who/when/where, weight 400) and identifiers (raw refs off
+ * the wire: channel kinds, asker refs, thread ids — weight 560). One
+ * weight jump only, 400 and 560; a size utility outside these classes is
+ * a per-component choice escaping the scale, and the design-system test
+ * bans it.
+ */
+.type-heading {
+  font-size: 16px;
+  line-height: 22px;
+  letter-spacing: -0.011em;
+  font-weight: 560;
+}
+
+.type-body {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 400;
+}
+
+.type-provenance {
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 400;
+}
+
+.type-identifier {
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 560;
+}
+
+/*
+ * #33 — the three shapes. Before this, every surface was
+ * `rounded-[var(--r-lg)] border border-[var(--edge)] p-4` — a draft
+ * card, a message, a trust row, a form field and a button were the same
+ * object, so nothing was above or below anything else. Now three forms,
+ * each differing on more than one axis:
+ *
+ *   container — the ground a screen groups on: surface-2 tint, the
+ *     largest radius, no border (its edge is the tint step, not a line).
+ *   entry — a thing in the world on that ground: surface, a real border,
+ *     one radius step down.
+ *   entry-quiet — the duo's own voice: the container tint at entry
+ *     scale, borderless (§1.6: duo output is structurally distinct — a
+ *     different container, not a badge on the same one).
+ *
+ * Controls never take a shape class — their form is the control form
+ * (primary: accent fill; ghost: border, no fill), which is what keeps
+ * "clickable" legible without colour on it.
+ */
+.shape-container {
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+}
+
+.shape-entry {
+  border-radius: var(--r-md);
+  border: 1px solid var(--edge);
+  background: var(--surface);
+}
+
+.shape-entry-quiet {
+  border-radius: var(--r-md);
+  background: var(--surface-2);
 }

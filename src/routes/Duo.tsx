@@ -63,7 +63,7 @@ function ThreadEntry({ draft }: { draft: DraftRecord }) {
             click from the original when a permalink rode along. */}
         <ProvenanceLine provenance={draft.provenance} />
         {draft.escalated ? (
-          <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] px-4 py-3 text-[var(--muted)]" data-testid="escalation-reason">
+          <div className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] px-4 py-3 type-body text-[var(--muted)]" data-testid="escalation-reason">
             {draft.escalationReason}
           </div>
         ) : (
@@ -71,7 +71,7 @@ function ThreadEntry({ draft }: { draft: DraftRecord }) {
             <StructuredText text={responseText(draft)} />
           </DuoMessage>
         )}
-        <p className="flex items-center gap-2 text-xs text-[var(--faint)]" data-testid="entry-outcome">
+        <p className="flex items-center gap-2 type-provenance text-[var(--faint)]" data-testid="entry-outcome">
           {outcomeLabel(draft)}
           <Timestamp iso={draft.createdAt} />
         </p>
@@ -175,19 +175,19 @@ export function Duo({ api }: { api: DuoApiConfig }) {
             No conversation yet. Ask your duo something below — your questions, its drafts and escalations, and what you sent will all read here.
           </div>
         ) : openGroup ? (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4">
             <button
-              className="self-start rounded-[var(--r-sm)] px-2 py-1 text-xs font-medium uppercase tracking-wide text-[var(--muted)]"
+              className="self-start rounded-[var(--r-sm)] px-2 py-1 type-provenance uppercase text-[var(--muted)]"
               data-testid="back-to-conversations"
               onClick={() => setOpen(null)}
             >
               All conversations
             </button>
-            <section className="flex flex-col gap-3" data-testid="thread-group">
-              <h2
-                className="self-start rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1 text-xs font-medium uppercase tracking-wide"
-                data-testid="thread-group-heading"
-              >
+            {/* #33: gap-5 is Part 4's density — 20px between speakers, the
+                air that makes a handful of considered turns read as
+                considered (Slack's 8/8 serves hundreds of lines; this isn't that). */}
+            <section className="flex flex-col gap-5" data-testid="thread-group">
+              <h2 className="self-start type-heading" data-testid="thread-group-heading">
                 {openGroup.key ?? DEFAULT_THREAD_LABEL}
               </h2>
               {openGroup.drafts.map((draft) => (
@@ -199,7 +199,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
           <nav aria-label="Conversations" className="flex flex-col gap-2" data-testid="conversation-list">
             {groups.map((group) => (
               <button
-                className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-left text-[var(--text)]"
+                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 text-left type-body text-[var(--text)]"
                 data-testid="conversation-entry"
                 key={group.key ?? "__general__"}
                 onClick={() => setOpen({ key: group.key })}
@@ -215,7 +215,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
             at the end of history (a short page means nothing older exists). */}
         {feed.hasNextPage ? (
           <button
-            className="mx-auto mt-4 block rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1.5 text-xs text-[var(--muted)] disabled:opacity-50"
+            className="mx-auto mt-4 block rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-provenance text-[var(--muted)] disabled:opacity-50"
             data-testid="load-older"
             disabled={feed.isFetchingNextPage}
             onClick={() => void feed.fetchNextPage()}

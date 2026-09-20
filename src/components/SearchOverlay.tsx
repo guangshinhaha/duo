@@ -20,15 +20,15 @@ function snippet(text: string): string {
  */
 function SearchResultRow({ record }: { record: CorpusRecord }) {
   return (
-    <details className="rounded-[var(--r-lg)] border border-[var(--edge)] p-3" data-testid="search-result">
-      <summary className="cursor-pointer text-sm text-[var(--text)]" data-testid="search-result-summary">
+    <details className="shape-entry p-3" data-testid="search-result">
+      <summary className="cursor-pointer type-body text-[var(--text)]" data-testid="search-result-summary">
         {snippet(record.text)}
       </summary>
       <div className="mt-2 flex flex-col gap-1">
-        <p className="whitespace-pre-wrap text-sm text-[var(--text)]" data-testid="search-result-full">
+        <p className="whitespace-pre-wrap type-body text-[var(--text)]" data-testid="search-result-full">
           {record.text}
         </p>
-        <p className="text-xs text-[var(--faint)]" data-testid="search-result-origin">
+        <p className="type-provenance text-[var(--faint)]" data-testid="search-result-origin">
           from {record.source}
           {record.sourceRef ? ` · ${record.sourceRef}` : ""}
         </p>
@@ -61,7 +61,7 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
     // *over* a screen, never *instead of* one (AC3).
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--bg)]/80 p-6" data-testid="search-overlay">
       <dialog
-        className="w-full max-w-2xl rounded-[var(--r-lg)] border border-[var(--edge)] bg-[var(--surface)] p-4 open:flex open:flex-col open:gap-3"
+        className="shape-container w-full max-w-2xl p-4 open:flex open:flex-col open:gap-3"
         open
         onKeyDown={(e) => {
           if (e.key === "Escape") {
@@ -78,15 +78,15 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
         >
           <input
             autoFocus
-            className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+            className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-[var(--text)]"
             placeholder="Search what your duo knows"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <button type="submit" className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-2 text-sm text-[var(--bg)]">
+          <button type="submit" className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-2 text-[var(--bg)]">
             Search
           </button>
-          <button type="button" className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 text-sm" onClick={onClose}>
+          <button type="button" className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2" onClick={onClose}>
             Close
           </button>
         </form>
@@ -95,16 +95,16 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
             client neither paraphrases it nor hides it: results found by
             full-text alone are still results, with their caveat attached. */}
         {warning && (
-          <p className="text-xs text-[var(--muted)]" data-testid="search-warning">
+          <p className="type-provenance text-[var(--muted)]" data-testid="search-warning">
             {warning}
           </p>
         )}
 
-        {search.isLoading && <div className="text-sm text-[var(--muted)]">Searching…</div>}
-        {search.error && <div className="text-sm text-[var(--refused)]">{(search.error as Error).message}</div>}
+        {search.isLoading && <div className="type-body text-[var(--muted)]">Searching…</div>}
+        {search.error && <div className="type-body text-[var(--refused)]">{(search.error as Error).message}</div>}
 
         {submitted && !search.isLoading && !search.error && rows.length === 0 && (
-          <div className="text-sm text-[var(--muted)]" data-testid="search-empty">
+          <div className="type-body text-[var(--muted)]" data-testid="search-empty">
             {/* Two different zero-result truths (AC4): a corpus with
                 records in it and no match is about the query; a corpus
                 with nothing in it is about the corpus. The knowledge read
@@ -121,7 +121,7 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
               <div key={`${rank}-${record.id}`} className="flex flex-col">
                 <SearchResultRow record={record} />
                 <div className="flex items-baseline justify-between px-1">
-                  <span className="text-xs text-[var(--faint)]" data-testid="search-result-source">
+                  <span className="type-provenance text-[var(--faint)]" data-testid="search-result-source">
                     {record.source}
                   </span>
                   <Timestamp iso={record.timestamp} />
@@ -130,7 +130,7 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
             ))}
             {search.hasNextPage && (
               <button
-                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-sm text-[var(--muted)] disabled:opacity-40"
+                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-provenance text-[var(--muted)] disabled:opacity-40"
                 disabled={search.isFetchingNextPage}
                 onClick={() => void search.fetchNextPage()}
                 data-testid="search-load-more"

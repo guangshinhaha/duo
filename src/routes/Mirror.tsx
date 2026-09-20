@@ -22,7 +22,7 @@ function RuleBucketSection({ api, listing, bucket }: { api: DuoApiConfig; listin
   const rules: Rule[] = listing[bucket.key];
   const body =
     rules.length === 0 ? (
-      <p className="text-xs text-[var(--faint)]">{bucket.empty}</p>
+      <p className="type-provenance text-[var(--faint)]">{bucket.empty}</p>
     ) : (
       <div className="flex flex-col gap-3">
         {rules.map((rule) => (
@@ -33,8 +33,8 @@ function RuleBucketSection({ api, listing, bucket }: { api: DuoApiConfig; listin
 
   if (bucket.collapsible) {
     return (
-      <details className="flex flex-col gap-2" data-testid={`bucket-${bucket.key}`}>
-        <summary className="cursor-pointer text-sm font-medium">
+      <details className="shape-container flex flex-col gap-2 p-4" data-testid={`bucket-${bucket.key}`}>
+        <summary className="cursor-pointer type-heading">
           {bucket.heading} ({rules.length})
         </summary>
         <div className="mt-2 flex flex-col gap-2">{body}</div>
@@ -43,8 +43,8 @@ function RuleBucketSection({ api, listing, bucket }: { api: DuoApiConfig; listin
   }
 
   return (
-    <section className="flex flex-col gap-2" data-testid={`bucket-${bucket.key}`}>
-      <h3 className="text-sm font-medium">
+    <section className="shape-container flex flex-col gap-2 p-4" data-testid={`bucket-${bucket.key}`}>
+      <h3 className="type-heading">
         {bucket.heading} ({rules.length})
       </h3>
       {body}
@@ -67,8 +67,8 @@ export function Mirror({ api }: { api: DuoApiConfig }) {
   return (
     <div className="flex flex-col gap-6 p-6" data-testid="mirror">
       <header className="flex flex-col gap-1">
-        <h1 className="text-base font-medium">Mirror</h1>
-        <p className="text-xs text-[var(--muted)]">
+        <h1 className="type-heading">Mirror</h1>
+        <p className="type-provenance text-[var(--muted)]">
           What the duo has derived about how you work. Read it, disposition it — rule writing stays in duo/rules/*.md on your Mac.
         </p>
       </header>

@@ -101,72 +101,77 @@ export function Review({ api }: { api: DuoApiConfig }) {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-6" data-testid="review-list">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
-        <label className="flex items-center gap-1">
-          State
-          <select
-            aria-label="State"
-            className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-1 py-0.5 text-[var(--text)]"
-            value={stateFilter}
-            onChange={(e) => setStateFilter(e.target.value as StateFilter)}
-          >
-            <option value="all">All</option>
-            <option value="drafts">Drafts</option>
-            <option value="escalations">Escalations</option>
-            <option value="refusals">Refusals</option>
-          </select>
-        </label>
-        <label className="flex items-center gap-1">
-          Channel
-          <select
-            aria-label="Channel"
-            className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-1 py-0.5 text-[var(--text)]"
-            value={channelFilter}
-            onChange={(e) => setChannelFilter(e.target.value)}
-          >
-            <option value="all">All</option>
-            {channels.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex items-center gap-1">
-          Asker
-          <select
-            aria-label="Asker"
-            className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-1 py-0.5 text-[var(--text)]"
-            value={askerFilter}
-            onChange={(e) => setAskerFilter(e.target.value)}
-          >
-            <option value="all">All</option>
-            {askers.map((ref) => (
-              <option key={ref} value={ref}>
-                {ref}
-              </option>
-            ))}
-          </select>
-        </label>
-        {filtered && (
-          <span className="flex items-center gap-2">
-            <span className="text-[var(--faint)]" data-testid="filter-status">
-              Filtered — {hidden} hidden
+    // #33: the queue is one panel (the container shape) and each draft a
+    // thing on it (the entry shape) — the ground/thing distinction the
+    // flat triple erased.
+    <div className="p-6">
+      <div className="shape-container flex flex-col gap-4 p-4" data-testid="review-list">
+        <div className="flex flex-wrap items-center gap-2 type-provenance text-[var(--muted)]">
+          <label className="flex items-center gap-1">
+            State
+            <select
+              aria-label="State"
+              className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+              value={stateFilter}
+              onChange={(e) => setStateFilter(e.target.value as StateFilter)}
+            >
+              <option value="all">All</option>
+              <option value="drafts">Drafts</option>
+              <option value="escalations">Escalations</option>
+              <option value="refusals">Refusals</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-1">
+            Channel
+            <select
+              aria-label="Channel"
+              className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+              value={channelFilter}
+              onChange={(e) => setChannelFilter(e.target.value)}
+            >
+              <option value="all">All</option>
+              {channels.map((kind) => (
+                <option key={kind} value={kind}>
+                  {kind}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1">
+            Asker
+            <select
+              aria-label="Asker"
+              className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+              value={askerFilter}
+              onChange={(e) => setAskerFilter(e.target.value)}
+            >
+              <option value="all">All</option>
+              {askers.map((ref) => (
+                <option key={ref} value={ref}>
+                  {ref}
+                </option>
+              ))}
+            </select>
+          </label>
+          {filtered && (
+            <span className="flex items-center gap-2">
+              <span className="text-[var(--faint)]" data-testid="filter-status">
+                Filtered — {hidden} hidden
+              </span>
+              <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-2 py-1" data-testid="filter-clear" onClick={clearFilters}>
+                Clear
+              </button>
             </span>
-            <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-2 py-0.5" data-testid="filter-clear" onClick={clearFilters}>
-              Clear
-            </button>
-          </span>
+          )}
+        </div>
+        {visible.length === 0 ? (
+          <div className="text-[var(--muted)]" data-testid="filter-empty">
+            Nothing in this slice — {hidden} hidden by the filter.
+          </div>
+        ) : (
+          visible.map((draft) => <DraftCard key={draft.id} api={api} draft={draft} />)
         )}
       </div>
-      {visible.length === 0 ? (
-        <div className="text-[var(--muted)]" data-testid="filter-empty">
-          Nothing in this slice — {hidden} hidden by the filter.
-        </div>
-      ) : (
-        visible.map((draft) => <DraftCard key={draft.id} api={api} draft={draft} />)
-      )}
     </div>
   );
 }

@@ -133,7 +133,7 @@ function NavLink({
 }) {
   return (
     <a
-      className={`flex items-center gap-2 rounded-[var(--r-sm)] px-2 py-1.5 text-sm ${
+      className={`flex items-center gap-2 rounded-[var(--r-sm)] px-2 py-1 type-body ${
         active ? "bg-[var(--surface)]" : "text-[var(--muted)]"
       }`}
       href={href}
@@ -142,7 +142,7 @@ function NavLink({
       {count !== undefined && count > 0 && (
         <span
           data-testid="review-badge"
-          className="ml-auto rounded-full bg-[var(--accent)] px-1.5 text-xs font-medium text-[var(--bg)]"
+          className="ml-auto rounded-full bg-[var(--accent)] px-2 type-identifier text-[var(--bg)]"
         >
           {count}
         </span>
@@ -279,7 +279,7 @@ function AppShell() {
     <SyncStatusProvider>
       <div className="flex h-screen bg-[var(--bg)] text-[var(--text)]">
         <nav className="flex w-56 flex-col gap-1 border-r border-[var(--edge)] p-3">
-          <div className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-[var(--faint)]">Duo</div>
+          <div className="mb-2 px-2 type-provenance uppercase text-[var(--faint)]">Duo</div>
           {/* A draft page belongs to the review loop — Review stays the lit
               entry while one is open, so the way back is always named. */}
           <ReviewLink api={api} active={route === "review" || typeof route === "object"} />
@@ -309,7 +309,7 @@ function AppShell() {
           <NavLink active={route === "settings"} href="#settings">
             Settings
           </NavLink>
-          <button className="mt-auto px-2 py-1 text-left text-xs text-[var(--faint)]" onClick={() => setApi(null)}>
+          <button className="mt-auto px-2 py-1 text-left type-provenance text-[var(--faint)]" onClick={() => setApi(null)}>
             Disconnect
           </button>
         </nav>

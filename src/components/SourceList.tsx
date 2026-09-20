@@ -6,7 +6,7 @@ export function SourceList({ sources }: { sources: DraftSource[] }) {
     return null;
   }
   return (
-    <details className="text-xs text-[var(--muted)]">
+    <details className="type-provenance text-[var(--muted)]">
       <summary>
         Drew on {sources.length} source{sources.length === 1 ? "" : "s"}
       </summary>

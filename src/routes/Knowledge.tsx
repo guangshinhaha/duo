@@ -17,19 +17,19 @@ function formatDate(iso: string | null): string {
  */
 function RecordsSection({ knowledge }: { knowledge: DuoKnowledge }) {
   return (
-    <section className="flex flex-col gap-2" data-testid="knowledge-records">
-      <h2 className="text-sm font-medium">
+    <section className="shape-container flex flex-col gap-2 p-4" data-testid="knowledge-records">
+      <h2 className="type-heading">
         Records ({knowledge.records.total})
       </h2>
       {Object.entries(knowledge.records.bySource).map(([source, count]) => (
         // The source names are the daemon's own strings, verbatim — this
         // client keeps no registry of sources to translate them through.
-        <div key={source} className="flex justify-between text-xs text-[var(--muted)]" data-testid="record-source">
+        <div key={source} className="flex justify-between type-provenance text-[var(--muted)]" data-testid="record-source">
           <span>{source}</span>
           <span>{count}</span>
         </div>
       ))}
-      <p className="text-xs text-[var(--faint)]" data-testid="last-import">
+      <p className="type-provenance text-[var(--faint)]" data-testid="last-import">
         {knowledge.lastImport
           ? `Last import ${formatDate(knowledge.lastImport.runAt)}: ${knowledge.lastImport.written} written, ${knowledge.lastImport.alreadyPresent} already present, ${knowledge.lastImport.skippedDmConversations} DM conversations skipped.`
           : "No import yet — importing your records is what gives the duo something to answer from."}
@@ -50,7 +50,7 @@ function CorpusSection({ knowledge }: { knowledge: DuoKnowledge }) {
   if (corpus.tooThin) {
     return (
       <div
-        className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] p-4 text-[var(--muted)]"
+        className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] p-4 type-body text-[var(--muted)]"
         data-testid="corpus-thin"
       >
         Not enough history yet — the corpus starts to mean something at {corpus.minimumQuestionsToCharacterize} questions,
@@ -59,10 +59,10 @@ function CorpusSection({ knowledge }: { knowledge: DuoKnowledge }) {
     );
   }
   return (
-    <section className="flex flex-col gap-2 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="corpus">
+    <section className="shape-container flex flex-col gap-2 p-4" data-testid="corpus">
       <div>
-        <h2 className="text-sm font-medium">Corpus</h2>
-        <p className="text-xs text-[var(--muted)]">
+        <h2 className="type-heading">Corpus</h2>
+        <p className="type-provenance text-[var(--muted)]">
           {corpus.totalQuestions} question{corpus.totalQuestions === 1 ? "" : "s"} · {formatDate(corpus.periodStart)} –{" "}
           {formatDate(corpus.periodEnd)}
         </p>
@@ -71,7 +71,7 @@ function CorpusSection({ knowledge }: { knowledge: DuoKnowledge }) {
         <div className="flex flex-col gap-2">
           {corpus.topicBreakdown.map((topic) => (
             <div key={topic.topicId} className="flex flex-col gap-1" data-testid="knowledge-topic">
-              <div className="flex justify-between text-xs text-[var(--muted)]">
+              <div className="flex justify-between type-provenance text-[var(--muted)]">
                 <span>{topic.label}</span>
                 <span>{topic.count}</span>
               </div>
@@ -89,8 +89,8 @@ function KnowledgeScreen({ knowledge }: { knowledge: DuoKnowledge }) {
   return (
     <div className="flex flex-col gap-6 p-6" data-testid="knowledge">
       <header className="flex flex-col gap-1">
-        <h1 className="text-base font-medium">Knowledge</h1>
-        <p className="text-xs text-[var(--muted)]">
+        <h1 className="type-heading">Knowledge</h1>
+        <p className="type-provenance text-[var(--muted)]">
           What this duo actually knows, so its answers can be trusted in proportion to what is behind them.
         </p>
       </header>
@@ -98,42 +98,42 @@ function KnowledgeScreen({ knowledge }: { knowledge: DuoKnowledge }) {
       <RecordsSection knowledge={knowledge} />
       <CorpusSection knowledge={knowledge} />
 
-      <section className="flex flex-col gap-1" data-testid="knowledge-rules">
-        <h2 className="text-sm font-medium">Derived rules</h2>
+      <section className="shape-container flex flex-col gap-2 p-4" data-testid="knowledge-rules">
+        <h2 className="type-heading">Derived rules</h2>
         {/* Every status key the daemon sends, count beside it — zero
             included, because "no superseded rules" is a fact worth seeing,
             not an absence worth hiding. */}
-        <p className="text-xs text-[var(--muted)]" data-testid="rule-counts">
+        <p className="type-provenance text-[var(--muted)]" data-testid="rule-counts">
           {Object.entries(knowledge.rules.byReviewStatus)
             .map(([status, count]) => `${status} ${count}`)
             .join(" · ")}
         </p>
       </section>
 
-      <section className="flex flex-col gap-1" data-testid="knowledge-providers">
-        <h2 className="text-sm font-medium">Providers</h2>
-        <p className="text-xs text-[var(--muted)]" data-testid="inference-provider">
+      <section className="shape-container flex flex-col gap-2 p-4" data-testid="knowledge-providers">
+        <h2 className="type-heading">Providers</h2>
+        <p className="type-provenance text-[var(--muted)]" data-testid="inference-provider">
           {knowledge.providers.inference
             ? `Answering with ${knowledge.providers.inference}.`
             : "No inference provider configured — nothing is answering."}
         </p>
-        <p className="text-xs text-[var(--muted)]" data-testid="embedding-provider">
+        <p className="type-provenance text-[var(--muted)]" data-testid="embedding-provider">
           {knowledge.providers.embedding
             ? `Embedding with ${knowledge.providers.embedding.name} (${knowledge.providers.embedding.model}).`
             : "No embedding provider configured."}
         </p>
       </section>
 
-      <section className="flex flex-col gap-2" data-testid="shared-usage">
-        <h2 className="text-sm font-medium">Shared usage</h2>
+      <section className="shape-container flex flex-col gap-2 p-4" data-testid="shared-usage">
+        <h2 className="type-heading">Shared usage</h2>
         {/* The daemon's own sentence, verbatim — it is the one place the
             report's honest verdict ("not being used", in those words) is
             guaranteed (#71 AC4); re-wording it here would soften it. */}
-        <p className="text-xs text-[var(--muted)]" data-testid="shared-usage-summary">
+        <p className="type-provenance text-[var(--muted)]" data-testid="shared-usage-summary">
           {usage.summary}
         </p>
         <div className="flex flex-col gap-1">
-          <div className="flex justify-between text-xs text-[var(--muted)]">
+          <div className="flex justify-between type-provenance text-[var(--muted)]">
             <span>
               answered — asked by {usage.distinctAskers} {usage.distinctAskers === 1 ? "person" : "people"}
             </span>
@@ -148,9 +148,9 @@ function KnowledgeScreen({ knowledge }: { knowledge: DuoKnowledge }) {
         </div>
         {usage.gaps.length > 0 && (
           <div className="flex flex-col gap-1">
-            <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--faint)]">Asked for and missing</h3>
+            <p className="type-provenance uppercase text-[var(--faint)]">Asked for and missing</p>
             {usage.gaps.map((gap) => (
-              <div key={gap.question} className="flex justify-between text-xs text-[var(--muted)]" data-testid="usage-gap">
+              <div key={gap.question} className="flex justify-between type-provenance text-[var(--muted)]" data-testid="usage-gap">
                 <span>{gap.question}</span>
                 <span>{gap.count}×</span>
               </div>

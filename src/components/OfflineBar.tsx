@@ -31,12 +31,12 @@ export function OfflineBar() {
   return (
     <div data-testid="offline-bar" className="flex flex-col border-b border-[var(--edge)] bg-[var(--surface-2)]">
       {workspaceTime !== null && (
-        <p data-testid="offline-bar-workspace" className="px-4 py-1.5 text-center text-xs text-[var(--escalate)]">
+        <p data-testid="offline-bar-workspace" className="px-4 py-1 text-center type-provenance text-[var(--escalate)]">
           Last synced {workspaceTime}. The workspace is unreachable.
         </p>
       )}
       {daemonTime !== null && (
-        <p data-testid="offline-bar-daemon" className="px-4 py-1.5 text-center text-xs text-[var(--muted)]">
+        <p data-testid="offline-bar-daemon" className="px-4 py-1 text-center type-provenance text-[var(--muted)]">
           Last seen {daemonTime}. Your duo is asleep — it answers when your Mac is back.
         </p>
       )}

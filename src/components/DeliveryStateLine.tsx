@@ -19,7 +19,7 @@ export function DeliveryStateLine({ delivery }: { delivery: DraftDelivery | null
   }
   const failed = delivery.state === "failed";
   return (
-    <p className={failed ? "text-xs text-[var(--refused)]" : "text-xs text-[var(--faint)]"} data-testid="delivery-state">
+    <p className={failed ? "type-provenance text-[var(--refused)]" : "type-provenance text-[var(--faint)]"} data-testid="delivery-state">
       {failed ? `Couldn’t deliver — ${delivery.reason}` : delivery.state === "pending" ? "In flight." : "Delivered."}
     </p>
   );

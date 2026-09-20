@@ -6,19 +6,19 @@ import type { GridRow } from "../api/types.js";
 function TrustRow({ row }: { row: GridRow }) {
   return (
     <div
-      className="flex items-center justify-between gap-4 rounded-[var(--r-lg)] border border-[var(--edge)] px-4 py-3"
+      className="shape-entry flex items-center justify-between gap-4 px-4 py-3"
       data-testid="trust-row"
     >
-      <div className="min-w-0 flex-1 truncate text-sm" data-testid="trust-topic">
+      <div className="min-w-0 flex-1 truncate type-body" data-testid="trust-topic">
         {row.topicLabel ?? row.topicId}
       </div>
-      <div className="flex shrink-0 items-center gap-3 text-xs text-[var(--muted)]">
+      <div className="flex shrink-0 items-center gap-3 type-provenance text-[var(--muted)]">
         {row.stale && (
-          <span className="rounded-[var(--r-sm)] border border-dashed border-[var(--edge)] px-1.5 py-0.5" data-testid="trust-stale">
+          <span className="rounded-[var(--r-sm)] border border-dashed border-[var(--edge)] px-2 py-0" data-testid="trust-stale">
             stale
           </span>
         )}
-        <span className="font-medium text-[var(--text)]" data-testid="trust-tier">
+        <span className="type-identifier text-[var(--text)]" data-testid="trust-tier">
           {row.tier}
         </span>
         <span data-testid="trust-level">{row.level}</span>
@@ -53,10 +53,13 @@ export function Trust({ api }: { api: DuoApiConfig }) {
   }
 
   return (
-    <div className="flex flex-col gap-2 p-6" data-testid="trust-grid">
-      {rows.map((row) => (
-        <TrustRow key={row.topicId} row={row} />
-      ))}
+    // #33: the grid is one panel, like every other list of decisionable things.
+    <div className="p-6">
+      <div className="shape-container flex flex-col gap-2 p-4" data-testid="trust-grid">
+        {rows.map((row) => (
+          <TrustRow key={row.topicId} row={row} />
+        ))}
+      </div>
     </div>
   );
 }

@@ -17,9 +17,9 @@ export function RoomPersonMessage({ authorName, children }: { authorName: string
   return (
     <div
       data-testid="room-person-message"
-      className="rounded-[var(--r-lg)] border border-[var(--edge)] bg-[var(--surface)] px-4 py-3 text-[var(--text)]"
+      className="shape-entry px-4 py-3 text-[var(--text)]"
     >
-      <div className="mb-1 text-xs font-medium tracking-wide text-[var(--muted)]" data-testid="room-person-message-author">
+      <div className="mb-1 type-provenance text-[var(--muted)]" data-testid="room-person-message-author">
         {authorName}
       </div>
       <div>{children}</div>

@@ -24,9 +24,9 @@ function AnsweredAnswer({ outcome }: { outcome: Extract<PublicAnswerOutcome, { k
   return (
     <div
       data-testid="duo-answer"
-      className="flex flex-col gap-2 rounded-[var(--r-lg)] border border-[var(--edge)] bg-[var(--surface-2)] px-4 py-3"
+      className="shape-entry-quiet flex flex-col gap-2 px-4 py-3"
     >
-      <div className="text-xs font-medium tracking-wide text-[var(--muted)]" data-testid="duo-answer-attribution">
+      <div className="type-provenance text-[var(--muted)]" data-testid="duo-answer-attribution">
         the owner&#39;s duo
       </div>
       <p className="whitespace-pre-wrap text-[var(--text)]">{outcome.text}</p>
@@ -71,8 +71,8 @@ function LinkRefusalState({ testId, title, children }: { testId: string; title: 
       className="mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center gap-2 p-6"
       data-testid={testId}
     >
-      <h1 className="text-base font-medium">{title}</h1>
-      <p className="text-sm text-[var(--muted)]">{children}</p>
+      <h1 className="type-heading">{title}</h1>
+      <p className="text-[var(--muted)]">{children}</p>
     </main>
   );
 }
@@ -144,7 +144,7 @@ export function Ask() {
   if (linkStatus === "checking") {
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center p-6" data-testid="ask-checking">
-        <p className="text-sm text-[var(--muted)]">Checking this link…</p>
+        <p className="text-[var(--muted)]">Checking this link…</p>
       </main>
     );
   }
@@ -175,8 +175,8 @@ export function Ask() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col gap-4 p-6" data-testid="ask">
       <header className="flex flex-col gap-1">
-        <h1 className="text-base font-medium">Ask the duo</h1>
-        <p className="text-xs text-[var(--muted)]">
+        <h1 className="type-heading">Ask the duo</h1>
+        <p className="type-provenance text-[var(--muted)]">
           One question at a time — the duo answers from what it has been taught, or passes your question to the owner.
         </p>
       </header>
@@ -184,7 +184,7 @@ export function Ask() {
       <form className="flex flex-col gap-2" onSubmit={onSubmit}>
         <textarea
           data-testid="ask-question"
-          className="rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+          className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
           rows={3}
           placeholder="What do you want to ask?"
           value={question}
@@ -193,7 +193,7 @@ export function Ask() {
         <button
           type="submit"
           data-testid="ask-submit"
-          className="self-end rounded-[var(--r-sm)] bg-[var(--accent)] px-4 py-1.5 text-sm font-medium text-[var(--bg)] disabled:opacity-50"
+          className="self-end rounded-[var(--r-sm)] bg-[var(--accent)] px-4 py-1 text-[var(--bg)] disabled:opacity-50"
           disabled={pending || question.trim() === ""}
         >
           {pending ? "Asking…" : "Ask"}
@@ -201,7 +201,7 @@ export function Ask() {
       </form>
 
       {error && (
-        <div data-testid="ask-error" className="text-sm text-[var(--refused)]">
+        <div data-testid="ask-error" className="text-[var(--refused)]">
           {error}
         </div>
       )}
