@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Duo } from "../src/routes/Duo.js";
+import { writeComposerBuffer } from "../src/composerBuffer.js";
 import type { DraftRecord } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 
@@ -59,6 +60,10 @@ function stubDraftsResponse(list: DraftRecord[]) {
 describe("Duo — the thread view and composer (issue #8)", () => {
   beforeEach(() => {
     stubDraftsResponse(drafts);
+    // #27: the composer keeps typed-but-unsent text in a module-level
+    // buffer so it survives route switches — which also means one test's
+    // typing would pre-fill the next test's mount. Each test starts clean.
+    writeComposerBuffer("");
   });
   afterEach(() => {
     vi.unstubAllGlobals();

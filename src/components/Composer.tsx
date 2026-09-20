@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import { useCreateDraft } from "../api/queries.js";
+import { readComposerBuffer, writeComposerBuffer } from "../composerBuffer.js";
 import { MutationError } from "./MutationError.js";
 import { useSyncStatus } from "../sync.js";
 
@@ -11,17 +12,32 @@ import { useSyncStatus } from "../sync.js";
  * stays in Review: asking is a conversation act, disposing is a triage
  * act, and the draft the daemon returns is pending either way.
  *
- * The typed question survives a failed submit — `setQuestion("")` runs in
- * `onSuccess` only — because losing a typed question to a dropped
- * connection is exactly the moment it hurts most. AR-15 applies as it does
- * in DraftCard: unreachable disables submission rather than queueing it.
+ * The field is a textarea (#27): a real question is rarely one line, so
+ * Enter is a newline and Cmd/Ctrl-Enter submits — the chat-app convention
+ * on both platforms. The typed question survives a failed submit
+ * (`setQuestion("")` runs in `onSuccess` only), a cancelled one (abort is
+ * the owner's choice, not a failure — so it resets, not errors), and a
+ * route switch (kept in `composerBuffer` outside the component, because
+ * a half-typed question is a thought in progress, not a record). AR-15
+ * applies as it does in DraftCard: unreachable disables submission
+ * rather than queueing it.
  */
 export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thread: string | null; threadLabel: string }) {
-  const createDraft = useCreateDraft(api);
+  const { mutation: createDraft, cancel } = useCreateDraft(api);
   const { reachable } = useSyncStatus();
-  const [question, setQuestion] = useState("");
+  const [question, setQuestion] = useState(readComposerBuffer());
   const trimmed = question.trim();
   const disabled = trimmed.length === 0 || createDraft.isPending || !reachable;
+  // An aborted fetch rejects with a DOMException named "AbortError" — the
+  // owner chose to stop, so that's a reset, not a MutationError. The reset
+  // lives in an effect rather than right after `cancel()`: the rejection
+  // lands a tick later, and resetting synchronously would be undone by it.
+  const cancelledByOwner = createDraft.error instanceof DOMException && createDraft.error.name === "AbortError";
+  useEffect(() => {
+    if (cancelledByOwner) {
+      createDraft.reset();
+    }
+  }, [cancelledByOwner, createDraft]);
 
   return (
     <form
@@ -32,30 +48,60 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
         if (disabled) {
           return;
         }
-        createDraft.mutate({ question: trimmed, threadContext: thread }, { onSuccess: () => setQuestion("") });
+        createDraft.mutate(
+          { question: trimmed, threadContext: thread },
+          {
+            onSuccess: () => {
+              setQuestion("");
+              writeComposerBuffer("");
+            },
+          },
+        );
       }}
     >
-      <div className="flex gap-2">
-        <input
+      <div className="flex items-start gap-2">
+        <textarea
           aria-label="Question for your duo"
-          className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1.5 text-[var(--text)]"
+          className="flex-1 resize-none rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1.5 text-[var(--text)]"
           placeholder="Ask your duo…"
+          rows={Math.max(1, Math.min(8, question.split("\n").length))}
           value={question}
-          onChange={(e) => setQuestion(e.target.value)}
+          onChange={(e) => {
+            setQuestion(e.target.value);
+            writeComposerBuffer(e.target.value);
+          }}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              e.currentTarget.form?.requestSubmit();
+            }
+          }}
         />
-        <button
-          className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1.5 text-[var(--bg)] disabled:opacity-40"
-          data-testid="composer-submit"
-          disabled={disabled}
-          type="submit"
-        >
-          {createDraft.isPending ? "Asking…" : "Ask"}
-        </button>
+        <div className="flex flex-col gap-2">
+          <button
+            className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1.5 text-[var(--bg)] disabled:opacity-40"
+            data-testid="composer-submit"
+            disabled={disabled}
+            type="submit"
+          >
+            {createDraft.isPending ? "Asking…" : "Ask"}
+          </button>
+          {createDraft.isPending && (
+            <button
+              className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1.5 text-[var(--muted)]"
+              data-testid="composer-cancel"
+              onClick={cancel}
+              type="button"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
       <p className="mt-2 text-xs text-[var(--faint)]" data-testid="composer-thread">
         Asking in: {threadLabel}
       </p>
-      <MutationError error={createDraft.error} />
+      <MutationError error={cancelledByOwner ? null : createDraft.error} />
     </form>
   );
 }

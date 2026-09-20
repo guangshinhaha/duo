@@ -1,3 +1,4 @@
+import { useCallback, useRef } from "react";
 import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 import { apiRequest, type DuoApiConfig } from "./client.js";
 import type {
@@ -84,16 +85,47 @@ export function useAudit(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.audit, queryFn: () => apiRequest<AuditEntry[]>(api, "/audit") });
 }
 
-/** Creates a draft (the composer's submit action). Invalidates the pending-drafts list — the new draft (or escalation) should appear in Review immediately. */
+/**
+ * How long the composer's POST /drafts may run before the client gives up on
+ * it (#27). §1.4 budgeted "ask → draft in seconds, ideally <5s"; a real
+ * provider can blow past that by an order of magnitude, so the window is
+ * generous — but finite, because a wedged ask must end by itself instead of
+ * pinning the composer's submit button forever.
+ */
+export const ASK_TIMEOUT_MS = 60_000;
+
+/**
+ * Creates a draft (the composer's submit action). Invalidates the
+ * pending-drafts list — the new draft (or escalation) should appear in
+ * Review immediately. Returns the mutation plus a `cancel` for the
+ * composer's Cancel button (#27): one in-flight ask at a time, aborted at
+ * the fetch layer so a slow daemon can be abandoned without waiting out
+ * the timeout.
+ */
 export function useCreateDraft(api: DuoApiConfig) {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { question: string; threadContext?: string | null }) =>
-      apiRequest<DraftPipelineResult>(api, "/drafts", { method: "POST", body: JSON.stringify(input) }),
+  const controllerRef = useRef<AbortController | null>(null);
+  const mutation = useMutation({
+    mutationFn: (input: { question: string; threadContext?: string | null }) => {
+      controllerRef.current = new AbortController();
+      return apiRequest<DraftPipelineResult>(api, "/drafts", {
+        method: "POST",
+        body: JSON.stringify(input),
+        signal: controllerRef.current.signal,
+        timeoutMs: ASK_TIMEOUT_MS,
+      });
+    },
+    onSettled: () => {
+      controllerRef.current = null;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["drafts"] });
     },
   });
+  const cancel = useCallback(() => {
+    controllerRef.current?.abort();
+  }, []);
+  return { mutation, cancel };
 }
 
 /**
