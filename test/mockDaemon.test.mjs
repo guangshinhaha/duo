@@ -241,3 +241,69 @@ describe("mock daemon — mirror, trust, audit, ask (D2/D6)", () => {
     expect(duos).toEqual([{ kind: "personal" }]);
   });
 });
+
+// GET-only, and placed last on the shared daemon: earlier describes POST, so
+// expectations are derived from a live un-paged GET rather than the seed —
+// the walk must hold for whatever state the run has accumulated.
+describe("mock daemon — paged history (duo #29, mirroring digital-duo #203)", () => {
+  it("GET /drafts?limit walks backward through newest-first windows, losing nothing", async () => {
+    const ascending = (await (await get("/drafts")).json()).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    expect(ascending.length).toBeGreaterThanOrEqual(4);
+
+    // Page one is the newest window, newest-first — which ids, not just how many.
+    const pageOne = await (await get("/drafts?limit=2")).json();
+    expect(pageOne.map((d) => d.id)).toEqual([ascending.at(-1).id, ascending.at(-2).id]);
+
+    // `before` is exclusive: feeding page one's oldest back returns the
+    // adjacent older window, not a re-read.
+    const cursorOne = encodeURIComponent(pageOne.at(-1).createdAt);
+    const pageTwo = await (await get(`/drafts?limit=2&before=${cursorOne}`)).json();
+    expect(pageTwo.map((d) => d.id)).toEqual([ascending.at(-3).id, ascending.at(-4).id]);
+
+    // Walking to the beginning ends in an empty page, having seen every
+    // draft exactly once — overlap would duplicate, a wrong cursor would gap.
+    const seen = [...pageOne.map((d) => d.id), ...pageTwo.map((d) => d.id)];
+    let cursor = pageTwo.at(-1).createdAt;
+    for (let guard = 0; guard < 50; guard += 1) {
+      const page = await (await get(`/drafts?limit=2&before=${encodeURIComponent(cursor)}`)).json();
+      if (page.length === 0) {
+        break;
+      }
+      seen.push(...page.map((d) => d.id));
+      cursor = page.at(-1).createdAt;
+    }
+    expect(seen).toEqual(ascending.map((d) => d.id).reverse());
+  });
+
+  it("validates limit the way the real route does: non-negative integer, literally", async () => {
+    for (const raw of ["abc", "2.5", "-1", "01", ""]) {
+      const res = await get(`/drafts?limit=${encodeURIComponent(raw)}`);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe("bad_request");
+    }
+    // 0 is a valid non-negative integer in the real route — an empty page.
+    const zero = await get("/drafts?limit=0");
+    expect(zero.status).toBe(200);
+    expect(await zero.json()).toEqual([]);
+  });
+
+  it("before without limit stays the plain ascending list, filtered", async () => {
+    const ascending = (await (await get("/drafts")).json()).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const ceiling = encodeURIComponent(ascending.at(-2).createdAt); // everything except the newest
+    const res = await get(`/drafts?before=${ceiling}`);
+    expect(res.status).toBe(200);
+    const older = await res.json();
+    expect(older.map((d) => d.id)).toEqual(ascending.slice(0, -2).map((d) => d.id));
+  });
+
+  it("composes outcome filtering with the paged window", async () => {
+    const pending = (await (await get("/drafts?outcome=pending")).json()).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    if (pending.length === 0) {
+      return; // nothing pending left in this run's state; the composition is unpinnable
+    }
+    const res = await get("/drafts?outcome=pending&limit=1");
+    expect(res.status).toBe(200);
+    const page = await res.json();
+    expect(page.map((d) => d.id)).toEqual([pending.at(-1).id]);
+  });
+});

@@ -1,5 +1,5 @@
 import { useCallback, useRef } from "react";
-import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 import { apiRequest, type DuoApiConfig } from "./client.js";
 import type {
   AuditEntry,
@@ -16,9 +16,16 @@ import type {
 } from "./types.js";
 
 /**
+ * The Duo feed's page size (#29) — how much history one `GET /drafts?limit=`
+ * window carries. Small enough that opening the thread is one fast fetch,
+ * large enough that a conversation reads without paging every few turns.
+ */
+export const DRAFTS_PAGE_SIZE = 50;
+
+/**
  * Query keys mirror the routes (`client-tech-design.md` §3.2), so
  * invalidation reads as "which route changed" rather than a hand-maintained
- * list. `["drafts", opts]` and `["review"]` are invalidated together by any
+ * list. `["drafts", …]` and `["review"]` are invalidated together by any
  * outcome mutation — an "edited" outcome writes the draft row *and* queues
  * a correction candidate in one call, and missing the second invalidation
  * is the easiest bug to ship here (§3.2's own warning).
@@ -26,6 +33,12 @@ import type {
 export const queryKeys = {
   duos: ["duos"] as const,
   drafts: (opts?: { outcome?: DraftOutcome | "pending" }) => ["drafts", opts ?? {}] as const,
+  // The paged shape of GET /drafts (#29). Keyed by an object like the
+  // outcome filter so it can never collide with `draft(id)`'s string
+  // element, and still a child of the ["drafts"] root — every existing
+  // invalidation (outcome mutations, composer submits, draft-ready pushes)
+  // reaches the feed without a new call site.
+  draftsFeed: ["drafts", { limit: DRAFTS_PAGE_SIZE }] as const,
   draft: (id: string) => ["drafts", id] as const,
   review: ["review"] as const,
   mirrorPortrait: ["mirror", "portrait"] as const,
@@ -56,13 +69,36 @@ export function useDraft(api: DuoApiConfig, id: string) {
 }
 
 /**
- * Every draft, every outcome — the Duo thread view's data. Distinct key
- * from the pending list (`["drafts", {}]` vs `["drafts", {outcome:
- * "pending"}]`), both invalidated by the shared `["drafts"]` prefix, so a
- * composer submit or outcome POST refreshes Review and the thread together.
+ * The Duo thread view's data (#29): the draft log as pages, newest window
+ * first, instead of the whole history in one fetch. The daemon's contract
+ * (digital-duo #203): `GET /drafts?limit=N` is the NEWEST N drafts,
+ * newest-first; `before` (exclusive) fed the current page's oldest
+ * createdAt yields the adjacent older window. A short page — fewer rows
+ * than the page size below the cursor — means history is exhausted; an
+ * exact multiple of the page size costs one empty page to learn that, the
+ * daemon's documented end-of-history signal.
+ *
+ * Replaces #8's un-paged `useDrafts` (the whole log on every visit, the
+ * `client-tech-design.md` G-b violation). Invalidation needs no new call
+ * sites: the key sits under the `["drafts"]` root, and TanStack's refetch
+ * recomputes each page's cursor from the freshly fetched window above it —
+ * so new drafts arriving above a loaded walk shift the windows without
+ * leaving a gap at the seam.
  */
-export function useDrafts(api: DuoApiConfig) {
-  return useQuery({ queryKey: queryKeys.drafts(), queryFn: () => apiRequest<DraftRecord[]>(api, "/drafts") });
+export function useDraftsFeed(api: DuoApiConfig) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.draftsFeed,
+    queryFn: ({ pageParam }) =>
+      apiRequest<DraftRecord[]>(
+        api,
+        pageParam === undefined
+          ? `/drafts?limit=${DRAFTS_PAGE_SIZE}`
+          : `/drafts?limit=${DRAFTS_PAGE_SIZE}&before=${encodeURIComponent(pageParam)}`,
+      ),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) =>
+      lastPage.length < DRAFTS_PAGE_SIZE ? undefined : lastPage[lastPage.length - 1].createdAt,
+  });
 }
 
 export function useReview(api: DuoApiConfig) {

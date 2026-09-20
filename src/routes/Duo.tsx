@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { useDrafts } from "../api/queries.js";
+import { useDraftsFeed } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
 import { ConfidenceHairline } from "../components/ConfidenceHairline.js";
 import { Composer } from "../components/Composer.js";
@@ -81,11 +81,11 @@ interface ThreadGroup {
 }
 
 /**
- * Groups drafts by `threadContext` (null → the General group). The daemon
- * lists `ORDER BY created_at, id` ascending (`src/drafting/draft-log.ts`),
- * so each group is already in conversation order and only the groups
- * themselves need ordering: most recently active first, the way a
- * conversations list reads.
+ * Groups drafts by `threadContext` (null → the General group). Consumes
+ * ascending order — the feed reverses each newest-first page before this
+ * (see `Duo` below) — so each group is already in conversation order and
+ * only the groups themselves need ordering: most recently active first,
+ * the way a conversations list reads.
  */
 function groupByThread(drafts: DraftRecord[]): ThreadGroup[] {
   const byKey = new Map<string | null, DraftRecord[]>();
@@ -110,16 +110,29 @@ function groupByThread(drafts: DraftRecord[]): ThreadGroup[] {
  * conversational duo exists. #28 makes it navigable: the route opens on
  * the conversation list (most recently active first) and picking one
  * opens it alone, with the composer targeting whatever is open.
+ * #29 pages the history underneath: the feed loads the newest window and
+ * older entries arrive on demand, so the route stays fast as the draft
+ * log grows.
  */
 export function Duo({ api }: { api: DuoApiConfig }) {
-  const { data: drafts, isLoading, error } = useDrafts(api);
+  const feed = useDraftsFeed(api);
   // What is open: `null` is the conversation list, `{ key }` is one open
   // conversation (`key: null` = General). Not a bare string, because
   // "General is open" and "nothing is open" must not collapse into the
   // same state — the list is the route's landing view.
   const [open, setOpen] = useState<{ key: string | null } | null>(null);
 
-  const groups = useMemo(() => groupByThread(drafts ?? []), [drafts]);
+  // Each page arrives newest-first (the daemon's limit shape); the view
+  // reads oldest-first, and so does groupByThread. Reversing the page
+  // order (page one is the newest window) and each page's entries makes
+  // the concatenation ascending again — the same order the un-paged feed
+  // that #29 replaced used to deliver directly.
+  const drafts = useMemo(() => {
+    const pages = feed.data?.pages ?? [];
+    return [...pages].reverse().flatMap((page) => [...page].reverse());
+  }, [feed.data]);
+
+  const groups = useMemo(() => groupByThread(drafts), [drafts]);
   // The open conversation can vanish from a refetch that no longer carries
   // it. The view and the composer's target fall back together — never a
   // caption saying General while posting into a stale context, and never
@@ -131,11 +144,18 @@ export function Duo({ api }: { api: DuoApiConfig }) {
   const thread = openGroup?.key ?? null;
   const threadLabel = openGroup?.key ?? DEFAULT_THREAD_LABEL;
 
-  if (isLoading) {
+  // isLoading covers the FIRST page only — the feed renders as soon as the
+  // newest window arrives, never waiting on history behind it (#29).
+  if (feed.isLoading) {
     return <div className="p-6 text-[var(--muted)]">Loading…</div>;
   }
-  if (error) {
-    return <div className="p-6 text-[var(--refused)]">{(error as Error).message}</div>;
+  // Only a first-page failure blanks the route. A failed REFRESH (pages
+  // already on screen) must not: swapping the feed for an error screen
+  // would throw away exactly what #29's "without losing the owner's scroll
+  // position" promises — the loaded pages stay rendered and the next
+  // invalidation retries them.
+  if (feed.error && feed.data === undefined) {
+    return <div className="p-6 text-[var(--refused)]">{(feed.error as Error).message}</div>;
   }
 
   return (
@@ -180,6 +200,20 @@ export function Duo({ api }: { api: DuoApiConfig }) {
             ))}
           </nav>
         )}
+        {/* Older history arrives on demand (#29) — in the list view it can
+            surface whole conversations that live only in unloaded pages, in
+            an open conversation it extends the one being read. It disappears
+            at the end of history (a short page means nothing older exists). */}
+        {feed.hasNextPage ? (
+          <button
+            className="mx-auto mt-4 block rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1.5 text-xs text-[var(--muted)] disabled:opacity-50"
+            data-testid="load-older"
+            disabled={feed.isFetchingNextPage}
+            onClick={() => void feed.fetchNextPage()}
+          >
+            {feed.isFetchingNextPage ? "Loading older…" : "Load older"}
+          </button>
+        ) : null}
       </div>
       <Composer api={api} thread={thread} threadLabel={threadLabel} />
     </div>
