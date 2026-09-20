@@ -2,31 +2,41 @@
 import tseslint from "typescript-eslint";
 
 /**
- * The one rule that matters here: `DuoMessage`'s own doc comment promises
- * that its subtree can never render `OwnerMessage`. AR-13
- * (`client-design.md`) is "a principle with a failing test is a
+ * The one rule that matters here: a duo-authored message's doc comment
+ * promises that its subtree can never render a person-identity component.
+ * AR-13 (`client-design.md`) is "a principle with a failing test is a
  * principle; one in a style guide is a hope," and a lint rule is the same
  * idea applied to what gets *written*.
  *
- * `no-restricted-syntax` with a JSX-descendant selector, not
- * `no-restricted-imports`: the real invariant is about *composition*
- * (`<OwnerMessage>` must never render inside `<DuoMessage>`'s children),
- * not about which files are allowed to import which module. This
- * selector matches ancestor/descendant JSX nodes *within one syntax
- * tree*, at any depth — so it catches `<DuoMessage><OwnerMessage/>
- * </DuoMessage>` the moment it's typed, in any file, even through an
- * inline wrapper written in the same expression.
+ * `no-restricted-syntax` with JSX-descendant selectors, not
+ * `no-restricted-imports`: the real invariant is about *composition* — a
+ * person-identity component (`OwnerMessage`, and since #60 the
+ * multi-party `RoomPersonMessage`) must never render inside a
+ * duo-authored one (`DuoMessage`, `RoomDuoMessage`, or a
+ * `DuoMessageReference` quote/notification/search hit) — not about which
+ * files are allowed to import which module. The selectors match
+ * ancestor/descendant JSX nodes *within one syntax tree*, at any depth,
+ * so the violation is caught the moment it's typed, in any file, even
+ * through an inline wrapper written in the same expression.
  *
- * It cannot catch composition *across* a component boundary, though: a
- * `Bubble` whose own source is `<DuoMessage>{children}</DuoMessage>` (no
- * literal `<OwnerMessage>` in sight) used elsewhere as
- * `<Bubble><OwnerMessage/></Bubble>` (no literal `<DuoMessage>` in sight
- * either) gives this rule nothing to match at either call site, though
- * React still mounts one inside the other at runtime.
- * `DuoMessage.tsx`'s `InsideDuoMessage` context is the runtime half that
- * closes that gap regardless of indirection — this rule is the fast,
- * dev-time layer; that one is the complete guarantee.
+ * They cannot catch composition *across* a component boundary, though: a
+ * `Bubble` whose own source is `<RoomDuoMessage>{children}
+ * </RoomDuoMessage>` (no literal person component in sight) used
+ * elsewhere as `<Bubble><RoomPersonMessage/></Bubble>` gives this rule
+ * nothing to match at either call site, though React still mounts one
+ * inside the other at runtime. `DuoMessage.tsx`'s `InsideDuoMessage`
+ * context — set by every duo-authored component via
+ * `DuoAuthoredBoundary` — is the runtime half that closes that gap
+ * regardless of indirection: this rule is the fast, dev-time layer; that
+ * one is the complete guarantee.
  */
+const duoNeverPosesAsAPerson = ["OwnerMessage", "RoomPersonMessage"].flatMap((personComponent) =>
+  ["DuoMessage", "RoomDuoMessage", "DuoMessageReference"].map((duoComponent) => ({
+    selector: `JSXElement[openingElement.name.name='${duoComponent}'] JSXElement[openingElement.name.name='${personComponent}']`,
+    message: `${personComponent} must never render inside ${duoComponent}'s subtree — a duo never poses as a person (AR-13; see DuoMessage's doc comment).`,
+  })),
+);
+
 export default tseslint.config(
   // `src-tauri/target/**` is cargo build output (vendored/bundled JS among
   // the artifacts); linting generated files can only ever produce noise.
@@ -35,13 +45,7 @@ export default tseslint.config(
   {
     files: ["**/*.tsx"],
     rules: {
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "JSXElement[openingElement.name.name='DuoMessage'] JSXElement[openingElement.name.name='OwnerMessage']",
-          message: "OwnerMessage must never render inside DuoMessage's subtree — see DuoMessage's own doc comment (AR-13).",
-        },
-      ],
+      "no-restricted-syntax": ["error", ...duoNeverPosesAsAPerson],
     },
   },
 );

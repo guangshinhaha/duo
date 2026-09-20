@@ -21,6 +21,18 @@ import { createContext, useContext, type ReactNode } from "react";
 const InsideDuoMessage = createContext(false);
 
 /**
+ * Marks everything rendered below as duo-authored — the runtime AR-13
+ * boundary. Every component that renders duo-generated text (`DuoMessage`,
+ * and since #60 the multi-party `RoomDuoMessage` and `DuoMessageReference`)
+ * wraps its content in this, so a person-identity component mounted
+ * anywhere beneath it — directly, or through wrappers the lint rule can't
+ * see through — fails at render time instead of silently posing.
+ */
+export function DuoAuthoredBoundary({ children }: { children: ReactNode }) {
+  return <InsideDuoMessage.Provider value={true}>{children}</InsideDuoMessage.Provider>;
+}
+
+/**
  * Renders duo-generated text. `concept.md`: "always labelled … it never
  * poses as you." `client-tech-design.md` §3.4 promotes that from a
  * guideline to a structural rule: this component has no `avatar` prop —
@@ -28,11 +40,13 @@ const InsideDuoMessage = createContext(false);
  * owner's own avatar on generated text is impossible to build with it, not
  * merely discouraged.
  *
- * `OwnerMessage` (or any owner-identity component) must never render
+ * `OwnerMessage` (or any person-identity component) must never render
  * inside this component's children, anywhere in the codebase — enforced
  * two ways: statically by `eslint.config.js`'s lint rule for the direct
  * case, and at runtime by `InsideDuoMessage` (above) for every case,
  * including through a wrapper component the lint rule can't see through.
+ * In a shared room the same contract is carried by `RoomDuoMessage` /
+ * `DuoMessageReference` (#60), which reuse the same boundary.
  */
 export function DuoMessage({ children }: { children: ReactNode }) {
   return (
@@ -44,15 +58,17 @@ export function DuoMessage({ children }: { children: ReactNode }) {
         Your duo
       </div>
       <div>
-        <InsideDuoMessage.Provider value={true}>{children}</InsideDuoMessage.Provider>
+        <DuoAuthoredBoundary>{children}</DuoAuthoredBoundary>
       </div>
     </div>
   );
 }
 
-/** `OwnerMessage`'s own runtime half of the guard — see `InsideDuoMessage`'s doc comment above. */
+/** A person-identity component's own runtime half of the guard — see `InsideDuoMessage`'s doc comment above. */
 export function useAssertNotInsideDuoMessage(componentName: string): void {
   if (useContext(InsideDuoMessage)) {
-    throw new Error(`${componentName} must never render inside DuoMessage's subtree (AR-13: a duo never poses as its owner)`);
+    throw new Error(
+      `${componentName} must never render inside a duo-authored message's subtree (AR-13: a duo never poses as a person)`,
+    );
   }
 }
