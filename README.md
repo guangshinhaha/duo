@@ -17,6 +17,11 @@ in this pass).
   percentage.
 - **`src/components/DraftCard.tsx`** — Send / Edit / Ignore, the correction loop's only input.
 - **`src/routes/Review.tsx`** — the default surface: every pending draft.
+- **`src/routes/Mirror.tsx`** — the Mirror browser (C6): the interruption portrait plus derived
+  rules in five buckets, with Approve / Reject / Promote on exactly the actions the daemon's own
+  preconditions allow. Read-and-disposition only — rule authoring stays in `duo/rules/*.md` on
+  the Mac (AR-18). No percentages anywhere: bars and counts, never numerals the data doesn't
+  carry.
 - **`src/routes/Setup.tsx`** — first run: paste the daemon's tailnet address and a `duo pair new`
   token.
 
@@ -37,6 +42,9 @@ to `duo serve` over HTTP, the same way the Tauri-wrapped Mac and phone apps even
 
 - **Tauri wrapping** (C5, macOS; C8, iOS/Android) — needs a macOS host with Xcode for the real
   builds, which this environment doesn't have.
-- **Mirror browser** (C6) and **WebSocket draft-ready push** (C7) — `docs/client-tech-design.md`'s
-  build order puts these after the Review surface, on the reasoning that a single real draft is
-  worth more than a rules list.
+- **WebSocket draft-ready push** (C7) — the build order pairs it with the Tauri shell, since the
+  notification half of "a new draft is waiting" is native.
+- **The Mirror's refusals tab** and **rule-detail-with-evidence view** — `client-tech-design.md`
+  §3.1 lists refusals alongside portrait and rules, but no daemon route lists refusals yet, and
+  the `GET /mirror/rules/:id` the daemon does expose isn't in §1.4's client route contract. Both
+  wait on core work first: a surface must not add a behaviour.
