@@ -9,6 +9,7 @@ import { SyncStatusProvider } from "./sync.js";
 import { OfflineBar } from "./components/OfflineBar.js";
 import { notifyDraftReady } from "./notifications.js";
 import { Setup } from "./routes/Setup.js";
+import { Settings } from "./routes/Settings.js";
 import { Review } from "./routes/Review.js";
 import { Duo } from "./routes/Duo.js";
 import { Trust } from "./routes/Trust.js";
@@ -31,7 +32,7 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * fresh launch opens with — stays the default surface: Review is the thing
  * the app exists to open (client-design.md §1.5).
  */
-type Route = "review" | "duo" | "trust" | "audit" | "mirror";
+type Route = "review" | "duo" | "trust" | "audit" | "settings" | "mirror";
 
 function routeFromHash(hash: string): Route {
   if (hash === "#mirror") {
@@ -45,6 +46,9 @@ function routeFromHash(hash: string): Route {
   }
   if (hash === "#audit") {
     return "audit";
+  }
+  if (hash === "#settings") {
+    return "settings";
   }
   return "review";
 }
@@ -77,8 +81,8 @@ function NavLink({ active, href, children }: { active: boolean; href: string; ch
   );
 }
 
-/** The §3.1 route tree as one switch — each route's surface, exactly once. */
-function routeSurface(route: Route, api: DuoApiConfig) {
+/** The §3.1 route tree as one switch — each route's surface, exactly once. Settings also mutates the connection, through App's single choke point. */
+function routeSurface(route: Route, api: DuoApiConfig, setApi: (config: DuoApiConfig | null) => void) {
   switch (route) {
     case "mirror":
       return <Mirror api={api} />;
@@ -88,6 +92,8 @@ function routeSurface(route: Route, api: DuoApiConfig) {
       return <Trust api={api} />;
     case "audit":
       return <Audit api={api} />;
+    case "settings":
+      return <Settings api={api} onConfigChange={setApi} />;
     case "review":
       return <Review api={api} />;
   }
@@ -108,9 +114,12 @@ function AppShell() {
   // effect-based clear would still let one render slip through showing
   // whichever daemon's drafts happened to be cached under the same query
   // keys — a real risk when reconnecting to a different daemon (or
-  // duo/owner) without a full page reload in between.
+  // duo/owner) without a full page reload in between. The persisted
+  // `duo-cache` blob goes with it (`removeClient`), or unpairing would
+  // leave the old duo's data readable in localStorage under a dead token.
   function setApi(next: DuoApiConfig | null): void {
     queryClient.clear();
+    void persister.removeClient();
     setApiRaw(next);
   }
 
@@ -140,6 +149,9 @@ function AppShell() {
           <NavLink active={route === "mirror"} href="#mirror">
             Mirror
           </NavLink>
+          <NavLink active={route === "settings"} href="#settings">
+            Settings
+          </NavLink>
           <button className="mt-auto px-2 py-1 text-left text-xs text-[var(--faint)]" onClick={() => setApi(null)}>
             Disconnect
           </button>
@@ -148,7 +160,7 @@ function AppShell() {
           {/* §3.3's bar rides above every surface — it is the one state that
               is true of the whole app, not of whichever route is mounted. */}
           <OfflineBar />
-          <main className="flex-1 overflow-y-auto">{routeSurface(route, api)}</main>
+          <main className="flex-1 overflow-y-auto">{routeSurface(route, api, setApi)}</main>
         </div>
       </div>
     </SyncStatusProvider>

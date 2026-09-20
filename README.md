@@ -38,6 +38,11 @@ in this pass).
   carry.
 - **`src/routes/Setup.tsx`** — first run: paste the daemon's tailnet address and a `duo pair new`
   token.
+- **`src/routes/Settings.tsx`** (#11) — this device's connection at `#settings`: the daemon address
+  and a masked token, the address editable with Setup's own validator and wording, and unpair as a
+  local forget behind a confirmation whose copy says exactly that (the daemon has no revocation
+  route). Unpairing clears the stored connection *and* the persisted query cache, so the old duo's
+  data can't outlive its token. Device name is absent until the daemon serves a way to read it back.
 - **`ask.html` / `src/routes/Ask.tsx`** (#1/#2) — the no-install asker page: a colleague opens
   `ask.html#host=…&token=…`, asks one question, and gets one of the daemon's three public-answer
   outcomes, rendered verbatim (the fixed passed-on / refusal strings are the contract — #43 AC3).
