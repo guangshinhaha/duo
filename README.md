@@ -23,6 +23,10 @@ in this pass).
   actually happened (sent, sent-edited, ignored, answered escalation, waiting in Review). The
   composer asks via the existing `POST /drafts` — trimmed question, targeted at the selected group —
   and disposition stays in Review, by design.
+- **`src/routes/Trust.tsx`** (#9) — the trust grid at `#trust`: per topic, the duo's tier, autonomy
+  level, and whether it earned that or was granted it, with aged trust marked stale. Read-only
+  everywhere, not only on mobile (AR-17) — the daemon has no route to change a tier or level, so a
+  control here would be a promise the core would refuse.
 - **`src/routes/Mirror.tsx`** — the Mirror browser (C6): the interruption portrait plus derived
   rules in five buckets, with Approve / Reject / Promote on exactly the actions the daemon's own
   preconditions allow. Read-and-disposition only — rule authoring stays in `duo/rules/*.md` on

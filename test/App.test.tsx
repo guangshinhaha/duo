@@ -147,4 +147,19 @@ describe("App — hash routing between the surfaces", () => {
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
     expect(screen.queryByTestId("duo-thread")).toBeNull();
   });
+
+  it("navigates to Trust on #trust", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })),
+    );
+
+    render(<App />);
+
+    window.location.hash = "#trust";
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => expect(screen.getByTestId("trust-empty")).toBeInTheDocument());
+    expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
+  });
 });
