@@ -151,3 +151,41 @@ export interface AuditEntry {
 export interface ApiError {
   error: { code: string; message: string };
 }
+
+// Mirrors the daemon's public-answer outcomes (`src/permissions/public-answer.ts`)
+// — the response of `POST /ask` (digital-duo #157/#159). The split matters:
+// `PublicPassedOn` and `PublicDeclinedRefused` are two *distinct* fixed
+// messages by design (#43 AC3), worded so an asker can never infer what the
+// answer might have been — a surface must render them verbatim, never
+// paraphrase them into something friendlier.
+export interface PublicAnswered {
+  readonly kind: "answered";
+  readonly draftId: string;
+  readonly logEntryId: string;
+  /** The full public text — answer, sources, and attribution — already composed by the daemon; there is nothing left for this client to append (#44 AC1/AC3). */
+  readonly text: string;
+  readonly sources: readonly DraftSource[];
+  readonly confidence: ConfidenceResult;
+  readonly topicId: string;
+  /** Age, in days, of the freshest evidence behind the answer — null when none carried a usable timestamp. */
+  readonly evidenceAgeDays: number | null;
+}
+
+export interface PublicPassedOn {
+  readonly kind: "passed_on";
+  readonly draftId: string;
+  readonly logEntryId: string;
+  readonly message: string;
+  readonly topicId: string | undefined;
+  /** Addressed to the *owner*, not the asker (#55's one-time demotion announcement) — an asker-facing surface never renders it. */
+  readonly ownerNotice: string | undefined;
+}
+
+export interface PublicDeclinedRefused {
+  readonly kind: "declined_refused";
+  readonly draftId: string;
+  readonly logEntryId: string;
+  readonly message: string;
+}
+
+export type PublicAnswerOutcome = PublicAnswered | PublicPassedOn | PublicDeclinedRefused;
