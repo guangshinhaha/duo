@@ -1,26 +1,45 @@
 import { useSyncStatus } from "../sync.js";
 
+function timeOf(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 /**
- * §3.3's persistent bar, verbatim: **"Last synced 14:32. Your Mac is
- * unreachable."** Rendered only when the daemon has gone quiet at the
- * network level *after* at least one successful sync — before the first
- * sync there is no cached view to apologize for, and the loading/error
- * states of the views themselves are the honest thing to show. It
- * disappears on the next successful response; nothing needs dismissing,
- * because nothing was ever hidden.
+ * #58's bar: one line per down connection, each naming which server it
+ * means and showing that one's last successful sync. The workspace is
+ * expected to be up, so its line is the app's error voice (escalate
+ * colour); the daemon going quiet is the owner's Mac being shut — an
+ * expected state, so its line states the last-seen time and is
+ * deliberately not error-coloured. Either line appears only after that
+ * target has synced at least once — before the first sync there is no
+ * cached view to speak about — and disappears on that target's next
+ * successful response; nothing needs dismissing, because nothing was ever
+ * hidden.
  */
 export function OfflineBar() {
-  const { reachable, lastSyncedAt } = useSyncStatus();
-  if (reachable || lastSyncedAt === null) {
+  const workspace = useSyncStatus("workspace");
+  const daemon = useSyncStatus("daemon");
+
+  // The ternary (not a boolean captured for the JSX below) so `lastSyncedAt`
+  // narrows to non-null for `timeOf`.
+  const workspaceTime = !workspace.reachable && workspace.lastSyncedAt !== null ? timeOf(workspace.lastSyncedAt) : null;
+  const daemonTime = !daemon.reachable && daemon.lastSyncedAt !== null ? timeOf(daemon.lastSyncedAt) : null;
+  if (workspaceTime === null && daemonTime === null) {
     return null;
   }
-  const time = new Date(lastSyncedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
   return (
-    <div
-      data-testid="offline-bar"
-      className="border-b border-[var(--edge)] bg-[var(--surface-2)] px-4 py-1.5 text-center text-xs text-[var(--escalate)]"
-    >
-      Last synced {time}. Your Mac is unreachable.
+    <div data-testid="offline-bar" className="flex flex-col border-b border-[var(--edge)] bg-[var(--surface-2)]">
+      {workspaceTime !== null && (
+        <p data-testid="offline-bar-workspace" className="px-4 py-1.5 text-center text-xs text-[var(--escalate)]">
+          Last synced {workspaceTime}. The workspace is unreachable.
+        </p>
+      )}
+      {daemonTime !== null && (
+        <p data-testid="offline-bar-daemon" className="px-4 py-1.5 text-center text-xs text-[var(--muted)]">
+          Last seen {daemonTime}. Your duo is asleep — it answers when your Mac is back.
+        </p>
+      )}
     </div>
   );
 }

@@ -118,9 +118,10 @@ describe("#41 — a revoked token returns to Setup; an unreachable daemon is not
     failOffline = true;
     goHash("#duo");
 
-    // §3.3's bar, and the connection survives — an unreachable Mac is not a revoked token.
+    // #58's bar — the daemon asleep, in the expected-state voice — and the
+    // connection survives: an unreachable Mac is not a revoked token.
     await waitFor(() => expect(screen.getByTestId("offline-bar")).toBeInTheDocument(), { timeout: 20000 });
-    expect(screen.getByTestId("offline-bar")).toHaveTextContent("Your Mac is unreachable.");
+    expect(screen.getByTestId("offline-bar")).toHaveTextContent("Your duo is asleep");
     expect(screen.queryByTestId("setup-notice")).toBeNull();
     expect(screen.queryByPlaceholderText("100.64.1.5:7717")).toBeNull();
     expect(JSON.parse(localStorage.getItem("duo.api-config") ?? "null")).toEqual({
