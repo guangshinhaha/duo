@@ -2,29 +2,50 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { useQueryClient } from "@tanstack/react-query";
 
 /**
- * Sync status (client-tech-design.md §3.3): *is the daemon answering right
- * now*, and when did it last answer? The honest signal is the query cache
- * itself — every successful fetch is a "synced" moment; a fetch that dies
- * with a network-level `TypeError` (connection refused / unreachable —
- * `fetch`'s own failure mode, not an HTTP status) is "unreachable". An
- * `ApiRequestError` is deliberately NOT unreachable: a daemon that answers
- * with a 500 was reached, and lying "Your Mac is unreachable" at it would
- * be a worse lie than no bar at all.
+ * Sync status (#58, refining client-tech-design.md §3.3): the client talks
+ * to two servers whose failure modes are unrelated — an org-hosted
+ * workspace (messaging, up independently of any one person's hardware) and
+ * this owner's duo daemon (asleep whenever the Mac is). One boolean for
+ * both was wrong in both directions: a shut laptop read as an outage, and
+ * a workspace outage would have read as the duo's fault. Health is tracked
+ * per target, and no event on one target ever writes the other's half.
+ *
+ * The honest signal is the query cache itself — every successful fetch is a
+ * "synced" moment for the target it talked to; a fetch that dies with a
+ * network-level `TypeError` (connection refused / unreachable — `fetch`'s
+ * own failure mode, not an HTTP status) is that target going quiet. An
+ * `ApiRequestError` is deliberately NOT unreachability: a server that
+ * answers with a 500 (or a 401 — see api/revocation.ts) was reached.
  */
-export interface SyncStatus {
-  /** False only after a query failed at the network level. */
+export type SyncTarget = "workspace" | "daemon";
+
+export interface TargetHealth {
+  /** False only after a query to this target failed at the network level. */
   reachable: boolean;
-  /** Epoch ms of the last successful query response — null before the first sync. */
+  /** Epoch ms of this target's last successful response — null before its first sync. */
   lastSyncedAt: number | null;
 }
 
+export interface SyncStatus {
+  workspace: TargetHealth;
+  daemon: TargetHealth;
+}
+
 /** Default when no provider is mounted: components stay usable standalone (tests, storybook-shaped use). */
-const defaultStatus: SyncStatus = { reachable: true, lastSyncedAt: null };
+const defaultStatus: SyncStatus = {
+  workspace: { reachable: true, lastSyncedAt: null },
+  daemon: { reachable: true, lastSyncedAt: null },
+};
 
 const SyncStatusContext = createContext<SyncStatus>(defaultStatus);
 
-export function useSyncStatus(): SyncStatus {
-  return useContext(SyncStatusContext);
+/**
+ * Health of one target. The no-arg call means `"daemon"` — every current
+ * caller (DraftCard, Composer, RuleCard) gates a duo action, and AR-15
+ * keeps those actions disabled while *the daemon* specifically is quiet.
+ */
+export function useSyncStatus(target: SyncTarget = "daemon"): TargetHealth {
+  return useContext(SyncStatusContext)[target];
 }
 
 export function SyncStatusProvider({ children }: { children: ReactNode }) {
@@ -39,14 +60,21 @@ export function SyncStatusProvider({ children }: { children: ReactNode }) {
       if (event.type !== "updated") {
         return;
       }
+      // Which server this query talks to, from the query's own `meta`. No
+      // query in the app talks to anything but the owner's daemon today, so
+      // an absent label means daemon — the workspace layer will label its
+      // queries, and until then only the probes in test/SyncStatus.test.tsx
+      // carry the workspace label.
+      const target: SyncTarget =
+        (event.query.meta as { target?: SyncTarget } | undefined)?.target ?? "daemon";
       if (event.action.type === "success") {
-        setStatus({ reachable: true, lastSyncedAt: Date.now() });
+        setStatus((prev) => ({ ...prev, [target]: { reachable: true, lastSyncedAt: Date.now() } }));
         return;
       }
       if (event.action.type === "error") {
         // Network-level failure only — see the doc comment above.
         if (event.action.error instanceof TypeError) {
-          setStatus((prev) => ({ ...prev, reachable: false }));
+          setStatus((prev) => ({ ...prev, [target]: { ...prev[target], reachable: false } }));
         }
       }
     });
