@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
@@ -10,6 +10,7 @@ import { OfflineBar } from "./components/OfflineBar.js";
 import { notifyDraftReady } from "./notifications.js";
 import { Setup } from "./routes/Setup.js";
 import { Review } from "./routes/Review.js";
+import { Duo } from "./routes/Duo.js";
 import { Mirror } from "./routes/Mirror.js";
 
 // §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
@@ -28,16 +29,44 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * fresh launch opens with — stays the default surface: Review is the thing
  * the app exists to open (client-design.md §1.5).
  */
-function useHashRoute(): "review" | "mirror" {
-  const [route, setRoute] = useState<"review" | "mirror">(() => (window.location.hash === "#mirror" ? "mirror" : "review"));
+type Route = "review" | "duo" | "mirror";
+
+function routeFromHash(hash: string): Route {
+  if (hash === "#mirror") {
+    return "mirror";
+  }
+  if (hash === "#duo") {
+    return "duo";
+  }
+  return "review";
+}
+
+function useHashRoute(): Route {
+  const [route, setRoute] = useState<Route>(() => routeFromHash(window.location.hash));
 
   useEffect(() => {
-    const onHashChange = () => setRoute(window.location.hash === "#mirror" ? "mirror" : "review");
+    const onHashChange = () => setRoute(routeFromHash(window.location.hash));
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   return route;
+}
+
+/** One sidebar entry: same shape either way, active vs muted — the whole difference between the routes' links. */
+function NavLink({ active, href, children }: { active: boolean; href: string; children: ReactNode }) {
+  return (
+    <a
+      className={
+        active
+          ? "rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1.5 text-sm"
+          : "rounded-[var(--r-sm)] px-2 py-1.5 text-sm text-[var(--muted)]"
+      }
+      href={href}
+    >
+      {children}
+    </a>
+  );
 }
 
 function AppShell() {
@@ -72,26 +101,15 @@ function AppShell() {
       <div className="flex h-screen bg-[var(--bg)] text-[var(--text)]">
         <nav className="flex w-56 flex-col gap-1 border-r border-[var(--edge)] p-3">
           <div className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-[var(--faint)]">Duo</div>
-          <a
-            className={
-              route === "review"
-                ? "rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1.5 text-sm"
-                : "rounded-[var(--r-sm)] px-2 py-1.5 text-sm text-[var(--muted)]"
-            }
-            href="#review"
-          >
+          <NavLink active={route === "review"} href="#review">
             Review
-          </a>
-          <a
-            className={
-              route === "mirror"
-                ? "rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1.5 text-sm"
-                : "rounded-[var(--r-sm)] px-2 py-1.5 text-sm text-[var(--muted)]"
-            }
-            href="#mirror"
-          >
+          </NavLink>
+          <NavLink active={route === "duo"} href="#duo">
+            Duo
+          </NavLink>
+          <NavLink active={route === "mirror"} href="#mirror">
             Mirror
-          </a>
+          </NavLink>
           <button className="mt-auto px-2 py-1 text-left text-xs text-[var(--faint)]" onClick={() => setApi(null)}>
             Disconnect
           </button>
@@ -100,7 +118,9 @@ function AppShell() {
           {/* §3.3's bar rides above every surface — it is the one state that
               is true of the whole app, not of whichever route is mounted. */}
           <OfflineBar />
-          <main className="flex-1 overflow-y-auto">{route === "mirror" ? <Mirror api={api} /> : <Review api={api} />}</main>
+          <main className="flex-1 overflow-y-auto">
+            {route === "mirror" ? <Mirror api={api} /> : route === "duo" ? <Duo api={api} /> : <Review api={api} />}
+          </main>
         </div>
       </div>
     </SyncStatusProvider>

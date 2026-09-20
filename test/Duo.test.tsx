@@ -1,0 +1,249 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Duo } from "../src/routes/Duo.js";
+import type { DraftRecord } from "../src/api/types.js";
+import type { DuoApiConfig } from "../src/api/client.js";
+
+const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
+
+function renderWithClient(ui: React.ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
+
+function draftFor(id: string, over?: Partial<DraftRecord>): DraftRecord {
+  return {
+    id,
+    question: `question ${id}`,
+    threadContext: null,
+    draftText: `draft ${id}`,
+    escalated: false,
+    escalationReason: null,
+    confidenceScore: 0.8,
+    sources: [{ kind: "rule", id: `r-${id}`, label: `rule for ${id}` }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    outcome: null,
+    outcomeRecordedAt: null,
+    sentText: null,
+    refused: false,
+    escalationThreshold: 0.55,
+    ...over,
+  };
+}
+
+// Ascending createdAt, the order the daemon's `ORDER BY created_at, id`
+// actually returns — the grouping under test consumes that order directly.
+const drafts: DraftRecord[] = [
+  draftFor("1", { threadContext: "leave", createdAt: "2026-01-01T00:00:00.000Z" }),
+  draftFor("2", { createdAt: "2026-01-02T00:00:00.000Z", outcome: "sent", sentText: "sent as drafted" }),
+  draftFor("3", { createdAt: "2026-01-03T00:00:00.000Z", outcome: "edited", sentText: "the edited text that was sent" }),
+  draftFor("4", {
+    threadContext: "leave",
+    createdAt: "2026-01-04T00:00:00.000Z",
+    escalated: true,
+    draftText: null,
+    escalationReason: "no supporting evidence",
+    outcome: "escalation_answered",
+  }),
+  draftFor("5", { threadContext: "leave", createdAt: "2026-01-05T00:00:00.000Z", outcome: "discarded" }),
+];
+
+function stubDraftsResponse(list: DraftRecord[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify(list), { status: 200 })),
+  );
+}
+
+describe("Duo — the thread view and composer (issue #8)", () => {
+  beforeEach(() => {
+    stubDraftsResponse(drafts);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("groups drafts by threadContext with one General group for unthreaded, most recently active first", async () => {
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-group")).toHaveLength(2));
+    const headings = screen.getAllByTestId("thread-group-heading").map((el) => el.textContent);
+    // "leave" holds draft 5 (newest overall activity), so it leads; the
+    // null-threadContext drafts share one "General" group regardless of count.
+    expect(headings).toEqual(["leave", "General"]);
+  });
+
+  it("reads each entry as a conversation turn: question as the owner, response as the duo, outcome named", async () => {
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    const edited = screen.getByText("the edited text that was sent").closest('[data-testid="thread-entry"]')!;
+    expect(edited).not.toBeNull();
+    expect(edited.querySelector('[data-testid="owner-message"]')).toHaveTextContent("question 3");
+    expect(edited.querySelector('[data-testid="duo-message"]')).toHaveTextContent("Your duo");
+    expect(edited.querySelector('[data-testid="entry-outcome"]')).toHaveTextContent("Sent (edited)");
+    // The superseded draft text never reads as the conversation.
+    expect(edited.querySelector('[data-testid="duo-message"]')).not.toHaveTextContent("draft 3");
+  });
+
+  it("shows the sent text for a sent-as-drafted entry, not the draft text", async () => {
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    const sent = screen.getByText("sent as drafted").closest('[data-testid="thread-entry"]')!;
+    expect(sent.querySelector('[data-testid="entry-outcome"]')).toHaveTextContent("Sent");
+    expect(sent.querySelector('[data-testid="duo-message"]')).not.toHaveTextContent("draft 2");
+  });
+
+  it("renders escalations in the dashed Review idiom with their outcome, never as duo words", async () => {
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    const escalated = screen.getByText("no supporting evidence").closest('[data-testid="thread-entry"]')!;
+    expect(escalated.querySelector('[data-testid="escalation-reason"]')).toHaveTextContent("no supporting evidence");
+    expect(escalated.querySelector('[data-testid="duo-message"]')).toBeNull();
+    expect(escalated.querySelector('[data-testid="entry-outcome"]')).toHaveTextContent("standing-order candidate");
+  });
+
+  it("names pending and ignored entries honestly", async () => {
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    expect(screen.getByText("Waiting on you in Review.")).toBeInTheDocument();
+    expect(screen.getByText("Ignored")).toBeInTheDocument();
+  });
+
+  it("labels a refused escalation as refused, not as waiting on the owner", async () => {
+    stubDraftsResponse([
+      draftFor("r", {
+        escalated: true,
+        draftText: null,
+        escalationReason: "this topic is on your refused list",
+        refused: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    ]);
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(1));
+    expect(screen.getByTestId("entry-outcome")).toHaveTextContent("Your duo refused this one.");
+    expect(screen.queryByText("Waiting on you in Review.")).toBeNull();
+  });
+
+  it("renders an honest empty state when no drafts exist (AR-19)", async () => {
+    stubDraftsResponse([]);
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getByTestId("duo-empty")).toBeInTheDocument());
+    expect(screen.getByTestId("duo-empty")).toHaveTextContent("No conversation yet");
+    expect(screen.queryByTestId("thread-group")).toBeNull();
+  });
+
+  it("submits a question to POST /drafts, clears the input on success, and the new draft reads back", async () => {
+    let posts = 0;
+    let list = drafts;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.endsWith("/drafts")) {
+        posts += 1;
+        const body = JSON.parse(init.body as string) as { question: string; threadContext: string | null };
+        const created = draftFor("new", { question: body.question, threadContext: body.threadContext, createdAt: "2026-01-06T00:00:00.000Z" });
+        list = [...list, created];
+        return new Response(
+          JSON.stringify({ kind: "draft", draftId: "new", text: created.draftText, sources: created.sources, confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } }),
+          { status: 201 },
+        );
+      }
+      return new Response(JSON.stringify(list), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+
+    fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "  How much leave do I get?  " } });
+    fireEvent.click(screen.getByTestId("composer-submit"));
+
+    await waitFor(() => expect(posts).toBe(1));
+    const sent = JSON.parse((fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "POST")?.[1] as { body: string }).body) as {
+      question: string;
+      threadContext: string | null;
+    };
+    // Trimmed, and targeted at the General group (null threadContext) by default.
+    expect(sent).toEqual({ question: "How much leave do I get?", threadContext: null });
+    // The refetched list renders the new question as its own entry.
+    await waitFor(() => expect(screen.getByText("How much leave do I get?")).toBeInTheDocument());
+    expect(screen.getByLabelText("Question for your duo")).toHaveValue("");
+  });
+
+  it("targets the selected thread's context when a group heading is chosen", async () => {
+    let captured: { question: string; threadContext: string | null } | null = null;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.endsWith("/drafts")) {
+        captured = JSON.parse(init.body as string);
+        return new Response(JSON.stringify({ kind: "draft", draftId: "x", text: "t", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } }), { status: 201 });
+      }
+      return new Response(JSON.stringify(drafts), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-group")).toHaveLength(2));
+    expect(screen.getByTestId("composer-thread")).toHaveTextContent("General");
+
+    fireEvent.click(screen.getAllByTestId("thread-group-heading")[0]);
+    expect(screen.getByTestId("composer-thread")).toHaveTextContent("Asking in: leave");
+
+    fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "more leave questions" } });
+    fireEvent.click(screen.getByTestId("composer-submit"));
+    await waitFor(() => expect(captured).not.toBeNull());
+    expect(captured).toEqual({ question: "more leave questions", threadContext: "leave" });
+  });
+
+  it("keeps the typed question and shows the failure when the submit fails", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.endsWith("/drafts")) {
+        return new Response(JSON.stringify({ error: { code: "unknown", message: "store locked" } }), { status: 500 });
+      }
+      return new Response(JSON.stringify(drafts), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+
+    fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "a question worth keeping" } });
+    fireEvent.click(screen.getByTestId("composer-submit"));
+
+    await waitFor(() => expect(screen.getByTestId("mutation-error")).toHaveTextContent("store locked"));
+    expect(screen.getByLabelText("Question for your duo")).toHaveValue("a question worth keeping");
+  });
+
+  it("disables submission for whitespace-only questions and while a submit is in flight", async () => {
+    let resolvePost!: (value: Response) => void;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.endsWith("/drafts")) {
+        return new Promise<Response>((resolve) => {
+          resolvePost = resolve;
+        });
+      }
+      return Promise.resolve(new Response(JSON.stringify(drafts), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+
+    const input = screen.getByLabelText("Question for your duo");
+    const submit = screen.getByTestId("composer-submit") as HTMLButtonElement;
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: "   " } });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: "real question" } });
+    expect(submit).toBeEnabled();
+
+    fireEvent.click(submit);
+    // One question, one draft: submission is blocked while in flight, and
+    // the button says what is happening instead of inviting a second POST.
+    await waitFor(() => expect(submit).toBeDisabled());
+    expect(submit).toHaveTextContent("Asking…");
+
+    resolvePost(new Response(JSON.stringify({ kind: "draft", draftId: "x", text: "t", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } }), { status: 201 }));
+    await waitFor(() => expect(screen.getByTestId("composer-submit")).toHaveTextContent("Ask"));
+  });
+});

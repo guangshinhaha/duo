@@ -96,7 +96,8 @@ describe("App — hash routing between the surfaces", () => {
               topicBreakdown: [],
               topFiveShare: 0,
               busiestThreads: [],
-              insufficientHistory: true,
+              tooThin: true,
+              minimumQuestionsToCharacterize: 10,
             }),
             { status: 200 },
           );
@@ -122,5 +123,28 @@ describe("App — hash routing between the surfaces", () => {
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
     expect(screen.queryByTestId("mirror")).toBeNull();
+  });
+
+  it("navigates to Duo on #duo and back to Review", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })),
+    );
+
+    render(<App />);
+
+    window.location.hash = "#duo";
+    window.dispatchEvent(new Event("hashchange"));
+    // GET /drafts returns [] against this stub, so the thread view shows
+    // its honest empty state — the route mounted, not Review with no drafts.
+    await waitFor(() => expect(screen.getByTestId("duo-empty")).toBeInTheDocument());
+    expect(screen.getByTestId("composer")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
+
+    window.location.hash = "#review";
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
+    expect(screen.queryByTestId("duo-thread")).toBeNull();
   });
 });

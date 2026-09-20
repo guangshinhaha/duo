@@ -17,6 +17,12 @@ in this pass).
   percentage.
 - **`src/components/DraftCard.tsx`** — Send / Edit / Ignore, the correction loop's only input.
 - **`src/routes/Review.tsx`** — the default surface: every pending draft.
+- **`src/routes/Duo.tsx` / `src/components/Composer.tsx`** (#8) — the thread view plus composer at
+  `#duo`: every draft (all outcomes) grouped by `threadContext` into one conversation, questions as
+  the owner's words and drafts / sent text / escalations as the duo's, each entry named by what
+  actually happened (sent, sent-edited, ignored, answered escalation, waiting in Review). The
+  composer asks via the existing `POST /drafts` — trimmed question, targeted at the selected group —
+  and disposition stays in Review, by design.
 - **`src/routes/Mirror.tsx`** — the Mirror browser (C6): the interruption portrait plus derived
   rules in five buckets, with Approve / Reject / Promote on exactly the actions the daemon's own
   preconditions allow. Read-and-disposition only — rule authoring stays in `duo/rules/*.md` on

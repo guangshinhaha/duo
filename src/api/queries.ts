@@ -44,6 +44,16 @@ export function usePendingDrafts(api: DuoApiConfig) {
   });
 }
 
+/**
+ * Every draft, every outcome — the Duo thread view's data. Distinct key
+ * from the pending list (`["drafts", {}]` vs `["drafts", {outcome:
+ * "pending"}]`), both invalidated by the shared `["drafts"]` prefix, so a
+ * composer submit or outcome POST refreshes Review and the thread together.
+ */
+export function useDrafts(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.drafts(), queryFn: () => apiRequest<DraftRecord[]>(api, "/drafts") });
+}
+
 export function useReview(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.review, queryFn: () => apiRequest<CorrectionCandidate[]>(api, "/review") });
 }
