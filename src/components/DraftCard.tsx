@@ -6,6 +6,7 @@ import { DuoMessage } from "./DuoMessage.js";
 import { OwnerMessage } from "./OwnerMessage.js";
 import { ConfidenceHairline } from "./ConfidenceHairline.js";
 import { MutationError } from "./MutationError.js";
+import { useSyncStatus } from "../sync.js";
 import type { DraftPipelineResult } from "../api/types.js";
 
 /**
@@ -64,6 +65,11 @@ function SourceList({ sources }: { sources: DraftRecord["sources"] }) {
 export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecord }) {
   const recordOutcome = useRecordOutcome(api);
   const answerEscalation = useAnswerEscalation(api);
+  // AR-15 (§3.3): when the daemon is unreachable every mutation control is
+  // disabled, not queued — a Send firing hours later against moved context
+  // is worse than no Send. Editing the text stays possible (a local buffer);
+  // only the *sending* of anything waits for the daemon to answer again.
+  const { reachable } = useSyncStatus();
   const [editing, setEditing] = useState(false);
   const [editedText, setEditedText] = useState(draft.draftText ?? "");
   const [answerText, setAnswerText] = useState("");
@@ -93,7 +99,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
               />
               <button
                 className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-white disabled:opacity-40"
-                disabled={!answerText.trim() || answerEscalation.isPending}
+                disabled={!answerText.trim() || answerEscalation.isPending || !reachable}
                 onClick={() => answerEscalation.mutate({ draftId: draft.id, answer: answerText.trim() })}
               >
                 Answer
@@ -127,7 +133,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
           <>
             <button
               className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-white disabled:opacity-40"
-              disabled={!editedText.trim() || recordOutcome.isPending}
+              disabled={!editedText.trim() || recordOutcome.isPending || !reachable}
               onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "edited", sentText: editedText.trim() })}
             >
               Send edited
@@ -148,8 +154,8 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
         ) : (
           <>
             <button
-              className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-white"
-              disabled={recordOutcome.isPending}
+              className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-white disabled:opacity-40"
+              disabled={recordOutcome.isPending || !reachable}
               onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })}
             >
               Send
@@ -158,8 +164,8 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
               Edit
             </button>
             <button
-              className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)]"
-              disabled={recordOutcome.isPending}
+              className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)] disabled:opacity-40"
+              disabled={recordOutcome.isPending || !reachable}
               onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "discarded" })}
             >
               Ignore
