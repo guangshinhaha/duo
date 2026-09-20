@@ -29,6 +29,7 @@ function draftFor(id: string, over?: Partial<DraftRecord>): DraftRecord {
     sentText: null,
     refused: false,
     escalationThreshold: 0.55,
+    provenance: { origin: "unknown" },
     ...over,
   };
 }

@@ -18,6 +18,7 @@ const draft: DraftRecord = {
   sentText: null,
   refused: false,
   escalationThreshold: 0.6,
+  provenance: { origin: "unknown" },
 };
 
 /**

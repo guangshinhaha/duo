@@ -27,6 +27,7 @@ const draftRecord: DraftRecord = {
   sentText: null,
   refused: false,
   escalationThreshold: 0.55,
+  provenance: { origin: "unknown" },
 };
 
 const escalatedRecord: DraftRecord = {
@@ -233,6 +234,94 @@ describe("#23 — the edit shows as a change, not a textarea", () => {
     expect(screen.getByRole("textbox")).toHaveValue("Five days per quarter.");
     expect(screen.getByTestId("edit-diff")).toHaveTextContent("Five days per quarter.");
     expect(screen.queryByTestId("edit-diff-removed")).toBeNull();
+  });
+});
+
+describe("#30 — a self-asked draft answers you, it doesn't reply to anyone", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const selfAsked: DraftRecord = { ...draftRecord, id: "s1", provenance: { origin: "owner" } };
+  const channelAsked: DraftRecord = {
+    ...draftRecord,
+    id: "c1",
+    provenance: { origin: "channel", channelKind: "slack", askerRef: "U123", threadId: "C01", permalink: null },
+  };
+
+  function postedOutcomeBody(path: string): Record<string, unknown> {
+    const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) => c[0] === `http://test/${path}`);
+    return JSON.parse((call![1] as RequestInit).body as string) as Record<string, unknown>;
+  }
+
+  it("an owner-origin draft offers Keep / Edit / Ignore — no Send to a recipient that does not exist", () => {
+    renderWithClient(<DraftCard api={api} draft={selfAsked} />);
+    expect(screen.getByText("Keep", { selector: "button" })).toBeInTheDocument();
+    expect(screen.getByText("Edit", { selector: "button" })).toBeInTheDocument();
+    expect(screen.getByText("Ignore", { selector: "button" })).toBeInTheDocument();
+    expect(screen.queryByText(/^Send/, { selector: "button" })).toBeNull();
+
+    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Actually, ten days." } });
+    expect(screen.getByText("Keep edited", { selector: "button" })).toBeInTheDocument();
+    expect(screen.queryByText(/^Send/, { selector: "button" })).toBeNull();
+  });
+
+  it("keeping an edit to your own draft records the same edited outcome and sentText as any channel draft", async () => {
+    renderWithClient(<DraftCard api={api} draft={selfAsked} />);
+    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Actually, ten days." } });
+    fireEvent.click(screen.getByText("Keep edited"));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://test/drafts/s1/outcome", expect.objectContaining({ method: "POST" })));
+    expect(postedOutcomeBody("drafts/s1/outcome")).toEqual({ outcome: "edited", sentText: "Actually, ten days." });
+  });
+
+  it("keeping the duo's text as-is records plain \"sent\" — the loop is unchanged, only the words are new", async () => {
+    renderWithClient(<DraftCard api={api} draft={selfAsked} />);
+    fireEvent.click(screen.getByText("Keep"));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(postedOutcomeBody("drafts/s1/outcome")).toEqual({ outcome: "sent" });
+  });
+
+  it("ignoring your own draft says \"not final yet\" — nothing was ever being sent anywhere", () => {
+    vi.useFakeTimers();
+    try {
+      renderWithClient(<DraftCard api={api} draft={selfAsked} />);
+      fireEvent.click(screen.getByText("Ignore"));
+      expect(screen.getByTestId("ignore-window")).toHaveTextContent("Ignoring — not final yet.");
+      expect(screen.getByText("Undo")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a channel-borne draft keeps Send / Send edited exactly, and its payload is today's payload", async () => {
+    renderWithClient(<DraftCard api={api} draft={channelAsked} />);
+    expect(screen.getByText("Send", { selector: "button" })).toBeInTheDocument();
+    expect(screen.queryByText(/Keep/, { selector: "button" })).toBeNull();
+
+    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Actually, ten days." } });
+    fireEvent.click(screen.getByText("Send edited"));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(postedOutcomeBody("drafts/c1/outcome")).toEqual({ outcome: "edited", sentText: "Actually, ten days." });
+  });
+
+  it("a channel-borne draft's ignore window still says \"not sent yet\" — the wording split is provenance-based, not cosmetic", () => {
+    vi.useFakeTimers();
+    try {
+      renderWithClient(<DraftCard api={api} draft={channelAsked} />);
+      fireEvent.click(screen.getByText("Ignore"));
+      expect(screen.getByTestId("ignore-window")).toHaveTextContent("Ignoring — not sent yet.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
