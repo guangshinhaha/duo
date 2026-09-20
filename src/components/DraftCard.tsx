@@ -8,6 +8,8 @@ import { ConfidenceHairline } from "./ConfidenceHairline.js";
 import { EditDiff } from "./EditDiff.js";
 import { MutationError } from "./MutationError.js";
 import { SourceList } from "./SourceList.js";
+import { StructuredText } from "./StructuredText.js";
+import { Timestamp } from "./Timestamp.js";
 import { useSyncStatus } from "../sync.js";
 import type { DraftPipelineResult } from "../api/types.js";
 
@@ -101,6 +103,19 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
     }
     setIgnoring(false);
   };
+  // #26: copy is the one route to reuse a draft's text, and it is entirely
+  // local — no daemon round-trip, so it stays available no matter the
+  // daemon's health. The control confirms which of the two outcomes
+  // happened; it never claims a copy that failed.
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const copyDraft = async () => {
+    try {
+      await navigator.clipboard.writeText(draft.draftText ?? "");
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  };
 
   if (draft.escalated) {
     return (
@@ -162,9 +177,12 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
               />
             </div>
           ) : (
-            draft.draftText
+            <StructuredText text={draft.draftText ?? ""} />
           )}
         </DuoMessage>
+        <div className="text-xs text-[var(--faint)]">
+          <Timestamp iso={draft.createdAt} />
+        </div>
         <SourceList sources={draft.sources} />
         {ignoring ? (
           // #24: the undo window. The discard has NOT been sent — the card
@@ -224,6 +242,13 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
                 onClick={ignoreWithWindow}
               >
                 Ignore
+              </button>
+              <button
+                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)]"
+                data-testid="copy-draft"
+                onClick={() => void copyDraft()}
+              >
+                {copyState === "idle" ? "Copy" : copyState === "copied" ? "Copied." : "Couldn't copy."}
               </button>
             </>
           )}
