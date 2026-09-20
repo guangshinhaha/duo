@@ -54,7 +54,7 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
               onChange={(e) => setAddressInput(e.target.value)}
               value={addressInput}
             />
-            <button className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-40" disabled={!addressInput.trim()} type="submit">
+            <button className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1.5 text-sm text-[var(--bg)] disabled:opacity-40" disabled={!addressInput.trim()} type="submit">
               Save
             </button>
           </div>
