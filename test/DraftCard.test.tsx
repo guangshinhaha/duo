@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DraftCard } from "../src/components/DraftCard.js";
+import { DraftCard, IGNORE_UNDO_WINDOW_MS } from "../src/components/DraftCard.js";
 import type { DraftRecord } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 
@@ -94,13 +94,20 @@ describe("DraftCard — Send / Edit / Ignore (the correction loop's only input)"
     expect(screen.getByText("Send edited")).toBeDisabled();
   });
 
-  it("Ignore posts the outcome as \"discarded\"", async () => {
-    renderWithClient(<DraftCard api={api} draft={draftRecord} />);
-    fireEvent.click(screen.getByText("Ignore"));
+  it("Ignore posts the outcome as \"discarded\" once its undo window has lapsed", async () => {
+    vi.useFakeTimers();
+    try {
+      renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+      fireEvent.click(screen.getByText("Ignore"));
+      // Async advancer: the mutation itself starts in a microtask, so the
+      // flush has to let microtasks run between timer callbacks.
+      await vi.advanceTimersByTimeAsync(IGNORE_UNDO_WINDOW_MS);
 
-    await waitFor(() => expect(fetch).toHaveBeenCalled());
-    const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) => c[0] === "http://test/drafts/d1/outcome");
-    expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({ outcome: "discarded" });
+      const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) => c[0] === "http://test/drafts/d1/outcome");
+      expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({ outcome: "discarded" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("an escalated draft shows the reason and an answer box, not Send/Edit/Ignore", () => {
@@ -226,5 +233,72 @@ describe("#23 — the edit shows as a change, not a textarea", () => {
     expect(screen.getByRole("textbox")).toHaveValue("Five days per quarter.");
     expect(screen.getByTestId("edit-diff")).toHaveTextContent("Five days per quarter.");
     expect(screen.queryByTestId("edit-diff-removed")).toBeNull();
+  });
+});
+
+describe("#24 — a mis-click on Ignore is recoverable", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("Ignore opens an undo window instead of posting — the discard is held client-side, not sent", () => {
+    vi.useFakeTimers();
+    try {
+      renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+      fireEvent.click(screen.getByText("Ignore"));
+
+      // AC2: the window holds the mutation before sending it — nothing is
+      // on the wire while undo is still possible.
+      expect(fetch).not.toHaveBeenCalled();
+      expect(screen.getByTestId("ignore-window")).toBeInTheDocument();
+      expect(screen.getByText("Undo")).toBeInTheDocument();
+      // The action row is replaced by the window — no second Ignore, no Send.
+      expect(screen.queryByText("Send", { selector: "button" })).toBeNull();
+      expect(screen.queryByText("Edit", { selector: "button" })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Undo within the window reverses it — the draft stays in Review and nothing is ever posted", () => {
+    vi.useFakeTimers();
+    try {
+      renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+      fireEvent.click(screen.getByText("Ignore"));
+      fireEvent.click(screen.getByText("Undo"));
+
+      // The card is back: the draft never left Review, and its controls
+      // returned exactly as they were.
+      expect(screen.getByText("Send", { selector: "button" })).toBeInTheDocument();
+      expect(screen.getByText("Ignore", { selector: "button" })).toBeInTheDocument();
+      expect(screen.queryByTestId("ignore-window")).toBeNull();
+
+      // Well past the window: the cancelled discard must never fire.
+      vi.advanceTimersByTime(IGNORE_UNDO_WINDOW_MS * 3);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the window lapsing posts the held discard exactly once, after the full window", async () => {
+    vi.useFakeTimers();
+    try {
+      renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+      fireEvent.click(screen.getByText("Ignore"));
+
+      await vi.advanceTimersByTimeAsync(IGNORE_UNDO_WINDOW_MS - 1);
+      expect(fetch).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      const outcomeCalls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => c[0] === "http://test/drafts/d1/outcome");
+      expect(outcomeCalls).toHaveLength(1);
+      expect(JSON.parse((outcomeCalls[0]![1] as RequestInit).body as string)).toEqual({ outcome: "discarded" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
