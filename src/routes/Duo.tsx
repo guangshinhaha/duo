@@ -4,6 +4,7 @@ import { useDraftsFeed } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
 import { ConfidenceHairline } from "../components/ConfidenceHairline.js";
 import { Composer } from "../components/Composer.js";
+import { DeliveryStateLine } from "../components/DeliveryStateLine.js";
 import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { DuoMessage } from "../components/DuoMessage.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
@@ -74,6 +75,9 @@ function ThreadEntry({ draft }: { draft: DraftRecord }) {
           {outcomeLabel(draft)}
           <Timestamp iso={draft.createdAt} />
         </p>
+        {/* #21: whether the sent answer arrived — after the outcome, because
+            the outcome stands whatever the transport did. */}
+        <DeliveryStateLine delivery={draft.delivery} />
         <SourceList sources={draft.sources} />
       </div>
     </div>

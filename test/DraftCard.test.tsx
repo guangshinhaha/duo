@@ -28,6 +28,7 @@ const draftRecord: DraftRecord = {
   refused: false,
   escalationThreshold: 0.55,
   provenance: { origin: "unknown" },
+  delivery: null,
 };
 
 const escalatedRecord: DraftRecord = {
@@ -465,5 +466,82 @@ describe("#20 — a draft says who asked, and where they asked it", () => {
     const { unmount } = renderWithClient(<DraftCard api={api} draft={staleCached} />);
     expect(screen.queryByTestId("draft-origin")).toBeNull();
     unmount();
+  });
+});
+
+describe("#21 — the card shows delivery when a sent draft renders", () => {
+  // The single-draft address (#25) renders cards for drafts Review has already
+  // passed by — that is where a card meets a delivery state.
+  const channelAsked = {
+    origin: "channel",
+    channelKind: "slack",
+    askerRef: "U04ARLJ9P",
+    threadId: null,
+    permalink: null,
+  } as const;
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a delivered sent draft says so", () => {
+    renderWithClient(
+      <DraftCard
+        api={api}
+        draft={{ ...draftRecord, outcome: "sent", sentText: "sent as drafted", provenance: channelAsked, delivery: { state: "delivered" } }}
+      />,
+    );
+    expect(screen.getByTestId("delivery-state")).toHaveTextContent("Delivered.");
+  });
+
+  it("a failed delivery shows the daemon's reason verbatim, without burying the card", () => {
+    renderWithClient(
+      <DraftCard
+        api={api}
+        draft={{
+          ...draftRecord,
+          outcome: "edited",
+          sentText: "the edited text that was sent",
+          provenance: channelAsked,
+          delivery: { state: "failed", reason: 'no connected adapter for channel kind "slack"' },
+        }}
+      />,
+    );
+    // The card still reads as it always did — the duo's text and the asker
+    // (the sent text is the thread view's line, not the card's) — and the
+    // failure is one small line about transport, nothing more.
+    expect(screen.getByTestId("duo-message")).toHaveTextContent("Five days per quarter.");
+    expect(screen.getByTestId("draft-origin")).toHaveTextContent("Asked by U04ARLJ9P in slack");
+    expect(screen.getByTestId("delivery-state")).toHaveTextContent(
+      'Couldn’t deliver — no connected adapter for channel kind "slack"',
+    );
+  });
+
+  it("a pending draft and a self-asked sent draft show no delivery line", () => {
+    const { unmount } = renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+    expect(screen.queryByTestId("delivery-state")).toBeNull();
+    unmount();
+
+    renderWithClient(
+      <DraftCard
+        api={api}
+        draft={{ ...draftRecord, outcome: "sent", sentText: "sent as drafted", provenance: { origin: "owner" }, delivery: null }}
+      />,
+    );
+    expect(screen.queryByTestId("delivery-state")).toBeNull();
+  });
+
+  it("a pre-delivery cached record (field absent) degrades quietly", () => {
+    const staleCached = {
+      ...draftRecord,
+      outcome: "sent" as const,
+      provenance: channelAsked,
+      delivery: undefined,
+    } as unknown as DraftRecord;
+    renderWithClient(<DraftCard api={api} draft={staleCached} />);
+    expect(screen.queryByTestId("delivery-state")).toBeNull();
   });
 });

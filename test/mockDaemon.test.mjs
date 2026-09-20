@@ -186,6 +186,33 @@ describe("mock daemon — the drafts loop (D2/D3)", () => {
     const drafts = await (await get("/drafts")).json();
     expect(drafts.some((d) => d.id === record.id)).toBe(true);
   });
+
+  it("records delivery through the origin channel when a channel draft is sent (#21)", async () => {
+    // The seeded channel draft already went out clean.
+    const seeded = await (await get("/drafts/d-1")).json();
+    expect(seeded.delivery).toEqual({ state: "delivered" });
+
+    // A fresh channel draft (the push route fabricates them channel-borne):
+    // the mock connects no adapter, so recording "sent" records the same
+    // honest failure a daemon with no adapter would — the core's own words.
+    const pushed = await (await post("/mock/push-draft", { question: "Can you send the invoice?" })).json();
+    await post(`/drafts/${pushed.id}/outcome`, { outcome: "sent" });
+    const sent = await (await get(`/drafts/${pushed.id}`)).json();
+    expect(sent.delivery).toEqual({ state: "failed", reason: 'no connected adapter for channel kind "slack"' });
+
+    // An owner-asked draft delivers nothing — nowhere to deliver, not an error.
+    const ownerAsk = await post("/drafts", { question: "What is our refund policy?" });
+    const { draftId } = await ownerAsk.json();
+    await post(`/drafts/${draftId}/outcome`, { outcome: "sent" });
+    const ownerRecord = await (await get(`/drafts/${draftId}`)).json();
+    expect(ownerRecord.delivery).toBeNull();
+
+    // And "discarded" means nothing was sent — no delivery to record.
+    const discarded = await (await post("/mock/push-draft", { question: "Draft me a status update" })).json();
+    await post(`/drafts/${discarded.id}/outcome`, { outcome: "discarded" });
+    const discardedRecord = await (await get(`/drafts/${discarded.id}`)).json();
+    expect(discardedRecord.delivery).toBeNull();
+  });
 });
 
 describe("mock daemon — mirror, trust, audit, ask (D2/D6)", () => {

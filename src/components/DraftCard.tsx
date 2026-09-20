@@ -5,6 +5,7 @@ import type { DuoApiConfig } from "../api/client.js";
 import { DuoMessage } from "./DuoMessage.js";
 import { OwnerMessage } from "./OwnerMessage.js";
 import { ConfidenceHairline } from "./ConfidenceHairline.js";
+import { DeliveryStateLine } from "./DeliveryStateLine.js";
 import { EditDiff } from "./EditDiff.js";
 import { MutationError } from "./MutationError.js";
 import { ProvenanceLine } from "./ProvenanceLine.js";
@@ -206,6 +207,10 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
         <div className="text-xs text-[var(--faint)]">
           <Timestamp iso={draft.createdAt} />
         </div>
+        {/* #21: the single-draft address renders cards Review has passed by —
+            a sent draft's delivery state reads here too. Escalations never
+            deliver, so the escalated branch has no line to show. */}
+        <DeliveryStateLine delivery={draft.delivery} />
         <SourceList sources={draft.sources} />
         {ignoring ? (
           // #24: the undo window. The discard has NOT been sent — the card

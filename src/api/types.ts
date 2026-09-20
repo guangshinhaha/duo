@@ -53,6 +53,19 @@ export type DraftProvenance =
     }
   | { readonly origin: "unknown" };
 
+/**
+ * What happened when a sent/edited draft was handed back to its origin
+ * channel (digital-duo #170's delivery seam). `null` means no delivery was
+ * ever attempted — the draft wasn't sent, or it was self-asked and had
+ * nowhere to go, which is not an error. The reason on a failure is the
+ * daemon's own string and renders verbatim; retrying is the daemon's call,
+ * never this client's.
+ */
+export type DraftDelivery =
+  | { readonly state: "pending" }
+  | { readonly state: "delivered" }
+  | { readonly state: "failed"; readonly reason: string };
+
 export interface DraftRecord {
   id: string;
   question: string;
@@ -71,6 +84,8 @@ export interface DraftRecord {
   /** The composite-confidence escalation threshold that was actually in effect when this draft was generated — what ConfidenceHairline compares confidenceScore against, instead of a hardcoded guess. */
   escalationThreshold: number;
   provenance: DraftProvenance;
+  /** The daemon's record of the delivery attempt (#170) — always present on the wire, `null` when nothing was ever sent anywhere. */
+  delivery: DraftDelivery | null;
 }
 
 /**
