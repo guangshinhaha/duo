@@ -35,7 +35,16 @@ function load(): OutboxMessage[] {
       return [];
     }
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as OutboxMessage[]) : [];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    // "sending" exists only inside a live flush loop, which never survives a
+    // reload — anything persisted as sending was interrupted mid-delivery.
+    // Normalize to pending, in place, or the next flush would skip it and
+    // deliver what is behind it: later messages jumping the queue.
+    return (parsed as OutboxMessage[]).map((message) =>
+      message.state === "sending" ? { ...message, state: "pending" } : message,
+    );
   } catch {
     // A cache that can't be read is not a reason to lose the queue.
     return [];

@@ -295,6 +295,33 @@ describe("#61 — messages queue and deliver; drafts and duo actions do not", ()
     expect(stubbornSender).toHaveBeenCalledTimes(1);
   });
 
+  it("a send interrupted by the app dying keeps its place — nothing jumps it after a reload", async () => {
+    // Storage as a crash mid-flush would leave it: the head message stuck in
+    // "sending", a later one pending behind it.
+    localStorage.setItem(
+      "duo.outbox",
+      JSON.stringify([
+        { id: "stuck", text: "crashed mid-send", enqueuedAt: 1, state: "sending", error: null },
+        { id: "behind", text: "typed later", enqueuedAt: 2, state: "pending", error: null },
+      ]),
+    );
+    const sent: string[] = [];
+    const sender = vi.fn(async (message: OutboxMessage) => {
+      sent.push(message.text);
+    });
+    // A fresh provider is the next launch: probe syncs → reachable → flush.
+    renderOutbox(
+      <>
+        <Probe target="workspace" />
+      </>,
+      sender,
+    );
+    await waitFor(() => expect(screen.queryByTestId("queued-message")).toBeNull());
+    // The interrupted message was normalized to pending and delivered FIRST —
+    // "in order" survives the crash, and the later message did not jump it.
+    expect(sent).toEqual(["crashed mid-send", "typed later"]);
+  });
+
   it("the split, in one render: the same outage queues a message and disables a duo action", async () => {
     vi.stubGlobal("fetch", vi.fn()); // no mutation is fired in this test; the stub is belt-and-braces
     const sender = vi.fn(async () => {});
