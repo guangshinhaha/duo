@@ -243,13 +243,29 @@ easiest bug to ship here and the hardest to notice.
 
 ## 3.3 Offline
 
-The query cache persists to storage and rehydrates at launch. When the daemon is unreachable:
+The query cache persists to storage and rehydrates at launch. Two connections fail for
+unrelated reasons (#58): the workspace (messaging, up independently of any one person's
+hardware) and the owner's duo daemon (asleep whenever the Mac is). Health is tracked
+separately for each, and the two rules below are each about one of them — written down so
+nobody applies the wrong rule to the wrong object.
 
-- Cached views render, with a persistent bar: **"Last synced 14:32. Your Mac is unreachable."**
-- Every mutation control is **disabled, not queued.** A Send that fires two hours later against
-  context that has moved is worse than no Send. This is `client-design.md` AR-15, and it is a
-  product decision, not a technical limitation to be engineered around later.
-- Reconnect refetches rather than replaying.
+- Cached views render, with one bar line per down connection, each naming which and showing
+  that one's last sync (#58). The workspace line keeps the error voice: **"Last synced 14:32.
+  The workspace is unreachable."** The daemon line is an expected state, not an error:
+  **"Last seen 14:32. Your duo is asleep — it answers when your Mac is back."**
+- **Ordinary messages queue and deliver on reconnect** (#61) — simply what a messaging app
+  does. A message sent offline is held on the device, shown as pending, and delivered in
+  order when the workspace answers again. A delivery that fails tells the owner, keeps the
+  text, and retries only by their choice; a failed message holds its place at the head of
+  the line so nothing behind it jumps ahead.
+- **Drafts and duo actions are disabled, not queued** — Send, Edit, Ignore, an escalation
+  answer, a rule disposition, anything irreversible. A Send that fires two hours later
+  against context that has moved is worse than no Send. This is `client-design.md` AR-15,
+  and it is a product decision, not a technical limitation to be engineered around later.
+  Two different rules for two different objects: applying the draft rule to messages ships
+  an app that refuses to let you type offline; applying the message rule to drafts ships
+  exactly the failure AR-15 was written to prevent.
+- Reconnect refetches the daemon's views rather than replaying actions against them.
 
 ## 3.4 The labelling contract
 
