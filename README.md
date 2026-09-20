@@ -31,6 +31,15 @@ in this pass).
   the `POST /ask` contract from digital-duo #157/#159. That route isn't served by the daemon yet,
   so this page is contract-first: fully built and tested against mocked fetches, waiting on the
   core to go live end-to-end.
+- **`src/api/ws.ts` / `src/sync.tsx` / `src/components/OfflineBar.tsx`** (C7) — the offline half
+  of §3.3: the query cache persists to localStorage and rehydrates at launch; when the daemon goes
+  quiet at the network level the persistent bar renders ("Last synced HH:MM. Your Mac is
+  unreachable.") while cached views stay up and every mutation control is disabled, not queued
+  (AR-15). `useDraftReadySocket` keeps the daemon's one push channel open — auth by first message
+  (browsers can't put a Bearer on a WebSocket), reconnect with backoff that resets on clean auth,
+  and on `draft-ready` it invalidates `["drafts"]` + `["review"]` (§3.2) and fires the native
+  notification callback. Contract-first against digital-duo #162 — the daemon doesn't serve
+  `GET /ws` yet, so the socket is exercised against a fake until the core lands.
 
 ## Running it
 
@@ -49,8 +58,9 @@ to `duo serve` over HTTP, the same way the Tauri-wrapped Mac and phone apps even
 
 - **Tauri wrapping** (C5, macOS; C8, iOS/Android) — needs a macOS host with Xcode for the real
   builds, which this environment doesn't have.
-- **WebSocket draft-ready push** (C7) — the build order pairs it with the Tauri shell, since the
-  notification half of "a new draft is waiting" is native.
+- **Live draft-ready push** — the client half of C7 is in (`useDraftReadySocket`), but the
+  daemon's `GET /ws` doesn't exist yet (digital-duo #162); until it does, Review refreshes by
+  refetch, which was always the floor.
 - **The Mirror's refusals tab** and **rule-detail-with-evidence view** — `client-tech-design.md`
   §3.1 lists refusals alongside portrait and rules, but no daemon route lists refusals yet, and
   the `GET /mirror/rules/:id` the daemon does expose isn't in §1.4's client route contract. Both

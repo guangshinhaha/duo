@@ -4,6 +4,7 @@ import { useRuleAction } from "../api/queries.js";
 import { DuoMessage } from "./DuoMessage.js";
 import { MutationError } from "./MutationError.js";
 import { MeterBar } from "./MeterBar.js";
+import { useSyncStatus } from "../sync.js";
 
 /** Which `RuleReviewListing` bucket a rule came from — fixes the action set and the section it renders under. */
 export type RuleBucket = "awaitingApproval" | "weakSignals" | "inconsistent" | "approved" | "rejected";
@@ -42,6 +43,9 @@ const ACTION_LABELS: Record<RuleAction, string> = {
 export function RuleCard({ api, rule, bucket }: { api: DuoApiConfig; rule: Rule; bucket: RuleBucket }) {
   const ruleAction = useRuleAction(api);
   const actions = ACTIONS[bucket];
+  // AR-15, same as DraftCard: disposition waits for the daemon to answer —
+  // a queued Approve firing against rules that moved is worse than none.
+  const { reachable } = useSyncStatus();
 
   return (
     <div className="flex flex-col gap-2 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="rule-card">
@@ -68,7 +72,7 @@ export function RuleCard({ api, rule, bucket }: { api: DuoApiConfig; rule: Rule;
                   ? "rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)] disabled:opacity-40"
                   : "rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-white disabled:opacity-40"
               }
-              disabled={ruleAction.isPending}
+              disabled={ruleAction.isPending || !reachable}
               onClick={() => ruleAction.mutate({ ruleId: rule.id, action })}
             >
               {ACTION_LABELS[action]}

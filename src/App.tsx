@@ -1,12 +1,24 @@
 import { useEffect, useState } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { useApiConfig } from "./api/config.js";
 import type { DuoApiConfig } from "./api/client.js";
+import { useDraftReadySocket } from "./api/ws.js";
+import { SyncStatusProvider } from "./sync.js";
+import { OfflineBar } from "./components/OfflineBar.js";
 import { Setup } from "./routes/Setup.js";
 import { Review } from "./routes/Review.js";
 import { Mirror } from "./routes/Mirror.js";
 
-const queryClient = new QueryClient();
+// §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
+// is stretched to match maxAge — the 5-minute default would garbage-collect
+// an inactive query long before the persister's 7-day window was up, so
+// "cached views render" would silently be true only for the route you were
+// last on.
+const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: ONE_WEEK_MS } } });
+const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-cache" });
 
 /**
  * Route = the location hash, no router dependency (`client-tech-design.md`
@@ -29,6 +41,9 @@ function useHashRoute(): "review" | "mirror" {
 
 function AppShell() {
   const [api, setApiRaw] = useApiConfig();
+  // The one push channel (C7): keeps a socket open while paired, so a draft
+  // that lands without this device asking refreshes Review on its own.
+  useDraftReadySocket(api);
 
   // Wraps the raw setter so the cache is cleared *before* the next
   // render, not reactively after it in a useEffect: React Query's
@@ -49,42 +64,49 @@ function AppShell() {
   }
 
   return (
-    <div className="flex h-screen bg-[var(--bg)] text-[var(--text)]">
-      <nav className="flex w-56 flex-col gap-1 border-r border-[var(--edge)] p-3">
-        <div className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-[var(--faint)]">Duo</div>
-        <a
-          className={
-            route === "review"
-              ? "rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1.5 text-sm"
-              : "rounded-[var(--r-sm)] px-2 py-1.5 text-sm text-[var(--muted)]"
-          }
-          href="#review"
-        >
-          Review
-        </a>
-        <a
-          className={
-            route === "mirror"
-              ? "rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1.5 text-sm"
-              : "rounded-[var(--r-sm)] px-2 py-1.5 text-sm text-[var(--muted)]"
-          }
-          href="#mirror"
-        >
-          Mirror
-        </a>
-        <button className="mt-auto px-2 py-1 text-left text-xs text-[var(--faint)]" onClick={() => setApi(null)}>
-          Disconnect
-        </button>
-      </nav>
-      <main className="flex-1 overflow-y-auto">{route === "mirror" ? <Mirror api={api} /> : <Review api={api} />}</main>
-    </div>
+    <SyncStatusProvider>
+      <div className="flex h-screen bg-[var(--bg)] text-[var(--text)]">
+        <nav className="flex w-56 flex-col gap-1 border-r border-[var(--edge)] p-3">
+          <div className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-[var(--faint)]">Duo</div>
+          <a
+            className={
+              route === "review"
+                ? "rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1.5 text-sm"
+                : "rounded-[var(--r-sm)] px-2 py-1.5 text-sm text-[var(--muted)]"
+            }
+            href="#review"
+          >
+            Review
+          </a>
+          <a
+            className={
+              route === "mirror"
+                ? "rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1.5 text-sm"
+                : "rounded-[var(--r-sm)] px-2 py-1.5 text-sm text-[var(--muted)]"
+            }
+            href="#mirror"
+          >
+            Mirror
+          </a>
+          <button className="mt-auto px-2 py-1 text-left text-xs text-[var(--faint)]" onClick={() => setApi(null)}>
+            Disconnect
+          </button>
+        </nav>
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* §3.3's bar rides above every surface — it is the one state that
+              is true of the whole app, not of whichever route is mounted. */}
+          <OfflineBar />
+          <main className="flex-1 overflow-y-auto">{route === "mirror" ? <Mirror api={api} /> : <Review api={api} />}</main>
+        </div>
+      </div>
+    </SyncStatusProvider>
   );
 }
 
 export function App() {
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, maxAge: ONE_WEEK_MS }}>
       <AppShell />
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   );
 }
