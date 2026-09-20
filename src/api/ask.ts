@@ -1,9 +1,9 @@
-import { apiRequest, type DuoApiConfig } from "./client.js";
+import { ApiRequestError, apiRequest, type DuoApiConfig } from "./client.js";
 import type { PublicAnswerOutcome } from "./types.js";
 
 /**
  * The asker-facing half of `POST /ask` (duo #1/#2, building on digital-duo
- * #157/#159). Everything here is deliberately separate from `client.ts`'s
+ * #158/#159). Everything here is deliberately separate from `client.ts`'s
  * device-token world: an ask link's token is a distinct credential minted
  * for one asker, not a `duo pair` device token, so it gets its own config
  * type and its own loader rather than quietly reusing `DuoApiConfig` —
@@ -39,4 +39,29 @@ export async function askQuestion(config: AskLinkConfig, question: string): Prom
     method: "POST",
     body: JSON.stringify({ question }),
   });
+}
+
+/**
+ * A zero-question `POST /ask`, used once at page load to fail a dead link
+ * *before* the asker types anything (#2's expired-link acceptance
+ * criterion: no question box on a link that has expired or been revoked).
+ * The daemon authenticates before it validates the body (digital-duo
+ * #159's auth hook runs on every `/ask` request), so a 401 here means the
+ * link itself is dead — unknown, expired, or revoked, kind-blind by
+ * design (R1) — while the 400 "question is required" that a *good* token
+ * gets back proves the token authenticated. The empty question makes this
+ * side-effect-free: the route rejects it before any answering happens, so
+ * no draft is written and no ask is logged.
+ *
+ * Anything other than a 401 — the daemon unreachable, a 429, a 5xx — says
+ * nothing about the link, so this reports `true` (usable) and lets the
+ * submit path surface the real error when one exists.
+ */
+export async function isAskLinkUsable(config: AskLinkConfig): Promise<boolean> {
+  try {
+    await askQuestion(config, "");
+    return true;
+  } catch (error) {
+    return !(error instanceof ApiRequestError && error.status === 401);
+  }
 }
