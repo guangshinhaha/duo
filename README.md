@@ -27,6 +27,10 @@ in this pass).
   level, and whether it earned that or was granted it, with aged trust marked stale. Read-only
   everywhere, not only on mobile (AR-17) — the daemon has no route to change a tier or level, so a
   control here would be a promise the core would refuse.
+- **`src/routes/Audit.tsx`** (#10) — the permissions audit at `#audit`: every question someone asked
+  this duo and what it answered, newest first, answer text verbatim, declined entries marked
+  declined, unresolved askers marked (the raw reference never reads as a name). The asker's
+  question carries neither identity — only the duo's answer is `DuoMessage` (AR-13 cuts both ways).
 - **`src/routes/Mirror.tsx`** — the Mirror browser (C6): the interruption portrait plus derived
   rules in five buckets, with Approve / Reject / Promote on exactly the actions the daemon's own
   preconditions allow. Read-and-disposition only — rule authoring stays in `duo/rules/*.md` on
