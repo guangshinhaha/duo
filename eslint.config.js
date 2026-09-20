@@ -28,7 +28,9 @@ import tseslint from "typescript-eslint";
  * dev-time layer; that one is the complete guarantee.
  */
 export default tseslint.config(
-  { ignores: ["dist/**"] },
+  // `src-tauri/target/**` is cargo build output (vendored/bundled JS among
+  // the artifacts); linting generated files can only ever produce noise.
+  { ignores: ["dist/**", "src-tauri/target/**"] },
   ...tseslint.configs.recommended,
   {
     files: ["**/*.tsx"],

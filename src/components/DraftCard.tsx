@@ -6,6 +6,7 @@ import { DuoMessage } from "./DuoMessage.js";
 import { OwnerMessage } from "./OwnerMessage.js";
 import { ConfidenceHairline } from "./ConfidenceHairline.js";
 import { MutationError } from "./MutationError.js";
+import { SourceList } from "./SourceList.js";
 import { useSyncStatus } from "../sync.js";
 import type { DraftPipelineResult } from "../api/types.js";
 
@@ -18,8 +19,10 @@ import type { DraftPipelineResult } from "../api/types.js";
  * an earlier version pattern-matched `refused` out of `escalationReason`'s
  * human-readable text and hardcoded the threshold, both of which drift
  * the moment the server-side wording or a configured threshold changes.
+ * Exported because the Duo thread view renders the same hairline per
+ * entry (`src/routes/Duo.tsx`) — one adapter, no second copy to drift.
  */
-function toDraftPipelineResult(draft: DraftRecord): DraftPipelineResult {
+export function toDraftPipelineResult(draft: DraftRecord): DraftPipelineResult {
   if (draft.escalated) {
     return {
       kind: "escalation",
@@ -36,24 +39,6 @@ function toDraftPipelineResult(draft: DraftRecord): DraftPipelineResult {
     sources: draft.sources,
     confidence: { score: draft.confidenceScore, passesThreshold: true, threshold: draft.escalationThreshold },
   };
-}
-
-function SourceList({ sources }: { sources: DraftRecord["sources"] }) {
-  if (sources.length === 0) {
-    return null;
-  }
-  return (
-    <details className="text-xs text-[var(--muted)]">
-      <summary>
-        Drew on {sources.length} source{sources.length === 1 ? "" : "s"}
-      </summary>
-      <ul className="mt-1 space-y-1">
-        {sources.map((source) => (
-          <li key={`${source.kind}:${source.id}`}>{source.label}</li>
-        ))}
-      </ul>
-    </details>
-  );
 }
 
 /**
