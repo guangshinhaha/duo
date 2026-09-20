@@ -46,13 +46,14 @@ function seedState() {
         // One seeded draft is channel-borne (digital-duo #169's full
         // shape) so the client's two vocabularies — Send for a reply to
         // someone, Keep for an answer to yourself (#30) — are both
-        // demoable against the mock.
+        // demoable against the mock, with a permalink so #20's
+        // one-click-back is too.
         provenance: {
           origin: "channel",
           channelKind: "slack",
           askerRef: "U04ARLJ9P",
           threadId: "C07H3Q2NA",
-          permalink: null,
+          permalink: "https://acme.slack.com/archives/C07H3Q2NA/p1726482364000100",
         },
       },
       {
@@ -222,7 +223,7 @@ function draftTextFor(question) {
   return DRAFT_TEXTS[hash % DRAFT_TEXTS.length];
 }
 
-function draftPipeline(state, question, threadContext) {
+function draftPipeline(state, question, threadContext, provenance = { origin: "owner" }) {
   const id = `d-${++state.draftSeq}`;
   const lower = question.toLowerCase();
   const escalated = /\brefuse/.test(lower) || /\bshould i\b/.test(lower) || /\bescalate/.test(lower);
@@ -252,8 +253,10 @@ function draftPipeline(state, question, threadContext) {
     refused,
     escalationThreshold: THRESHOLD,
     // POST /drafts is the owner's composer, so every row it writes is
-    // owner-origin (#169) — the client's #30 vocabulary keys off this.
-    provenance: { origin: "owner" },
+    // owner-origin (#169) — the client's #30 vocabulary keys off this. The
+    // /mock/push-draft route overrides this: a draft arriving daemon-side
+    // over /ws is channel-borne, which is the provenance it exists to demo.
+    provenance,
   };
   state.drafts.push(record);
   if (escalated) {
@@ -513,11 +516,19 @@ export function createMockDaemon() {
         (_m, body) => {
           // Mock-only (the name says so): fabricate a draft as if the daemon
           // produced it on its own, then light up the one push channel. The
-          // real daemon has no such route and needs none.
+          // real daemon has no such route and needs none. The fabricated
+          // draft is channel-borne with #169's full shape — that is the
+          // provenance a daemon-side arrival carries, and what #20 renders.
           if (!body || typeof body.question !== "string" || body.question.trim() === "") {
             return fail(400, "bad_request", "A question is required.");
           }
-          const result = draftPipeline(state, body.question.trim(), body.threadContext);
+          const result = draftPipeline(state, body.question.trim(), body.threadContext, {
+            origin: "channel",
+            channelKind: "slack",
+            askerRef: "U04ARLJ9P",
+            threadId: "C07H3Q2NA",
+            permalink: null,
+          });
           broadcast({ type: "draft-ready", draftId: result.draftId });
           return { status: 201, body: state.drafts.find((d) => d.id === result.draftId) };
         },

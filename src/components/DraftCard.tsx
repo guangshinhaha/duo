@@ -7,6 +7,7 @@ import { OwnerMessage } from "./OwnerMessage.js";
 import { ConfidenceHairline } from "./ConfidenceHairline.js";
 import { EditDiff } from "./EditDiff.js";
 import { MutationError } from "./MutationError.js";
+import { ProvenanceLine } from "./ProvenanceLine.js";
 import { SourceList } from "./SourceList.js";
 import { StructuredText } from "./StructuredText.js";
 import { Timestamp } from "./Timestamp.js";
@@ -142,6 +143,9 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
         <ConfidenceHairline result={result} />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <OwnerMessage>{draft.question}</OwnerMessage>
+          {/* #20: a channel-borne question carries its asker even when it
+              escalated — judging the escalation still means judging who asked. */}
+          <ProvenanceLine provenance={draft.provenance} />
           <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] px-4 py-3 text-[var(--muted)]" data-testid="escalation-reason">
             {draft.escalationReason}
           </div>
@@ -179,6 +183,8 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
       <ConfidenceHairline result={result} />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <OwnerMessage>{draft.question}</OwnerMessage>
+        {/* #20: who asked, when the asker was a channel rather than you. */}
+        <ProvenanceLine provenance={draft.provenance} />
         <DuoMessage>
           {editing ? (
             <div className="flex w-full flex-col gap-2">

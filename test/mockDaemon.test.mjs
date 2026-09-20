@@ -76,13 +76,14 @@ describe("mock daemon — the drafts loop (D2/D3)", () => {
     // GET-only on purpose: the pending-filter test below asserts the
     // seed's exact draft set, so nothing before it may POST.
     const seeded = await (await get("/drafts")).json();
-    // d-1 is the seeded channel-borne draft, with #169's full shape.
+    // d-1 is the seeded channel-borne draft, with #169's full shape —
+    // permalink included, so #20's one-click-back is demoable against the mock.
     expect(seeded.find((d) => d.id === "d-1").provenance).toEqual({
       origin: "channel",
       channelKind: "slack",
       askerRef: "U04ARLJ9P",
       threadId: "C07H3Q2NA",
-      permalink: null,
+      permalink: "https://acme.slack.com/archives/C07H3Q2NA/p1726482364000100",
     });
     // Everything else the seed holds is owner-asked history.
     for (const d of seeded.filter((d) => d.id !== "d-1")) {
@@ -173,6 +174,15 @@ describe("mock daemon — the drafts loop (D2/D3)", () => {
     expect(res.status).toBe(201);
     const record = await res.json();
     expect(record.outcome).toBeNull();
+    // A draft arriving over /ws daemon-side is channel-borne (#169): the
+    // owner's composer is the only owner-origin writer.
+    expect(record.provenance).toEqual({
+      origin: "channel",
+      channelKind: "slack",
+      askerRef: "U04ARLJ9P",
+      threadId: "C07H3Q2NA",
+      permalink: null,
+    });
     const drafts = await (await get("/drafts")).json();
     expect(drafts.some((d) => d.id === record.id)).toBe(true);
   });
