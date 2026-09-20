@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -31,5 +32,10 @@ export default defineConfig({
     environment: "happy-dom",
     globals: true,
     setupFiles: ["./test/setup.ts"],
+    // vitest's defaults don't know about `.claude/worktrees/**` — agent
+    // worktrees checked out inside this repo carry their own (often
+    // mid-edit) test files, which would otherwise run as part of every
+    // `npm test` here and fail for reasons this checkout cannot fix.
+    exclude: [...configDefaults.exclude, "**/.claude/**"],
   },
 });

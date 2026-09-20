@@ -154,40 +154,42 @@ export interface ApiError {
   error: { code: string; message: string };
 }
 
-// Mirrors the daemon's public-answer outcomes (`src/permissions/public-answer.ts`)
-// — the response of `POST /ask` (digital-duo #157/#159). The split matters:
-// `PublicPassedOn` and `PublicDeclinedRefused` are two *distinct* fixed
-// messages by design (#43 AC3), worded so an asker can never infer what the
-// answer might have been — a surface must render them verbatim, never
-// paraphrase them into something friendlier.
+// Mirrors what `POST /ask` puts on the wire *for an ask token* (digital-duo
+// #159's route projection in its `src/serve/server.ts` — contract-first
+// against #159's implemented branch while it awaits merge; this repo's
+// `mock/daemon.mjs` serves the same shape meanwhile), not the CLI's richer
+// `PublicAnswerOutcome` from `src/permissions/public-answer.ts`: the daemon
+// composes the full public post — answer, sources, attribution, confidence,
+// evidence age — into `text` before responding, and the owner-facing extras
+// (`draftId`, `logEntryId`, `topicId`, `confidence`, `evidenceAgeDays`,
+// `ownerNotice`) ride along only for a *device* principal. This page always
+// calls with an ask token, so those fields never arrive and are
+// deliberately absent here — a shape that cannot even express the owner's
+// view is the surest way not to render it.
+// `kind` discriminates; the split matters: the two non-answer variants are
+// *distinct* fixed strings by design (#43 AC3), worded so an asker can
+// never infer what the answer might have been — a surface must render
+// them verbatim, never paraphrase them into something friendlier.
 export interface PublicAnswered {
+  /** Always "personal" from this page — it never sends the `duo` field, so the daemon's personal branch answers. */
+  readonly duo: "personal";
   readonly kind: "answered";
-  readonly draftId: string;
-  readonly logEntryId: string;
-  /** The full public text — answer, sources, and attribution — already composed by the daemon; there is nothing left for this client to append (#44 AC1/AC3). */
+  /** The full public text — answer, sources, attribution, confidence, and evidence age — already composed by the daemon; there is nothing left for this client to append (#44 AC1/AC3). */
   readonly text: string;
+  /** Structured copy of the sources already woven into `text` — for callers that want them machine-read, not for re-rendering. */
   readonly sources: readonly DraftSource[];
-  readonly confidence: ConfidenceResult;
-  readonly topicId: string;
-  /** Age, in days, of the freshest evidence behind the answer — null when none carried a usable timestamp. */
-  readonly evidenceAgeDays: number | null;
 }
 
 export interface PublicPassedOn {
+  readonly duo: "personal";
   readonly kind: "passed_on";
-  readonly draftId: string;
-  readonly logEntryId: string;
-  readonly message: string;
-  readonly topicId: string | undefined;
-  /** Addressed to the *owner*, not the asker (#55's one-time demotion announcement) — an asker-facing surface never renders it. */
-  readonly ownerNotice: string | undefined;
+  readonly text: string;
 }
 
 export interface PublicDeclinedRefused {
+  readonly duo: "personal";
   readonly kind: "declined_refused";
-  readonly draftId: string;
-  readonly logEntryId: string;
-  readonly message: string;
+  readonly text: string;
 }
 
 export type PublicAnswerOutcome = PublicAnswered | PublicPassedOn | PublicDeclinedRefused;

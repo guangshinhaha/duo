@@ -255,36 +255,33 @@ function draftPipeline(state, question, threadContext) {
 
 function publicAnswer(state, question) {
   const lower = question.toLowerCase();
-  const draftId = `d-ask-${state.askLog.length + 1}`;
-  const logEntryId = `log-${state.askLog.length + 1}`;
-  state.askLog.push({ draftId, question });
+  state.askLog.push({ question });
+  // The asker-visible envelope of digital-duo #159's POST /ask: {duo, kind,
+  // text} for every outcome, `sources` only on an answered one, and none of
+  // the device-principal-only fields — the daemon composes attribution,
+  // confidence, and evidence age into the text itself, so the asker's page
+  // renders exactly this and nothing structured on top of it.
   if (/\bpass\b/.test(lower)) {
-    // ownerNotice exists on the wire and must never render on the asker's
-    // page — seeding it proves the client leaves it alone.
     return {
+      duo: "personal",
       kind: "passed_on",
-      draftId,
-      logEntryId,
-      message: "The duo passed this one to the owner. You'll hear back from them directly.",
-      topicId: "scheduling",
-      ownerNotice: "A question about scheduling was passed to you.",
+      text: "The duo passed this one to the owner. You'll hear back from them directly.",
     };
   }
   if (/\bsecret\b|\bsalary\b|\baddress\b/.test(lower)) {
-    return { kind: "declined_refused", draftId, logEntryId, message: "The duo won't answer that one." };
+    return { duo: "personal", kind: "declined_refused", text: "The duo won't answer that one." };
   }
   return {
+    duo: "personal",
     kind: "answered",
-    draftId,
-    logEntryId,
-    text: `Answering from what the owner taught me:\n\n${draftTextFor(question)}\n\nSources: shared calendar; rule "Answer scheduling questions from the shared calendar before noon."`,
+    text:
+      `Answering from what the owner taught me:\n\n${draftTextFor(question)}\n\n` +
+      'Sources: shared calendar; rule "Answer scheduling questions from the shared calendar before noon."\n\n' +
+      "— the owner's duo speaking here, not the owner directly. Confidence: 0.84. Based on evidence up to 3 day(s) old.",
     sources: [
       { kind: "rule", id: "r-9", label: "Answer scheduling questions from the shared calendar" },
       { kind: "evidence", id: "ev-31", label: "Vendor thread, Tuesday" },
     ],
-    confidence: { score: 0.84, passesThreshold: true, threshold: THRESHOLD },
-    topicId: "scheduling",
-    evidenceAgeDays: 3,
   };
 }
 
