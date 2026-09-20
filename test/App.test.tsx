@@ -213,6 +213,44 @@ describe("App — hash routing between the surfaces", () => {
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 
+  it("⌘K opens search over any route and closes back onto the same screen, nothing lost (#46)", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
+    // Review is the populated route: a draft card is on screen when search
+    // opens over it, and the same card is still there when it closes.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/drafts")) {
+          return new Response(JSON.stringify([draftFor("A")]), { status: 200 });
+        }
+        if (String(url).includes("/knowledge")) {
+          // The overlay's empty-vs-no-match read mounts on open; serve the
+          // real shape so it never dereferences a bare [].
+          return new Response(JSON.stringify(knowledgeFor()), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("question from A's daemon")).toBeInTheDocument());
+
+    // Open from the keyboard, over the open screen.
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await waitFor(() => expect(screen.getByTestId("search-overlay")).toBeInTheDocument());
+    // Over, not instead of: the route underneath never unmounted.
+    expect(screen.getByText("question from A's daemon")).toBeInTheDocument();
+
+    // Close from the keyboard: the same screen, the same state.
+    fireEvent.keyDown(screen.getByPlaceholderText(/search what your duo knows/i), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("search-overlay")).toBeNull());
+    expect(screen.getByText("question from A's daemon")).toBeInTheDocument();
+
+    // Ctrl+K is the same gesture on the other platform.
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    await waitFor(() => expect(screen.getByTestId("search-overlay")).toBeInTheDocument());
+  });
+
   it("navigates to Duo on #duo and back to Review", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(

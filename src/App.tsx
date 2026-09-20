@@ -21,6 +21,7 @@ import { Trust } from "./routes/Trust.js";
 import { Audit } from "./routes/Audit.js";
 import { Mirror } from "./routes/Mirror.js";
 import { Knowledge } from "./routes/Knowledge.js";
+import { SearchOverlay } from "./components/SearchOverlay.js";
 
 // §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
 // is stretched to match maxAge — the 5-minute default would garbage-collect
@@ -204,6 +205,21 @@ function AppShell() {
   // surface, the same choke point Settings' unpair uses — and `revoked`
   // is what Setup says when it appears for that reason rather than first run.
   const [revoked, setRevoked] = useState(false);
+  // #46: corpus search, openable from any route. ⌘K and Ctrl+K are the
+  // same gesture on the two platforms this client ships to; the overlay
+  // renders above whatever surface is on screen, so opening it costs
+  // nothing that was there, and closing returns to exactly it.
+  const [searchOpen, setSearchOpen] = useState(false);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setSearchOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   // The one push channel (C7): keeps a socket open while paired, so a draft
   // that lands without this device asking refreshes Review on its own.
   // The native notification rides on the push message — in the Tauri shell
@@ -302,6 +318,9 @@ function AppShell() {
               is true of the whole app, not of whichever route is mounted. */}
           <OfflineBar />
           <main className="flex-1 overflow-y-auto">{routeSurface(route, api, setApi)}</main>
+          {/* #46: over the screen, never instead of it — the main surface
+              stays mounted underneath while search is open. */}
+          {searchOpen && api && <SearchOverlay api={api} onClose={() => setSearchOpen(false)} />}
         </div>
       </div>
     </SyncStatusProvider>

@@ -13,6 +13,7 @@ import type {
   InterruptionPortrait,
   Rule,
   RuleReviewListing,
+  SearchOutcome,
   SettableDraftOutcome,
 } from "./types.js";
 
@@ -47,6 +48,10 @@ export const queryKeys = {
   trustGrid: ["trust", "grid"] as const,
   audit: ["audit"] as const,
   knowledge: ["knowledge"] as const,
+  // #46: keyed by the submitted query — each distinct search is its own
+  // cache entry, so revisiting a recent query is instant and a stale
+  // search never blocks a new one.
+  search: (q: string) => ["search", q] as const,
 };
 
 export function useDuos(api: DuoApiConfig, options?: Partial<UseQueryOptions<DuoSummary[]>>) {
@@ -151,6 +156,32 @@ export function useMirrorRules(api: DuoApiConfig) {
 /** #45: what this duo knows, in one read (digital-duo #175's composition). Read-only — no client route writes it, so nothing invalidates it but a refetch. */
 export function useKnowledge(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.knowledge, queryFn: () => apiRequest<DuoKnowledge>(api, "/knowledge") });
+}
+
+/**
+ * #46: the page size the daemon's own default gives (digital-duo #174's
+ * `limit` defaults to 10). The client sends no `limit`, so a full page —
+ * exactly this many results — is the only honest "maybe more" signal.
+ */
+export const SEARCH_PAGE_SIZE = 10;
+
+/** #46: corpus search, paged by the daemon's rank cursor ("last rank + 1" pages forward; a result's rank is its stable position in the full fused list). */
+export function useCorpusSearch(api: DuoApiConfig, q: string) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.search(q),
+    // No search until there is one: an empty q would only ever earn the
+    // daemon's 400, and the overlay mounts this hook before its first
+    // submit.
+    enabled: q.length > 0,
+    queryFn: ({ pageParam }) =>
+      apiRequest<SearchOutcome>(
+        api,
+        pageParam === 0 ? `/search?q=${encodeURIComponent(q)}` : `/search?q=${encodeURIComponent(q)}&cursor=${pageParam}`,
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) =>
+      lastPage.results.length >= SEARCH_PAGE_SIZE ? lastPage.results[lastPage.results.length - 1]!.rank + 1 : undefined,
+  });
 }
 
 export function useTrustGrid(api: DuoApiConfig) {

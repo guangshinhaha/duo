@@ -193,6 +193,39 @@ export interface DuoKnowledge {
   sharedUsage: SharedUsageReport;
 }
 
+/**
+ * One corpus record, as `GET /search` returns it (digital-duo #174 wraps
+ * the ingest normalisation layer's `IngestRecord`). `kind`/`author`/
+ * `audience`/`classification` are the daemon's own strings — typed `string`
+ * on purpose: this client renders them verbatim or not at all and keeps no
+ * registry of their values to translate through (#43's discipline).
+ */
+export interface CorpusRecord {
+  id: string;
+  source: string;
+  sourceRef: string | null;
+  kind: string;
+  author: string;
+  text: string;
+  timestamp: string;
+  threadId: string | null;
+  audience: string;
+  classification: string;
+  topics: string[];
+}
+
+/**
+ * `GET /search?q=` — `duo search`'s hybrid retrieval, verbatim. `rank` is
+ * the result's position in the full fused list, stable across pages (the
+ * cursor pages by "last rank + 1"); `warning` is the daemon's own
+ * embeddings-down sentence, rendered verbatim when present.
+ */
+export interface SearchOutcome {
+  results: { record: CorpusRecord; rank: number }[];
+  usedEmbeddings: boolean;
+  warning?: string;
+}
+
 export type RuleReviewStatus = "pending" | "approved" | "rejected" | "superseded";
 export type RuleOrigin = "derived" | "owner_asserted";
 

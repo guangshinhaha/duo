@@ -190,6 +190,28 @@ function seedState() {
         summary: "The shared duo answered 41 of 55 questions over the last month.",
       },
     },
+    // The corpus /search serves (#46). Every record mentions "duo" exactly
+    // once, so q=duo ranks in pure seed order (twelve records — enough to
+    // page); the "vendor" trio carries three, two, and one occurrences so
+    // q=vendor exercises the ordering. The real thing fuses FTS5 and vector
+    // similarity (#174); this mock's documented stand-in is
+    // case-insensitive substring counting, seed order as the tiebreak —
+    // enough to exercise every paging and validation contract the client
+    // relies on.
+    records: [
+      { id: "rec-0", source: "slack", sourceRef: "https://acme.slack.com/archives/C07H3Q2NA/p1726500000000001", kind: "decision", author: "me", text: "The duo renewal: the vendor contract goes to the vendor desk, vendor paperwork first.", timestamp: minutesAgo(60 * 24 * 28), threadId: "C07H3Q2NA", audience: "channel", classification: "unknown", topics: ["vendor"] },
+      { id: "rec-1", source: "slack", sourceRef: "https://acme.slack.com/archives/C07H3Q2NA/p1726500000000002", kind: "my_answer", author: "me", text: "Vendor invoices over 10k go through procurement — the duo routes them, the vendor desk handles the rest.", timestamp: minutesAgo(60 * 24 * 27), threadId: "C07H3Q2NA", audience: "channel", classification: "unknown", topics: ["vendor"] },
+      { id: "rec-2", source: "slack", sourceRef: "https://acme.slack.com/archives/C07H3Q2NA/p1726500000000003", kind: "question_to_me", author: "other", text: "Which vendor owns the design review duo room?", timestamp: minutesAgo(60 * 24 * 26), threadId: "C07H3Q2NA", audience: "channel", classification: "unknown", topics: ["vendor"] },
+      { id: "rec-3", source: "markdown", sourceRef: "notes/leave.md", kind: "decision", author: "me", text: "Leave policy: five days per quarter carry over, capped at ten — the duo answers from this.", timestamp: minutesAgo(60 * 24 * 25), threadId: null, audience: "private", classification: "unknown", topics: [] },
+      { id: "rec-4", source: "markdown", sourceRef: "notes/duo-principles.md", kind: "my_thinking", author: "me", text: "The duo drafts, the owner decides — that is the whole shape of the loop.", timestamp: minutesAgo(60 * 24 * 24), threadId: null, audience: "private", classification: "unknown", topics: [] },
+      { id: "rec-5", source: "slack", sourceRef: "https://acme.slack.com/archives/C07H3Q2NA/p1726500000000006", kind: "my_answer", author: "me", text: "The duo answers scheduling questions from the shared calendar, not from memory.", timestamp: minutesAgo(60 * 24 * 23), threadId: "C07H3Q2NA", audience: "channel", classification: "unknown", topics: ["scheduling"] },
+      { id: "rec-6", source: "slack", sourceRef: "https://acme.slack.com/archives/C07H3Q2NA/p1726500000000007", kind: "question_to_me", author: "other", text: "Can the duo draft the weekly update?", timestamp: minutesAgo(60 * 24 * 22), threadId: "C07H3Q2NA", audience: "channel", classification: "unknown", topics: [] },
+      { id: "rec-7", source: "markdown", sourceRef: "notes/hiring.md", kind: "decision", author: "me", text: "Hiring loops always include a duo-adjacent work sample.", timestamp: minutesAgo(60 * 24 * 21), threadId: null, audience: "private", classification: "unknown", topics: ["hiring"] },
+      { id: "rec-8", source: "slack", sourceRef: "https://acme.slack.com/archives/C07H3Q2NA/p1726500000000009", kind: "my_answer", author: "me", text: "The money questions go out same day — the duo flags them T2.", timestamp: minutesAgo(60 * 24 * 20), threadId: "C07H3Q2NA", audience: "channel", classification: "unknown", topics: ["money"] },
+      { id: "rec-9", source: "markdown", sourceRef: "notes/onboarding.md", kind: "artifact", author: "me", text: "Onboarding doc: the duo's trust grid starts at ask for everything.", timestamp: minutesAgo(60 * 24 * 19), threadId: null, audience: "private", classification: "unknown", topics: [] },
+      { id: "rec-10", source: "slack", sourceRef: "https://acme.slack.com/archives/C07H3Q2NA/p1726500000000011", kind: "question_to_me", author: "other", text: "Does the duo keep audit history?", timestamp: minutesAgo(60 * 24 * 18), threadId: "C07H3Q2NA", audience: "channel", classification: "unknown", topics: [] },
+      { id: "rec-11", source: "slack", sourceRef: "https://acme.slack.com/archives/C07H3Q2NA/p1726500000000012", kind: "my_answer", author: "me", text: "Audit is the duo's record — everything dispositioned, everything timestamped.", timestamp: minutesAgo(60 * 24 * 17), threadId: "C07H3Q2NA", audience: "channel", classification: "unknown", topics: [] },
+    ],
     grid: [
       { topicId: "t-sched", topicLabel: "scheduling", tier: "T1", level: "approve", source: "earned", stale: false },
       { topicId: "t-money", topicLabel: "money", tier: "T2", level: "auto", source: "earned", stale: false },
@@ -530,6 +552,56 @@ export function createMockDaemon() {
       ],
       ["GET", /^\/trust\/grid$/, () => ok(state.grid)],
       ["GET", /^\/audit$/, () => ok(state.audit)],
+      [
+        "GET",
+        /^\/search$/,
+        () => {
+          // #174's route: validate the query string exactly as the real
+          // one does (its own words), then hand off to retrieval — here
+          // the documented substring-count heuristic over the seeded
+          // corpus, with the real route's rank contract (rank = position
+          // in the full ranked list; cursor pages by offset). The mock's
+          // retrieval always "embeds" — the degraded path (usedEmbeddings
+          // false + the daemon's own warning sentence) is a component
+          // concern and is covered there with stubs, not faked here.
+          const rawQ = url.searchParams.get("q");
+          if (rawQ === null || rawQ.trim().length === 0) {
+            return fail(400, "bad_request", "q is required and must not be blank");
+          }
+          let limit = 10;
+          const rawLimit = url.searchParams.get("limit");
+          if (rawLimit !== null) {
+            limit = Number.parseInt(rawLimit, 10);
+            if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+              return fail(400, "bad_request", "limit must be an integer between 1 and 100");
+            }
+          }
+          let cursor = 0;
+          const rawCursor = url.searchParams.get("cursor");
+          if (rawCursor !== null) {
+            cursor = Number.parseInt(rawCursor, 10);
+            if (!Number.isInteger(cursor) || cursor < 0) {
+              return fail(400, "bad_request", "cursor must be a non-negative integer");
+            }
+          }
+          const needle = rawQ.trim().toLowerCase();
+          // Escape regex metacharacters: the query is user input, and a
+          // literal "(" would turn the heuristic into a syntax error.
+          const pattern = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const ranked = state.records
+            .map((record, index) => ({
+              record,
+              index,
+              occurrences: (record.text.toLowerCase().match(new RegExp(pattern, "g")) ?? []).length,
+            }))
+            .filter((row) => row.occurrences > 0)
+            .sort((a, b) => b.occurrences - a.occurrences || a.index - b.index);
+          const results = ranked
+            .slice(cursor, cursor + limit)
+            .map((row, index) => ({ record: row.record, rank: cursor + index }));
+          return ok({ results, usedEmbeddings: true });
+        },
+      ],
       [
         "POST",
         /^\/drafts$/,

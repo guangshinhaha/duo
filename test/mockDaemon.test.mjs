@@ -447,3 +447,63 @@ describe("mock daemon — the knowledge read (duo #45, mirroring digital-duo #17
     }
   });
 });
+
+describe("mock daemon — corpus search (duo #46, mirroring digital-duo #174)", () => {
+  it("ranks by the mock's documented heuristic and stamps ranks the daemon's way", async () => {
+    const res = await get(`/search?q=${encodeURIComponent("vendor")}`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.results.length).toBeGreaterThan(0);
+    // Rank is the position in the full ranked list, 0-based — the cursor
+    // contract pages by "last rank + 1".
+    expect(body.results.map((r) => r.rank)).toEqual(body.results.map((_, i) => i));
+    // The mock's heuristic: more occurrences of the term rank first (the
+    // real thing fuses FTS and vectors; substring counting is enough to
+    // exercise the ordering and paging contracts).
+    const counts = body.results.map((r) => (r.record.text.toLowerCase().match(/vendor/g) ?? []).length);
+    expect([...counts].sort((a, b) => b - a)).toEqual(counts);
+    // Enough context to recognise each one rides along.
+    for (const r of body.results) {
+      expect(r.record.source).toBeTruthy();
+      expect(r.record.text.length).toBeGreaterThan(0);
+    }
+    expect(body.usedEmbeddings).toBe(true);
+  });
+
+  it("pages with cursor the way the daemon does: default limit 10, ranks continue", async () => {
+    const full = await (await get(`/search?q=${encodeURIComponent("duo")}`)).json();
+    // The seed has exactly twelve records mentioning "duo", so the default
+    // limit cuts the first page at ten and leaves two.
+    expect(full.results).toHaveLength(10);
+    const second = await (await get(`/search?q=${encodeURIComponent("duo")}&cursor=10`)).json();
+    // Ranks continue where page one ended — the position in the full list,
+    // not a re-ranking — and seed order is the tiebreak, so the tail is
+    // exactly the last two seeded records.
+    expect(second.results.map((r) => r.rank)).toEqual([10, 11]);
+    expect(second.results.map((r) => r.record.id)).toEqual(["rec-10", "rec-11"]);
+  });
+
+  it("validates the query string with the daemon's own words", async () => {
+    const blank = await get("/search");
+    expect(blank.status).toBe(400);
+    expect((await blank.json()).error.message).toBe("q is required and must not be blank");
+    const spaces = await get(`/search?q=${encodeURIComponent("   ")}`);
+    expect(spaces.status).toBe(400);
+    for (const raw of ["0", "101", "abc"]) {
+      const res = await get(`/search?q=duo&limit=${raw}`);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.message).toBe("limit must be an integer between 1 and 100");
+    }
+    for (const raw of ["-1", "x"]) {
+      const res = await get(`/search?q=duo&cursor=${raw}`);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.message).toBe("cursor must be a non-negative integer");
+    }
+  });
+
+  it("a query matching nothing is an empty result, not an error", async () => {
+    const res = await get(`/search?q=${encodeURIComponent("zzzyyyxxx")}`);
+    expect(res.status).toBe(200);
+    expect((await res.json()).results).toEqual([]);
+  });
+});
