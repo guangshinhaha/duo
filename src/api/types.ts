@@ -99,7 +99,9 @@ export interface InterruptionPortrait {
   topicBreakdown: TopicShare[];
   topFiveShare: number;
   busiestThreads: ThreadShare[];
-  insufficientHistory?: boolean;
+  /** Field names verified live against the daemon (`src/derivation/portrait.ts`) during the 2026-09-20 smoke test — an earlier mirror guessed `insufficientHistory`, which never matched the wire and silently rendered zeros instead of the thin state. */
+  tooThin: boolean;
+  minimumQuestionsToCharacterize: number;
 }
 
 export type RuleReviewStatus = "pending" | "approved" | "rejected" | "superseded";

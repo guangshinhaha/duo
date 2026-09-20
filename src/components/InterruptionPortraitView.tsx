@@ -33,15 +33,17 @@ function ThreadRow({ thread }: { thread: ThreadShare }) {
  * The interruption portrait (`client-tech-design.md` §1.4,
  * `GET /mirror/portrait`): what the duo observed about how its owner is
  * actually interrupted — questions per topic, per thread. AR-19 says a thin
- * mirror must not be dressed up as more than it is, so
- * `insufficientHistory` renders an explicit thin-data state rather than
- * zeros that look like measurements.
+ * mirror must not be dressed up as more than it is, so `tooThin` renders an
+ * explicit thin-data state rather than zeros that look like measurements —
+ * and the daemon surfaces `minimumQuestionsToCharacterize` precisely so the
+ * message can name the bar instead of hinting at one.
  */
 export function InterruptionPortraitView({ portrait }: { portrait: InterruptionPortrait }) {
-  if (portrait.insufficientHistory) {
+  if (portrait.tooThin) {
     return (
       <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] p-4 text-[var(--muted)]" data-testid="portrait-thin">
-        Not enough history yet — the portrait fills in as you work with the duo.
+        Not enough history yet — the portrait starts to mean something at {portrait.minimumQuestionsToCharacterize} questions, and this duo
+        has {portrait.totalQuestions}. It fills in as you work together.
       </div>
     );
   }
