@@ -51,10 +51,25 @@ const drafts: DraftRecord[] = [
   draftFor("5", { threadContext: "leave", createdAt: "2026-01-05T00:00:00.000Z", outcome: "discarded" }),
 ];
 
+// The merged GET /drafts paging contract (#29, digital-duo #203): with
+// `limit`, a newest-first window under the exclusive `before` ceiling;
+// without it, the plain ascending list. Every drafts stub in this file
+// speaks it, the way the daemon now does.
+function pagedResponse(href: string, list: DraftRecord[]): Promise<Response> {
+  const { searchParams } = new URL(href);
+  const before = searchParams.get("before");
+  let rows = list.filter((d) => (before === null ? true : d.createdAt < before));
+  const rawLimit = searchParams.get("limit");
+  if (rawLimit !== null) {
+    rows = [...rows].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, Number(rawLimit));
+  }
+  return Promise.resolve(new Response(JSON.stringify(rows), { status: 200 }));
+}
+
 function stubDraftsResponse(list: DraftRecord[]) {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(JSON.stringify(list), { status: 200 })),
+    vi.fn((url: string | URL) => pagedResponse(String(url), list)),
   );
 }
 
@@ -105,7 +120,7 @@ describe("#28 — pick a conversation, then read it", () => {
           new Response(JSON.stringify({ kind: "draft", draftId: "x", text: "t", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } }), { status: 201 }),
         );
       }
-      return Promise.resolve(new Response(JSON.stringify(list), { status: 200 }));
+      return pagedResponse(String(url), list);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -224,7 +239,7 @@ describe("Duo — the thread view and composer (issue #8)", () => {
           { status: 201 },
         );
       }
-      return new Response(JSON.stringify(list), { status: 200 });
+      return pagedResponse(String(url), list);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -255,7 +270,7 @@ describe("Duo — the thread view and composer (issue #8)", () => {
         captured = JSON.parse(init.body as string);
         return new Response(JSON.stringify({ kind: "draft", draftId: "x", text: "t", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } }), { status: 201 });
       }
-      return new Response(JSON.stringify(drafts), { status: 200 });
+      return pagedResponse(String(url), drafts);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -277,7 +292,7 @@ describe("Duo — the thread view and composer (issue #8)", () => {
       if (init?.method === "POST" && url.endsWith("/drafts")) {
         return new Response(JSON.stringify({ error: { code: "unknown", message: "store locked" } }), { status: 500 });
       }
-      return new Response(JSON.stringify(drafts), { status: 200 });
+      return pagedResponse(String(url), drafts);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -299,7 +314,7 @@ describe("Duo — the thread view and composer (issue #8)", () => {
           resolvePost = resolve;
         });
       }
-      return Promise.resolve(new Response(JSON.stringify(drafts), { status: 200 }));
+      return pagedResponse(String(url), drafts);
     });
     vi.stubGlobal("fetch", fetchMock);
 

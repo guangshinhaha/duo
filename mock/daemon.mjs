@@ -364,7 +364,25 @@ export function createMockDaemon() {
 
     const routes = [
       ["GET", /^\/duos$/, () => ok([{ kind: "personal" }])],
-      ["GET", /^\/drafts$/, () => ok(filteredDrafts(state, url.searchParams.get("outcome")))],
+      [
+        "GET",
+        /^\/drafts$/,
+        () => {
+          // limit validates the way the real route does (parsePositiveIntParam):
+          // a non-negative integer, literally — "2.5", "abc", "01" are 400s, "0"
+          // is a valid (empty) page.
+          const rawLimit = url.searchParams.get("limit");
+          let limit;
+          if (rawLimit !== null) {
+            const parsed = Number.parseInt(rawLimit, 10);
+            if (!Number.isInteger(parsed) || parsed < 0 || String(parsed) !== rawLimit) {
+              return fail(400, "bad_request", `limit must be a non-negative integer, got ${JSON.stringify(rawLimit)}`);
+            }
+            limit = parsed;
+          }
+          return ok(filteredDrafts(state, url.searchParams.get("outcome"), url.searchParams.get("before"), limit));
+        },
+      ],
       [
         "GET",
         /^\/drafts\/([^/]+)$/,
@@ -528,15 +546,23 @@ export function createMockDaemon() {
   return { server, state, broadcast };
 }
 
-// The daemon orders drafts by creation, oldest first (the conversation
-// order the Duo thread view groups by); the seed is pushed oldest-first and
-// POST /drafts appends, so the array is already in order — the sort is a
-// guard, not a reordering.
-function filteredDrafts(state, outcomeParam) {
+// The daemon's two draft-list shapes (duo #29, mirroring digital-duo #203's
+// listDrafts): without `limit`, oldest-first — the conversation order the
+// un-paged callers were written against. With `limit`, newest-first
+// (`created_at DESC, id DESC`) under the exclusive `before` ceiling: page
+// one is the newest window, and feeding a page's oldest createdAt back as
+// `before` walks to the adjacent older page. The sort ascending + reverse
+// below IS that DESC order, id-tiebreak included.
+function filteredDrafts(state, outcomeParam, beforeParam, limitParam) {
   const wanted = outcomeParam === "pending" ? null : outcomeParam;
-  return [...state.drafts]
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  let rows = [...state.drafts]
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    .filter((d) => (beforeParam === null ? true : d.createdAt < beforeParam))
     .filter((d) => (outcomeParam === null ? true : d.outcome === wanted));
+  if (limitParam !== undefined) {
+    rows = rows.reverse().slice(0, limitParam);
+  }
+  return rows;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
