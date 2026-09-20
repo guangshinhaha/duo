@@ -3,7 +3,8 @@ import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { useApiConfig } from "./api/config.js";
-import type { DuoApiConfig } from "./api/client.js";
+import { ApiRequestError, type DuoApiConfig } from "./api/client.js";
+import { useRevokedTokenGuard } from "./api/revocation.js";
 import { useDraftReadySocket } from "./api/ws.js";
 import { SyncStatusProvider } from "./sync.js";
 import { OfflineBar } from "./components/OfflineBar.js";
@@ -22,7 +23,18 @@ import { Mirror } from "./routes/Mirror.js";
 // "cached views render" would silently be true only for the route you were
 // last on.
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: ONE_WEEK_MS } } });
+// A 401 is exempt from the retry default: a revoked token never
+// re-authenticates on attempt two, so retrying only delays the return to
+// Setup by TanStack's full backoff window (~7s). Everything else — including
+// network-level TypeErrors — keeps the default three attempts.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      gcTime: ONE_WEEK_MS,
+      retry: (failureCount, error) => !(error instanceof ApiRequestError && error.status === 401) && failureCount < 3,
+    },
+  },
+});
 const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-cache" });
 
 /**
@@ -101,6 +113,10 @@ function routeSurface(route: Route, api: DuoApiConfig, setApi: (config: DuoApiCo
 
 function AppShell() {
   const [api, setApiRaw] = useApiConfig();
+  // #41: the daemon refusing this device's token (401) unpairs from any
+  // surface, the same choke point Settings' unpair uses — and `revoked`
+  // is what Setup says when it appears for that reason rather than first run.
+  const [revoked, setRevoked] = useState(false);
   // The one push channel (C7): keeps a socket open while paired, so a draft
   // that lands without this device asking refreshes Review on its own.
   // The native notification rides on the push message — in the Tauri shell
@@ -123,10 +139,25 @@ function AppShell() {
     setApiRaw(next);
   }
 
+  // After the guard unpairs, Setup carries the explanation with it; a fresh
+  // pairing is a first run again and must not keep saying "no longer paired".
+  useRevokedTokenGuard(() => {
+    setApi(null);
+    setRevoked(true);
+  });
+
   const route = useHashRoute();
 
   if (!api) {
-    return <Setup onConnect={setApi} />;
+    return (
+      <Setup
+        notice={revoked ? "This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again." : undefined}
+        onConnect={(config) => {
+          setRevoked(false);
+          setApi(config);
+        }}
+      />
+    );
   }
 
   return (
