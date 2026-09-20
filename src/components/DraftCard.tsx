@@ -5,6 +5,7 @@ import type { DuoApiConfig } from "../api/client.js";
 import { DuoMessage } from "./DuoMessage.js";
 import { OwnerMessage } from "./OwnerMessage.js";
 import { ConfidenceHairline } from "./ConfidenceHairline.js";
+import { EditDiff } from "./EditDiff.js";
 import { MutationError } from "./MutationError.js";
 import { SourceList } from "./SourceList.js";
 import { useSyncStatus } from "../sync.js";
@@ -59,6 +60,11 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
   const [editedText, setEditedText] = useState(draft.draftText ?? "");
   const [answerText, setAnswerText] = useState("");
   const result = toDraftPipelineResult(draft);
+  // #23: "nothing changed is nothing changed" — an edit that leaves the
+  // duo's text as it was (whitespace included, since the send trims it) is
+  // a plain Send. Posting "edited" with identical text would manufacture a
+  // correction candidate out of a correction that never happened.
+  const editChanged = editedText.trim() !== (draft.draftText ?? "").trim();
 
   if (draft.escalated) {
     return (
@@ -107,12 +113,18 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
         <OwnerMessage>{draft.question}</OwnerMessage>
         <DuoMessage>
           {editing ? (
-            <textarea
-              className="w-full rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] p-2 text-[var(--text)]"
-              value={editedText}
-              onChange={(e) => setEditedText(e.target.value)}
-              rows={4}
-            />
+            <div className="flex w-full flex-col gap-2">
+              {/* #23: the change itself, live — the duo's original with the
+                  owner's removals struck and additions marked, not just a
+                  textarea that hides what the correction loop feeds on. */}
+              <EditDiff original={draft.draftText ?? ""} edited={editedText} />
+              <textarea
+                className="w-full rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] p-2 text-[var(--text)]"
+                value={editedText}
+                onChange={(e) => setEditedText(e.target.value)}
+                rows={4}
+              />
+            </div>
           ) : (
             draft.draftText
           )}
@@ -124,9 +136,15 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
               <button
                 className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
                 disabled={!editedText.trim() || recordOutcome.isPending || !reachable}
-                onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "edited", sentText: editedText.trim() })}
+                onClick={() =>
+                  editChanged
+                    ? recordOutcome.mutate({ draftId: draft.id, outcome: "edited", sentText: editedText.trim() })
+                    : recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })
+                }
               >
-                Send edited
+                {/* The label tells the truth the payload encodes: a change
+                    sends an edit, anything else is just a Send. */}
+                {editChanged ? "Send edited" : "Send"}
               </button>
               <button
                 className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1"

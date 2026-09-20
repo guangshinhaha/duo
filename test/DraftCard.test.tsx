@@ -147,3 +147,84 @@ describe("DraftCard — Send / Edit / Ignore (the correction loop's only input)"
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://test/drafts/d2/answer", expect.objectContaining({ method: "POST" })));
   });
 });
+
+describe("#23 — the edit shows as a change, not a textarea", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function postedBody(): Record<string, unknown> {
+    const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find((c) => c[0] === "http://test/drafts/d1/outcome");
+    return JSON.parse((call![1] as RequestInit).body as string) as Record<string, unknown>;
+  }
+
+  it("editing marks what was removed and what was added, at a glance against the duo's original", () => {
+    renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Ten days per quarter." } });
+
+    expect(screen.getByTestId("edit-diff-removed")).toHaveTextContent("Five");
+    expect(screen.getByTestId("edit-diff-added")).toHaveTextContent("Ten");
+    // The untouched words still read inline between the marks.
+    expect(screen.getByTestId("edit-diff")).toHaveTextContent("days per quarter.");
+  });
+
+  it("an edit that has changed nothing yet shows the duo's text with no marks", () => {
+    renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+    fireEvent.click(screen.getByText("Edit"));
+
+    expect(screen.queryByTestId("edit-diff-removed")).toBeNull();
+    expect(screen.queryByTestId("edit-diff-added")).toBeNull();
+    expect(screen.getByTestId("edit-diff")).toHaveTextContent("Five days per quarter.");
+  });
+
+  it("sending an unchanged edit records \"sent\", not \"edited\" — nothing changed is nothing changed", async () => {
+    renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+    fireEvent.click(screen.getByText("Edit"));
+    // The editor was opened and left exactly as the duo wrote it.
+    fireEvent.click(screen.getByText("Send"));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://test/drafts/d1/outcome", expect.objectContaining({ method: "POST" })));
+    expect(postedBody()).toEqual({ outcome: "sent" });
+  });
+
+  it("an edit typed and reverted back to the duo's text also records \"sent\"", async () => {
+    renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+    fireEvent.click(screen.getByText("Edit"));
+    const textarea = screen.getByRole("textbox");
+    fireEvent.change(textarea, { target: { value: "Actually, ten days." } });
+    expect(screen.getByText("Send edited")).toBeInTheDocument();
+    fireEvent.change(textarea, { target: { value: "Five days per quarter." } });
+
+    await waitFor(() => expect(screen.getByText("Send")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Send"));
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(postedBody()).toEqual({ outcome: "sent" });
+  });
+
+  it("a whitespace-only difference is not a change — it records \"sent\"", async () => {
+    renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "  Five days per quarter.  " } });
+    fireEvent.click(screen.getByText("Send"));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(postedBody()).toEqual({ outcome: "sent" });
+  });
+
+  it("cancelling discards the edit — reopening starts from the duo's text again", () => {
+    renderWithClient(<DraftCard api={api} draft={draftRecord} />);
+    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Actually, ten days." } });
+    fireEvent.click(screen.getByText("Cancel"));
+
+    expect(screen.getByTestId("duo-message")).toHaveTextContent("Five days per quarter.");
+    fireEvent.click(screen.getByText("Edit"));
+    expect(screen.getByRole("textbox")).toHaveValue("Five days per quarter.");
+    expect(screen.getByTestId("edit-diff")).toHaveTextContent("Five days per quarter.");
+    expect(screen.queryByTestId("edit-diff-removed")).toBeNull();
+  });
+});

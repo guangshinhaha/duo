@@ -139,6 +139,9 @@ describe("#31 — every primary button renders the accessible foreground", () =>
     const { unmount } = renderWithClient(<DraftCard api={api} draft={draft} />);
     primaryButton("Send");
     fireEvent.click(screen.getByText("Edit", { selector: "button" }));
+    // #23: "Send edited" exists only once the text actually differs — make
+    // a change so the changed-state button is the one under test.
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: `${draft.draftText ?? ""} More.` } });
     primaryButton("Send edited");
     unmount();
 
