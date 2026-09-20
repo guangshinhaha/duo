@@ -129,34 +129,68 @@ listening socket. See AR-12. The design consequence:
 - Every client presents a per-device token, issued by an explicit CLI pairing step and revocable
   from the Mac. Losing the phone must not mean re-keying the store.
 
-## 1.5 Information architecture — Slack-shaped, deliberately not Slack
+## 1.5 Information architecture — a messaging product with duos in it
 
-Slack's model is *channels are people*. Here, channels are duos, and two things do not fit.
+The first cut of this section drew a viewer's map — flat surfaces for inspecting a daemon. The
+product has since grown a native message layer (#57, the two-store architecture), and a messaging
+product answers "where do I talk to people" before "where do I inspect things". The section's two
+original arguments survive that change and get stronger; a third joins them.
 
 **Drafts are not messages.** The Send / Edit / Ignore loop is where the product's value and its
 entire training signal live. In a chat transcript an action has no home: it scrolls away, and an
-ignored draft looks exactly like an unread one. **Review is its own surface** with its own badge,
-not a message type (AR-14).
+ignored draft looks exactly like an unread one. **Review is its own surface with its own count**,
+not a message type (AR-14) — and now it is triage for drafts *wherever they were born*: a question
+asked in a native conversation and a message bridged from Slack land in the same Review, because
+both are "your duo drafted a reply and you have not decided."
 
 **The duo is not you.** `concept.md` is unambiguous — *"it never poses as you"*, *"always
 labelled."* Slack's grammar is avatar + name + body, identical chrome for a person and a bot.
 That grammar, adopted unchanged, produces the one thing the product principle forbids (AR-13).
 
+**A duo is someone you talk to.** Duos appear in the conversation list beside people —
+participants, not infrastructure. There is no "Duos" section in the sidebar: a section would
+restore the viewer's map, duos as machinery you inspect rather than participants you converse
+with. What is specific to *your own* duo — the Mirror, the trust grid — sits under **Your duo**,
+because your duo's corpus and conduct are yours; a colleague's duo carries its mirror on its
+owner's side, never on yours.
+
 ```
-┌──────────┬───────────────────────────────┬──────────────┐
-│ Review ③ │                               │              │
-│          │   thread                      │  provenance  │
-│ My duo   │                               │   rules hit  │
-│ Shared   │   ── question ──              │   past pairs │
-│          │   ── duo draft ──             │   confidence │
-│ Mirror   │      [Send] [Edit] [Ignore]   │              │
-│ Trust    │                               │              │
-└──────────┴───────────────────────────────┴──────────────┘
+┌──────────────────┬───────────────────────────────┬──────────────┐
+│ Review ③        │  Ana · project-x              │              │
+│                  │                               │              │
+│ Conversations    │  Ana: what's our refund       │  provenance  │
+│  · Ana           │      policy?                  │   rules hit  │
+│  · Bose          │  ┌─ your duo · draft ─┐       │   past pairs │
+│  · project-x     │  │ Refunds within 30  │       │   confidence │
+│  · …             │  │ days…              │       │              │
+│                  │  └────────────────────┘       │  (about the  │
+│ Your duo         │  [Send] [Edit] [Ignore]       │   duo that   │
+│  Mirror          │                               │   drafted)   │
+│  Trust           │  messages: queue offline;     │              │
+│                  │  Send never does (#61)        │              │
+│ Audit            │  [ composer ]                 │              │
+│ Settings         │                               │              │
+└──────────────────┴───────────────────────────────┴──────────────┘
 ```
 
-Review sits **above** the duo list, because it is the thing you open the app for. The provenance
-rail is permanent, not a disclosure triangle: "why did it say that" is the product's core promise
-and it should cost zero clicks.
+- **What is primary.** Two things own the spine. Review sits **above the conversation list**
+  because it is the thing you open the app for (AR-14); Conversations are the default space —
+  people, groups and duos, all entries in that one list.
+- **Where drafts live.** In Review — never in the transcript. The draft you are deciding renders
+  in its conversation, with its provenance rail, *because Review brought you there*; the
+  transcript itself records only outcomes. The rail is permanent, not a disclosure triangle:
+  "why did it say that" is the product's core promise and it should cost zero clicks.
+- **Mirror and Trust** are about your own duo, grouped under Your duo, below the conversations.
+- **Audit and Settings** are global and rare; they sit at the bottom, off the spine.
+
+**It survives a narrow window.** Phone-width folds the same map, it does not replace it: the
+sidebar becomes the conversation list with Review still on top and its count still its own, the
+provenance rail becomes a drawer on the draft — zero clicks stays zero clicks, one swipe on a
+phone. No tab bar, no second product: a different arrangement of the same structure.
+
+The shipped shell — Review, Duo, Trust, Audit, Mirror — is this map's bridge-era cut: the
+conversation list has exactly one entry (your own duo), which is why it still reads as a viewer.
+The map above is where it grows when the workspace layer lands.
 
 ## 1.6 What "sleek" means here, concretely
 
