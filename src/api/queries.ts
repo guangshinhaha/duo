@@ -45,6 +45,16 @@ export function usePendingDrafts(api: DuoApiConfig) {
 }
 
 /**
+ * One draft by id — `GET /drafts/:id`, the §1.4 route the single-draft
+ * address (#25) is built on. The key sits under the `["drafts"]` root, so
+ * outcome writes and draft-ready pushes invalidate it with everything
+ * else; the ws layer's root-key comment already promised this child key.
+ */
+export function useDraft(api: DuoApiConfig, id: string) {
+  return useQuery({ queryKey: queryKeys.draft(id), queryFn: () => apiRequest<DraftRecord>(api, `/drafts/${encodeURIComponent(id)}`) });
+}
+
+/**
  * Every draft, every outcome — the Duo thread view's data. Distinct key
  * from the pending list (`["drafts", {}]` vs `["drafts", {outcome:
  * "pending"}]`), both invalidated by the shared `["drafts"]` prefix, so a
