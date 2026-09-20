@@ -30,6 +30,7 @@ const baseDraft: DraftRecord = {
   sentText: null,
   refused: false,
   escalationThreshold: 0.55,
+  provenance: { origin: "unknown" },
 };
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });

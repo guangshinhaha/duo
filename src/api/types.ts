@@ -36,6 +36,23 @@ export interface ConfidenceResult {
   threshold: number;
 }
 
+/**
+ * Where a draft came from (digital-duo #169) — mirrored from the daemon's
+ * `DraftProvenance` (`src/drafting/draft-log.ts`). Always present on the
+ * wire: a row that predates provenance or whose stored JSON is unreadable
+ * reads `{ origin: "unknown" }`, never throws.
+ */
+export type DraftProvenance =
+  | { readonly origin: "owner" }
+  | {
+      readonly origin: "channel";
+      readonly channelKind: string;
+      readonly askerRef: string;
+      readonly threadId: string | null;
+      readonly permalink: string | null;
+    }
+  | { readonly origin: "unknown" };
+
 export interface DraftRecord {
   id: string;
   question: string;
@@ -53,6 +70,7 @@ export interface DraftRecord {
   refused: boolean;
   /** The composite-confidence escalation threshold that was actually in effect when this draft was generated — what ConfidenceHairline compares confidenceScore against, instead of a hardcoded guess. */
   escalationThreshold: number;
+  provenance: DraftProvenance;
 }
 
 /**

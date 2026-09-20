@@ -63,6 +63,23 @@ export const IGNORE_UNDO_WINDOW_MS = 5_000;
 export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecord }) {
   const recordOutcome = useRecordOutcome(api);
   const answerEscalation = useAnswerEscalation(api);
+  // #30: a draft whose provenance is the owner is an answer to a question
+  // you asked yourself — nobody asked, so "Send" would promise a recipient
+  // that does not exist. The words on the controls change; the outcomes
+  // they post are the core's and stay byte-identical (the edit is still
+  // the correction loop's input). Channel-borne drafts keep the reply
+  // vocabulary, and so do legacy rows (`origin: "unknown"`) — they
+  // predate provenance and today's wording is the only honest default
+  // for history that may well be channel-borne.
+  // The `?.` is not the wire being optional — the daemon always sends the
+  // field — it is the persisted cache being older than the field: a
+  // record rehydrated from duo-cache as written before #169 has no
+  // `provenance` at all, renders BEFORE the refetch replaces it, and a
+  // bare dereference would crash that first render with no boundary to
+  // catch it (killing the very refetch that heals the data). An absent
+  // field reads as not-owner, i.e. today's vocabulary — the same honest
+  // default the daemon itself gives a legacy row.
+  const selfAsked = draft.provenance?.origin === "owner";
   // AR-15 (§3.3): when the daemon is unreachable every mutation control is
   // disabled, not queued — a Send firing hours later against moved context
   // is worse than no Send. Editing the text stays possible (a local buffer);
@@ -187,9 +204,11 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
         {ignoring ? (
           // #24: the undo window. The discard has NOT been sent — the card
           // says so, because the difference between "held" and "sent" is
-          // the whole point of the window.
+          // the whole point of the window. For a self-asked draft (#30)
+          // nothing was ever being sent anywhere; "final" is the word
+          // that carries the same warning.
           <div className="flex items-center gap-2" data-testid="ignore-window">
-            <span className="text-xs text-[var(--muted)]">Ignoring — not sent yet.</span>
+            <span className="text-xs text-[var(--muted)]">{selfAsked ? "Ignoring — not final yet." : "Ignoring — not sent yet."}</span>
             <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={undoIgnore}>
               Undo
             </button>
@@ -208,8 +227,10 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
                 }
               >
                 {/* The label tells the truth the payload encodes: a change
-                    sends an edit, anything else is just a Send. */}
-                {editChanged ? "Send edited" : "Send"}
+                    sends an edit, anything else is just a Send — and for a
+                    self-asked draft, both are Keeps (#30): the answer
+                    stands as yours, nobody receives it. */}
+                {editChanged ? (selfAsked ? "Keep edited" : "Send edited") : selfAsked ? "Keep" : "Send"}
               </button>
               <button
                 className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1"
@@ -231,7 +252,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
                 disabled={recordOutcome.isPending || !reachable}
                 onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })}
               >
-                Send
+                {selfAsked ? "Keep" : "Send"}
               </button>
               <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={() => setEditing(true)}>
                 Edit

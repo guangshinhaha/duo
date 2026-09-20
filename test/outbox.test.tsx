@@ -126,6 +126,7 @@ const draft: DraftRecord = {
   sentText: null,
   refused: false,
   escalationThreshold: 0.6,
+  provenance: { origin: "unknown" },
 };
 
 describe("#61 — messages queue and deliver; drafts and duo actions do not", () => {

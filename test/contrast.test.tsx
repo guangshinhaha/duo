@@ -102,6 +102,7 @@ const draft: DraftRecord = {
   sentText: null,
   refused: false,
   escalationThreshold: 0.6,
+  provenance: { origin: "unknown" },
 };
 
 const escalated: DraftRecord = { ...draft, id: "d2", escalated: true, draftText: null, escalationReason: "not sure enough", refused: false };

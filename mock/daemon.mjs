@@ -43,6 +43,17 @@ function seedState() {
         sentText: null,
         refused: false,
         escalationThreshold: THRESHOLD,
+        // One seeded draft is channel-borne (digital-duo #169's full
+        // shape) so the client's two vocabularies — Send for a reply to
+        // someone, Keep for an answer to yourself (#30) — are both
+        // demoable against the mock.
+        provenance: {
+          origin: "channel",
+          channelKind: "slack",
+          askerRef: "U04ARLJ9P",
+          threadId: "C07H3Q2NA",
+          permalink: null,
+        },
       },
       {
         id: "d-3",
@@ -59,6 +70,7 @@ function seedState() {
         sentText: "I'm off next Friday, back the following Monday — anything urgent, ping Sam.",
         refused: false,
         escalationThreshold: THRESHOLD,
+        provenance: { origin: "owner" },
       },
       {
         id: "d-4",
@@ -75,6 +87,7 @@ function seedState() {
         sentText: null,
         refused: false,
         escalationThreshold: THRESHOLD,
+        provenance: { origin: "owner" },
       },
       {
         id: "d-2",
@@ -91,6 +104,7 @@ function seedState() {
         sentText: null,
         refused: false,
         escalationThreshold: THRESHOLD,
+        provenance: { origin: "owner" },
       },
     ],
     candidates: [
@@ -237,6 +251,9 @@ function draftPipeline(state, question, threadContext) {
     sentText: null,
     refused,
     escalationThreshold: THRESHOLD,
+    // POST /drafts is the owner's composer, so every row it writes is
+    // owner-origin (#169) — the client's #30 vocabulary keys off this.
+    provenance: { origin: "owner" },
   };
   state.drafts.push(record);
   if (escalated) {

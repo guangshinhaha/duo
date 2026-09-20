@@ -72,6 +72,24 @@ describe("mock daemon — the drafts loop (D2/D3)", () => {
     expect(escalation.draftText).toBeNull();
   });
 
+  it("carries provenance on every seeded draft — the channel-borne one in #169's full shape (#30)", async () => {
+    // GET-only on purpose: the pending-filter test below asserts the
+    // seed's exact draft set, so nothing before it may POST.
+    const seeded = await (await get("/drafts")).json();
+    // d-1 is the seeded channel-borne draft, with #169's full shape.
+    expect(seeded.find((d) => d.id === "d-1").provenance).toEqual({
+      origin: "channel",
+      channelKind: "slack",
+      askerRef: "U04ARLJ9P",
+      threadId: "C07H3Q2NA",
+      permalink: null,
+    });
+    // Everything else the seed holds is owner-asked history.
+    for (const d of seeded.filter((d) => d.id !== "d-1")) {
+      expect(d.provenance).toEqual({ origin: "owner" });
+    }
+  });
+
   it("filters outcome=pending to the unanswered drafts", async () => {
     const res = await get("/drafts?outcome=pending");
     const drafts = await res.json();
@@ -94,6 +112,9 @@ describe("mock daemon — the drafts loop (D2/D3)", () => {
     expect(stored.threadContext).toBe("vendor");
     expect(stored.outcome).toBeNull();
     expect(stored.escalated).toBe(false);
+    // POST /drafts is the owner's composer — its rows are owner-origin,
+    // which is what the client's #30 vocabulary keys off.
+    expect(stored.provenance).toEqual({ origin: "owner" });
   });
 
   it("routes 'refuse' to a refused escalation and 'should I' to a judgment one", async () => {
