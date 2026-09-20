@@ -12,6 +12,7 @@ import { Setup } from "./routes/Setup.js";
 import { Review } from "./routes/Review.js";
 import { Duo } from "./routes/Duo.js";
 import { Trust } from "./routes/Trust.js";
+import { Audit } from "./routes/Audit.js";
 import { Mirror } from "./routes/Mirror.js";
 
 // §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
@@ -30,7 +31,7 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * fresh launch opens with — stays the default surface: Review is the thing
  * the app exists to open (client-design.md §1.5).
  */
-type Route = "review" | "duo" | "trust" | "mirror";
+type Route = "review" | "duo" | "trust" | "audit" | "mirror";
 
 function routeFromHash(hash: string): Route {
   if (hash === "#mirror") {
@@ -41,6 +42,9 @@ function routeFromHash(hash: string): Route {
   }
   if (hash === "#trust") {
     return "trust";
+  }
+  if (hash === "#audit") {
+    return "audit";
   }
   return "review";
 }
@@ -82,6 +86,8 @@ function routeSurface(route: Route, api: DuoApiConfig) {
       return <Duo api={api} />;
     case "trust":
       return <Trust api={api} />;
+    case "audit":
+      return <Audit api={api} />;
     case "review":
       return <Review api={api} />;
   }
@@ -127,6 +133,9 @@ function AppShell() {
           </NavLink>
           <NavLink active={route === "trust"} href="#trust">
             Trust
+          </NavLink>
+          <NavLink active={route === "audit"} href="#audit">
+            Audit
           </NavLink>
           <NavLink active={route === "mirror"} href="#mirror">
             Mirror
