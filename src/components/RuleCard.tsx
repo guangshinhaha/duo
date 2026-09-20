@@ -70,7 +70,7 @@ export function RuleCard({ api, rule, bucket }: { api: DuoApiConfig; rule: Rule;
               className={
                 action === "reject"
                   ? "rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)] disabled:opacity-40"
-                  : "rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-white disabled:opacity-40"
+                  : "rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
               }
               disabled={ruleAction.isPending || !reachable}
               onClick={() => ruleAction.mutate({ ruleId: rule.id, action })}

@@ -115,7 +115,7 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
             {error}
           </p>
         )}
-        <button className="mt-2 rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-2 text-white" type="submit" disabled={!token.trim() || !baseUrlInput}>
+        <button className="mt-2 rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-2 text-[var(--bg)] disabled:opacity-40" type="submit" disabled={!token.trim() || !baseUrlInput}>
           Connect
         </button>
       </form>

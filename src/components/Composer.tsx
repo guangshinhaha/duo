@@ -44,7 +44,7 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
           onChange={(e) => setQuestion(e.target.value)}
         />
         <button
-          className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1.5 text-white disabled:opacity-40"
+          className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1.5 text-[var(--bg)] disabled:opacity-40"
           data-testid="composer-submit"
           disabled={disabled}
           type="submit"
