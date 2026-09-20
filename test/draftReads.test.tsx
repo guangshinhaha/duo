@@ -124,6 +124,9 @@ describe("#26 — time is visible", () => {
     cleanup();
 
     renderWithClient(<Duo api={api} />);
+    // #28: the single conversation sits in the list until picked.
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[0]);
     await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(1));
     expect(screen.getAllByTestId("timestamp")).toHaveLength(1);
   });

@@ -107,20 +107,29 @@ function groupByThread(drafts: DraftRecord[]): ThreadGroup[] {
  * loop. v1 renders the personal duo's single thread space at a fixed
  * `#duo` segment: the personal duo carries no id and `POST /drafts` never
  * took one, so there is nothing to put in `:id` until a second
- * conversational duo exists.
+ * conversational duo exists. #28 makes it navigable: the route opens on
+ * the conversation list (most recently active first) and picking one
+ * opens it alone, with the composer targeting whatever is open.
  */
 export function Duo({ api }: { api: DuoApiConfig }) {
   const { data: drafts, isLoading, error } = useDrafts(api);
-  const [selectedThread, setSelectedThread] = useState<string | null>(null);
+  // What is open: `null` is the conversation list, `{ key }` is one open
+  // conversation (`key: null` = General). Not a bare string, because
+  // "General is open" and "nothing is open" must not collapse into the
+  // same state — the list is the route's landing view.
+  const [open, setOpen] = useState<{ key: string | null } | null>(null);
 
   const groups = useMemo(() => groupByThread(drafts ?? []), [drafts]);
-  // A selected group can vanish from under the composer (a refetch that no
-  // longer carries it) — fall the *posting target* back with the label, not
-  // just the label, or the caption would say General while still posting
-  // into the stale context.
-  const selectedExists = groups.some((group) => group.key === selectedThread);
-  const thread = selectedExists ? selectedThread : null;
-  const selectedLabel = selectedExists && selectedThread !== null ? selectedThread : DEFAULT_THREAD_LABEL;
+  // The open conversation can vanish from a refetch that no longer carries
+  // it. The view and the composer's target fall back together — never a
+  // caption saying General while posting into a stale context, and never
+  // an open view whose drafts are gone: General when it exists, the list
+  // otherwise (General has no home to show when nothing unthreaded ever
+  // happened).
+  const openGroup =
+    open === null ? undefined : groups.find((group) => group.key === open.key) ?? groups.find((group) => group.key === null);
+  const thread = openGroup?.key ?? null;
+  const threadLabel = openGroup?.key ?? DEFAULT_THREAD_LABEL;
 
   if (isLoading) {
     return <div className="p-6 text-[var(--muted)]">Loading…</div>;
@@ -136,30 +145,43 @@ export function Duo({ api }: { api: DuoApiConfig }) {
           <div className="p-6 text-[var(--muted)]" data-testid="duo-empty">
             No conversation yet. Ask your duo something below — your questions, its drafts and escalations, and what you sent will all read here.
           </div>
-        ) : (
-          <div className="flex flex-col gap-6">
-            {groups.map((group) => (
-              <section className="flex flex-col gap-3" data-testid="thread-group" key={group.key ?? "__general__"}>
-                <button
-                  className={
-                    selectedThread === group.key
-                      ? "self-start rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1 text-xs font-medium uppercase tracking-wide"
-                      : "self-start rounded-[var(--r-sm)] px-2 py-1 text-xs font-medium uppercase tracking-wide text-[var(--muted)]"
-                  }
-                  data-testid="thread-group-heading"
-                  onClick={() => setSelectedThread(group.key)}
-                >
-                  {group.key ?? DEFAULT_THREAD_LABEL}
-                </button>
-                {group.drafts.map((draft) => (
-                  <ThreadEntry key={draft.id} draft={draft} />
-                ))}
-              </section>
-            ))}
+        ) : openGroup ? (
+          <div className="flex flex-col gap-3">
+            <button
+              className="self-start rounded-[var(--r-sm)] px-2 py-1 text-xs font-medium uppercase tracking-wide text-[var(--muted)]"
+              data-testid="back-to-conversations"
+              onClick={() => setOpen(null)}
+            >
+              All conversations
+            </button>
+            <section className="flex flex-col gap-3" data-testid="thread-group">
+              <h2
+                className="self-start rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1 text-xs font-medium uppercase tracking-wide"
+                data-testid="thread-group-heading"
+              >
+                {openGroup.key ?? DEFAULT_THREAD_LABEL}
+              </h2>
+              {openGroup.drafts.map((draft) => (
+                <ThreadEntry key={draft.id} draft={draft} />
+              ))}
+            </section>
           </div>
+        ) : (
+          <nav aria-label="Conversations" className="flex flex-col gap-2" data-testid="conversation-list">
+            {groups.map((group) => (
+              <button
+                className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-left text-[var(--text)]"
+                data-testid="conversation-entry"
+                key={group.key ?? "__general__"}
+                onClick={() => setOpen({ key: group.key })}
+              >
+                {group.key ?? DEFAULT_THREAD_LABEL}
+              </button>
+            ))}
+          </nav>
         )}
       </div>
-      <Composer api={api} thread={thread} threadLabel={selectedLabel} />
+      <Composer api={api} thread={thread} threadLabel={threadLabel} />
     </div>
   );
 }

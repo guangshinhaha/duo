@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 // @ts-expect-error no node types by design
 import { fileURLToPath } from "node:url";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfidenceHairline, hairlineState } from "../src/components/ConfidenceHairline.js";
@@ -121,6 +121,10 @@ describe("#32 — the hairline sits in the gutter, on the leading edge", () => {
     window.location.hash = "#duo";
     render(<App />);
     try {
+      // #28: the route opens on the conversation list — pick the one
+      // conversation, then the entry (and its leading hairline) renders.
+      const conversation = await screen.findByTestId("conversation-entry");
+      fireEvent.click(conversation);
       const entry = await screen.findByTestId("thread-entry");
       expectGutterRule(entry);
     } finally {
