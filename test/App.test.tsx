@@ -127,6 +127,32 @@ describe("App — hash routing between the surfaces", () => {
     expect(screen.queryByTestId("mirror")).toBeNull();
   });
 
+  it("navigates to Corrections on #corrections, beside Review in the loop's own order", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })),
+    );
+
+    render(<App />);
+
+    // The queue is a first-class surface (AR-14's second half): its own
+    // sidebar entry, directly under Review — the loop's two queues read
+    // together, not buried behind another surface.
+    const link = screen.getByRole("link", { name: "Corrections" });
+    expect(link).toHaveAttribute("href", "#corrections");
+    const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
+    expect(entries.indexOf("Review")).toBeLessThan(entries.indexOf("Corrections"));
+    expect(entries.indexOf("Corrections")).toBeLessThan(entries.indexOf("Duo"));
+
+    window.location.hash = "#corrections";
+    window.dispatchEvent(new Event("hashchange"));
+    // GET /review returns [] against this stub, so the queue shows its
+    // honest empty state — the route mounted, not Review with no drafts.
+    await waitFor(() => expect(screen.getByTestId("corrections-empty")).toBeInTheDocument());
+    expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
+  });
+
   it("navigates to Duo on #duo and back to Review", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(

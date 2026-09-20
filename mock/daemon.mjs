@@ -401,7 +401,55 @@ export function createMockDaemon() {
           return draft ? ok(draft) : fail(404, "not_found", "No such draft.");
         },
       ],
-      ["GET", /^\/review$/, () => ok(state.candidates.filter((c) => c.status === "pending"))],
+      [
+        "GET",
+        /^\/review$/,
+        () => {
+          // listCorrectionCandidates' shape (digital-duo #173's route):
+          // bare lists every status ascending by creation; ?status=
+          // filters by plain equality — the route casts the querystring,
+          // it does not validate it.
+          const status = url.searchParams.get("status");
+          let rows = [...state.candidates].sort(
+            (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+          );
+          if (status !== null) {
+            rows = rows.filter((c) => c.status === status);
+          }
+          return ok(rows);
+        },
+      ],
+      [
+        "POST",
+        /^\/review\/([^/]+)\/(approve|reject)$/,
+        (m) => {
+          // #173's thin wrappers: the route passes the id through and the
+          // review layer owns the behaviour — not-found is its own 404
+          // (it searched both source tables), a decided candidate is the
+          // 409 finality gate, and nothing here writes anything but the
+          // status. The mock only ever mints style candidates (its one
+          // candidate source is a draft edit), so approve's result is the
+          // voice-correction shape — `kind: "style"`, no rule; the
+          // substance path (conflict gate, supersedesRuleId) stays
+          // unwired because nothing on this mock can produce a substance
+          // candidate to gate.
+          const [, id, action] = m;
+          const found = state.candidates.find((c) => c.id === id);
+          if (!found) {
+            return fail(404, "ReviewCandidateNotFoundError", `No pending correction candidate with id "${id}"`);
+          }
+          if (found.status !== "pending") {
+            return fail(
+              409,
+              "CandidateAlreadyReviewedError",
+              `Correction candidate "${id}" was already reviewed (status: "${found.status}")`,
+            );
+          }
+          found.status = action === "approve" ? "approved" : "rejected";
+          found.reviewedAt = new Date().toISOString();
+          return ok(action === "approve" ? { candidate: found, result: { kind: found.kind } } : { candidate: found });
+        },
+      ],
       ["GET", /^\/mirror\/portrait$/, () => ok(state.portrait)],
       ["GET", /^\/mirror\/rules$/, () => ok(state.rules)],
       [
