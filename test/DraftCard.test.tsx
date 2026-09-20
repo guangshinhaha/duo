@@ -405,3 +405,65 @@ describe("#24 — a mis-click on Ignore is recoverable", () => {
     }
   });
 });
+
+describe("#20 — a draft says who asked, and where they asked it", () => {
+  const channelProvenance = {
+    origin: "channel",
+    channelKind: "slack",
+    askerRef: "U04ARLJ9P",
+    threadId: "C07H3Q2NA",
+    permalink: "https://acme.slack.com/archives/C07H3Q2NA/p1726482364000100",
+  } as const;
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the asker and the adapter's channel label, the daemon's strings verbatim", () => {
+    renderWithClient(<DraftCard api={api} draft={{ ...draftRecord, provenance: channelProvenance }} />);
+    // Verbatim — no capitalisation, no client-side channel registry: adding a
+    // channel in the core must need no change here.
+    expect(screen.getByTestId("draft-origin")).toHaveTextContent("Asked by U04ARLJ9P in slack");
+  });
+
+  it("carries the permalink as the one click back to the original message", () => {
+    renderWithClient(<DraftCard api={api} draft={{ ...draftRecord, provenance: channelProvenance }} />);
+    const link = screen.getByRole("link", { name: "View original" });
+    expect(link).toHaveAttribute("href", "https://acme.slack.com/archives/C07H3Q2NA/p1726482364000100");
+    // The owner's application opens it, not this client.
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("a channel draft without a permalink shows the attribution and no link", () => {
+    renderWithClient(
+      <DraftCard api={api} draft={{ ...draftRecord, provenance: { ...channelProvenance, permalink: null } }} />,
+    );
+    expect(screen.getByTestId("draft-origin")).toHaveTextContent("Asked by U04ARLJ9P in slack");
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("a channel-borne question that escalated still says who asked it", () => {
+    renderWithClient(<DraftCard api={api} draft={{ ...escalatedRecord, provenance: channelProvenance }} />);
+    expect(screen.getByTestId("draft-origin")).toHaveTextContent("Asked by U04ARLJ9P in slack");
+  });
+
+  it("a self-asked draft invents no asker and no channel", () => {
+    renderWithClient(<DraftCard api={api} draft={{ ...draftRecord, provenance: { origin: "owner" } }} />);
+    expect(screen.queryByTestId("draft-origin")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("a legacy draft without provenance degrades quietly — no 'unknown' chrome", () => {
+    renderWithClient(<DraftCard api={api} draft={{ ...draftRecord, provenance: { origin: "unknown" } }} />);
+    expect(screen.queryByTestId("draft-origin")).toBeNull();
+    // The persisted cache can also serve the field entirely absent (#86's
+    // staleness belt): same quiet degradation.
+    const staleCached = { ...draftRecord, provenance: undefined } as unknown as DraftRecord;
+    const { unmount } = renderWithClient(<DraftCard api={api} draft={staleCached} />);
+    expect(screen.queryByTestId("draft-origin")).toBeNull();
+    unmount();
+  });
+});

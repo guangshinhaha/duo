@@ -341,3 +341,48 @@ describe("Duo — the thread view and composer (issue #8)", () => {
     await waitFor(() => expect(screen.getByTestId("composer-submit")).toHaveTextContent("Ask"));
   });
 });
+
+describe("#20 — the thread says who asked, and where they asked it", () => {
+  beforeEach(() => {
+    writeComposerBuffer("");
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a channel-borne entry shows the asker and channel verbatim, with the permalink one click away", async () => {
+    stubDraftsResponse([
+      draftFor("1", {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        provenance: {
+          origin: "channel",
+          channelKind: "slack",
+          askerRef: "U04ARLJ9P",
+          threadId: "C07H3Q2NA",
+          permalink: "https://acme.slack.com/archives/C07H3Q2NA/p1726482364000100",
+        },
+      }),
+    ]);
+    renderWithClient(<Duo api={api} />);
+    fireEvent.click((await screen.findAllByTestId("conversation-entry"))[0]);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(1));
+
+    expect(screen.getByTestId("draft-origin")).toHaveTextContent("Asked by U04ARLJ9P in slack");
+    const link = screen.getByRole("link", { name: "View original" });
+    expect(link).toHaveAttribute("href", "https://acme.slack.com/archives/C07H3Q2NA/p1726482364000100");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("entries you asked yourself carry no attribution, and legacy ones degrade quietly", async () => {
+    stubDraftsResponse([
+      draftFor("1", { createdAt: "2026-01-01T00:00:00.000Z", provenance: { origin: "owner" } }),
+      draftFor("2", { createdAt: "2026-01-02T00:00:00.000Z" }), // fixture default: unknown
+    ]);
+    renderWithClient(<Duo api={api} />);
+    fireEvent.click((await screen.findAllByTestId("conversation-entry"))[0]);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(2));
+
+    expect(screen.queryByTestId("draft-origin")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+});

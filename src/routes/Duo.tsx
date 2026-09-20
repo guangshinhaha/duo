@@ -7,6 +7,7 @@ import { Composer } from "../components/Composer.js";
 import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { DuoMessage } from "../components/DuoMessage.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
+import { ProvenanceLine } from "../components/ProvenanceLine.js";
 import { SourceList } from "../components/SourceList.js";
 import { StructuredText } from "../components/StructuredText.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -56,6 +57,10 @@ function ThreadEntry({ draft }: { draft: DraftRecord }) {
       <ConfidenceHairline result={toDraftPipelineResult(draft)} />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <OwnerMessage>{draft.question}</OwnerMessage>
+        {/* #20: who asked, when the asker was a channel rather than you —
+            placed before the response so the context reads first, and one
+            click from the original when a permalink rode along. */}
+        <ProvenanceLine provenance={draft.provenance} />
         {draft.escalated ? (
           <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] px-4 py-3 text-[var(--muted)]" data-testid="escalation-reason">
             {draft.escalationReason}
