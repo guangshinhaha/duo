@@ -28,33 +28,91 @@ export interface DuoApiConfig {
 }
 
 /**
+ * Thrown when a request outlives the timeout its caller set (#27): the
+ * daemon was reached but never answered — `POST /drafts` with a real
+ * provider can run tens of seconds (§1.4), and a wedged one must end by
+ * itself. Deliberately NOT a TypeError: a timeout is not unreachability,
+ * and the OfflineBar's "your duo is asleep" wording must never be shown
+ * for a duo that was merely slow.
+ */
+export class RequestTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`The daemon did not answer within ${Math.round(timeoutMs / 1000)}s. Try asking again.`);
+    this.name = "RequestTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
  * The one function every API call goes through. No per-resource client
  * class: the daemon's route surface is small and flat, and one function
  * plus `src/api/types.ts`'s types is enough to keep every call fully
  * typed without generating or maintaining a client SDK.
  */
-export async function apiRequest<T>(config: DuoApiConfig, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${config.baseUrl}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
-
-  if (!response.ok) {
-    let body: ApiError | undefined;
-    try {
-      body = (await response.json()) as ApiError;
-    } catch {
-      body = undefined;
+export async function apiRequest<T>(
+  config: DuoApiConfig,
+  path: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
+  const { timeoutMs, signal: callerSignal, ...rest } = init ?? {};
+  // One controller both exits write to — the caller's cancel (the
+  // Composer's Cancel button) and the timeout — because fetch accepts a
+  // single signal. Which exit fired is remembered separately: an abort is
+  // the owner's choice and surfaces as a reset, a timeout is the daemon
+  // failing to answer and surfaces as one.
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort();
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      controller.abort();
+    } else {
+      callerSignal.addEventListener("abort", forwardAbort);
     }
-    throw new ApiRequestError(response.status, body);
   }
+  let timedOut = false;
+  const timer = timeoutMs !== undefined ? setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs) : undefined;
 
-  if (response.status === 204) {
-    return undefined as T;
+  try {
+    const response = await fetch(`${config.baseUrl}${path}`, {
+      ...rest,
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        ...(rest.body ? { "Content-Type": "application/json" } : {}),
+        ...rest.headers,
+      },
+    });
+
+    if (!response.ok) {
+      let body: ApiError | undefined;
+      try {
+        body = (await response.json()) as ApiError;
+      } catch {
+        body = undefined;
+      }
+      throw new ApiRequestError(response.status, body);
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    return (await response.json()) as T;
+  } catch (error) {
+    if (timedOut && error instanceof Error && error.name === "AbortError") {
+      throw new RequestTimeoutError(timeoutMs ?? 0);
+    }
+    throw error; // a TypeError stays a TypeError (unreachable); an owner abort stays an abort
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+    if (callerSignal) {
+      callerSignal.removeEventListener("abort", forwardAbort);
+    }
   }
-  return (await response.json()) as T;
 }
