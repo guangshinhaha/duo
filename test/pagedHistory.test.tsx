@@ -37,6 +37,7 @@ function draftFor(n: number, thread: string | null, question?: string): DraftRec
     refused: false,
     escalationThreshold: 0.55,
     provenance: { origin: "owner" },
+    delivery: null,
   };
 }
 

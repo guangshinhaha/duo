@@ -51,6 +51,7 @@ const draft: DraftRecord = {
   refused: false,
   escalationThreshold: 0.55,
   provenance: { origin: "unknown" },
+  delivery: null,
 };
 
 describe("#26 — a draft renders its structure", () => {

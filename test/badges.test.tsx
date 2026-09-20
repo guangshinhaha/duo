@@ -34,6 +34,7 @@ const baseDraft: DraftRecord = {
   refused: false,
   escalationThreshold: 0.6,
   provenance: { origin: "unknown" },
+  delivery: null,
 };
 
 function pendingDrafts(count: number): DraftRecord[] {

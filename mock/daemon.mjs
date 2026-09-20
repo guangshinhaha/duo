@@ -55,6 +55,8 @@ function seedState() {
           threadId: "C07H3Q2NA",
           permalink: "https://acme.slack.com/archives/C07H3Q2NA/p1726482364000100",
         },
+        // Sent through its origin channel, and it arrived (#21's happy path).
+        delivery: { state: "delivered" },
       },
       {
         id: "d-3",
@@ -72,6 +74,7 @@ function seedState() {
         refused: false,
         escalationThreshold: THRESHOLD,
         provenance: { origin: "owner" },
+        delivery: null,
       },
       {
         id: "d-4",
@@ -89,6 +92,7 @@ function seedState() {
         refused: false,
         escalationThreshold: THRESHOLD,
         provenance: { origin: "owner" },
+        delivery: null,
       },
       {
         id: "d-2",
@@ -106,6 +110,7 @@ function seedState() {
         refused: false,
         escalationThreshold: THRESHOLD,
         provenance: { origin: "owner" },
+        delivery: null,
       },
     ],
     candidates: [
@@ -257,6 +262,8 @@ function draftPipeline(state, question, threadContext, provenance = { origin: "o
     // /mock/push-draft route overrides this: a draft arriving daemon-side
     // over /ws is channel-borne, which is the provenance it exists to demo.
     provenance,
+    // Nothing has been sent yet, so no delivery has been attempted (#170).
+    delivery: null,
   };
   state.drafts.push(record);
   if (escalated) {
@@ -439,6 +446,17 @@ export function createMockDaemon() {
               : body.outcome === "edited"
                 ? (body.sentText ?? null)
                 : null;
+          // The delivery seam, as the daemon runs it (#170): only a
+          // channel-borne sent/edited draft is handed to an adapter — the
+          // outcome and its correction candidate are already recorded above
+          // and stand whatever happens here. The mock connects no adapter,
+          // so this records the same honest failure a daemon with no adapter
+          // writes, in the core's own wording; owner/unknown-origin drafts
+          // and discards record nothing (nowhere to deliver is not an error).
+          draft.delivery =
+            draft.provenance?.origin === "channel" && (body.outcome === "sent" || body.outcome === "edited")
+              ? { state: "failed", reason: `no connected adapter for channel kind "${draft.provenance.channelKind}"` }
+              : null;
           // An edit is the one outcome that queues a correction candidate —
           // the pairing the client's invalidation comments call out.
           if (body.outcome === "edited" && body.sentText && body.sentText !== draft.draftText) {

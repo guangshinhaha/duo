@@ -20,6 +20,7 @@ function draftFor(owner: string): DraftRecord {
     refused: false,
     escalationThreshold: 0.55,
     provenance: { origin: "unknown" },
+    delivery: null,
   };
 }
 

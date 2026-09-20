@@ -36,8 +36,9 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 // pre-provenance cache dies at launch instead of rendering wrong shapes;
 // the per-field render guards are the belt, this is the braces — the
 // durable pattern for every future wire-shape change. The value names the
-// last field that forced a bump.
-const CACHE_BUSTER = "provenance";
+// last field that forced a bump: `delivery` (#21), whose `.state` read
+// joined `provenance`'s `.origin` at the dereference grade.
+const CACHE_BUSTER = "delivery";
 // A 401 is exempt from the retry default: a revoked token never
 // re-authenticates on attempt two, so retrying only delays the return to
 // Setup by TanStack's full backoff window (~7s). A 404 is exempt with it

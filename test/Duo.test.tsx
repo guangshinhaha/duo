@@ -30,6 +30,7 @@ function draftFor(id: string, over?: Partial<DraftRecord>): DraftRecord {
     refused: false,
     escalationThreshold: 0.55,
     provenance: { origin: "unknown" },
+    delivery: null,
     ...over,
   };
 }
@@ -384,5 +385,105 @@ describe("#20 — the thread says who asked, and where they asked it", () => {
 
     expect(screen.queryByTestId("draft-origin")).toBeNull();
     expect(screen.queryByRole("link")).toBeNull();
+  });
+});
+
+describe("#21 — Send shows whether the answer arrived", () => {
+  const channelAsked = {
+    origin: "channel",
+    channelKind: "slack",
+    askerRef: "U04ARLJ9P",
+    threadId: null,
+    permalink: null,
+  } as const;
+
+  beforeEach(() => {
+    writeComposerBuffer("");
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function openSingle(draft: DraftRecord) {
+    stubDraftsResponse([draft]);
+    renderWithClient(<Duo api={api} />);
+    fireEvent.click((await screen.findAllByTestId("conversation-entry"))[0]);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(1));
+  }
+
+  it("a delivered reply says so on its entry", async () => {
+    await openSingle(
+      draftFor("1", {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        outcome: "sent",
+        sentText: "sent as drafted",
+        provenance: channelAsked,
+        delivery: { state: "delivered" },
+      }),
+    );
+    expect(screen.getByTestId("entry-outcome")).toHaveTextContent("Sent");
+    expect(screen.getByTestId("delivery-state")).toHaveTextContent("Delivered.");
+  });
+
+  it("an in-flight delivery says so", async () => {
+    await openSingle(
+      draftFor("1", {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        outcome: "sent",
+        sentText: "sent as drafted",
+        provenance: channelAsked,
+        delivery: { state: "pending" },
+      }),
+    );
+    expect(screen.getByTestId("delivery-state")).toHaveTextContent("In flight");
+  });
+
+  it("a failed delivery shows the daemon's reason — and the edit it carried is still plainly recorded", async () => {
+    await openSingle(
+      draftFor("1", {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        outcome: "edited",
+        sentText: "the edited text that was sent",
+        provenance: channelAsked,
+        delivery: { state: "failed", reason: 'no connected adapter for channel kind "slack"' },
+      }),
+    );
+    // The correction stands: the outcome, and the text actually sent, render
+    // as they always did — the failure is about transport only.
+    expect(screen.getByTestId("entry-outcome")).toHaveTextContent("Sent (edited)");
+    expect(screen.getByText("the edited text that was sent")).toBeInTheDocument();
+    // The reason is the daemon's string, verbatim.
+    expect(screen.getByTestId("delivery-state")).toHaveTextContent(
+      'Couldn’t deliver — no connected adapter for channel kind "slack"',
+    );
+  });
+
+  it("a self-asked question shows no delivery — it was never going anywhere", async () => {
+    await openSingle(
+      draftFor("1", {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        outcome: "sent",
+        sentText: "sent as drafted",
+        provenance: { origin: "owner" },
+        delivery: null,
+      }),
+    );
+    expect(screen.getByTestId("entry-outcome")).toHaveTextContent("Sent");
+    expect(screen.queryByTestId("delivery-state")).toBeNull();
+  });
+
+  it("offers no retry — the daemon exposes none, and a resend is not this client's to invent", async () => {
+    await openSingle(
+      draftFor("1", {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        outcome: "sent",
+        sentText: "sent as drafted",
+        provenance: channelAsked,
+        delivery: { state: "failed", reason: 'no connected adapter for channel kind "slack"' },
+      }),
+    );
+    expect(screen.getByTestId("delivery-state")).toBeInTheDocument();
+    expect(screen.queryByText(/retry/i)).toBeNull();
+    expect(screen.queryByText(/resend/i)).toBeNull();
   });
 });
