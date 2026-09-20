@@ -62,103 +62,109 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
 
   if (draft.escalated) {
     return (
-      <div className="flex flex-col gap-2 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="draft-card">
+      // flex-row so the hairline can lead the card (#32: Part 4's leading
+      // edge), with the card's own stack inside the column beside it.
+      <div className="flex flex-row gap-3 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="draft-card">
         <ConfidenceHairline result={result} />
-        <OwnerMessage>{draft.question}</OwnerMessage>
-        <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] px-4 py-3 text-[var(--muted)]" data-testid="escalation-reason">
-          {draft.escalationReason}
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <OwnerMessage>{draft.question}</OwnerMessage>
+          <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] px-4 py-3 text-[var(--muted)]" data-testid="escalation-reason">
+            {draft.escalationReason}
+          </div>
+          <SourceList sources={draft.sources} />
+          {!draft.refused &&
+            (answerEscalation.isSuccess ? (
+              <p className="text-xs text-[var(--confident)]" data-testid="answer-confirmation">
+                Queued as a standing-order candidate.
+              </p>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+                  placeholder="Answer it yourself — becomes a standing-order candidate"
+                  value={answerText}
+                  onChange={(e) => setAnswerText(e.target.value)}
+                />
+                <button
+                  className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
+                  disabled={!answerText.trim() || answerEscalation.isPending || !reachable}
+                  onClick={() => answerEscalation.mutate({ draftId: draft.id, answer: answerText.trim() })}
+                >
+                  Answer
+                </button>
+              </div>
+            ))}
+          <MutationError error={answerEscalation.error} />
         </div>
-        <SourceList sources={draft.sources} />
-        {!draft.refused &&
-          (answerEscalation.isSuccess ? (
-            <p className="text-xs text-[var(--confident)]" data-testid="answer-confirmation">
-              Queued as a standing-order candidate.
-            </p>
-          ) : (
-            <div className="flex gap-2">
-              <input
-                className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
-                placeholder="Answer it yourself — becomes a standing-order candidate"
-                value={answerText}
-                onChange={(e) => setAnswerText(e.target.value)}
-              />
-              <button
-                className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
-                disabled={!answerText.trim() || answerEscalation.isPending || !reachable}
-                onClick={() => answerEscalation.mutate({ draftId: draft.id, answer: answerText.trim() })}
-              >
-                Answer
-              </button>
-            </div>
-          ))}
-        <MutationError error={answerEscalation.error} />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="draft-card">
+    <div className="flex flex-row gap-3 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="draft-card">
       <ConfidenceHairline result={result} />
-      <OwnerMessage>{draft.question}</OwnerMessage>
-      <DuoMessage>
-        {editing ? (
-          <textarea
-            className="w-full rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] p-2 text-[var(--text)]"
-            value={editedText}
-            onChange={(e) => setEditedText(e.target.value)}
-            rows={4}
-          />
-        ) : (
-          draft.draftText
-        )}
-      </DuoMessage>
-      <SourceList sources={draft.sources} />
-      <div className="flex gap-2">
-        {editing ? (
-          <>
-            <button
-              className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
-              disabled={!editedText.trim() || recordOutcome.isPending || !reachable}
-              onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "edited", sentText: editedText.trim() })}
-            >
-              Send edited
-            </button>
-            <button
-              className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1"
-              onClick={() => {
-                // Discards the edit, not just the editing view — without
-                // resetting editedText, the abandoned text would silently
-                // reappear the next time Edit is clicked on this card.
-                setEditedText(draft.draftText ?? "");
-                setEditing(false);
-              }}
-            >
-              Cancel
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
-              disabled={recordOutcome.isPending || !reachable}
-              onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })}
-            >
-              Send
-            </button>
-            <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={() => setEditing(true)}>
-              Edit
-            </button>
-            <button
-              className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)] disabled:opacity-40"
-              disabled={recordOutcome.isPending || !reachable}
-              onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "discarded" })}
-            >
-              Ignore
-            </button>
-          </>
-        )}
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <OwnerMessage>{draft.question}</OwnerMessage>
+        <DuoMessage>
+          {editing ? (
+            <textarea
+              className="w-full rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] p-2 text-[var(--text)]"
+              value={editedText}
+              onChange={(e) => setEditedText(e.target.value)}
+              rows={4}
+            />
+          ) : (
+            draft.draftText
+          )}
+        </DuoMessage>
+        <SourceList sources={draft.sources} />
+        <div className="flex gap-2">
+          {editing ? (
+            <>
+              <button
+                className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
+                disabled={!editedText.trim() || recordOutcome.isPending || !reachable}
+                onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "edited", sentText: editedText.trim() })}
+              >
+                Send edited
+              </button>
+              <button
+                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1"
+                onClick={() => {
+                  // Discards the edit, not just the editing view — without
+                  // resetting editedText, the abandoned text would silently
+                  // reappear the next time Edit is clicked on this card.
+                  setEditedText(draft.draftText ?? "");
+                  setEditing(false);
+                }}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
+                disabled={recordOutcome.isPending || !reachable}
+                onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })}
+              >
+                Send
+              </button>
+              <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={() => setEditing(true)}>
+                Edit
+              </button>
+              <button
+                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)] disabled:opacity-40"
+                disabled={recordOutcome.isPending || !reachable}
+                onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "discarded" })}
+              >
+                Ignore
+              </button>
+            </>
+          )}
+        </div>
+        <MutationError error={recordOutcome.error} />
       </div>
-      <MutationError error={recordOutcome.error} />
     </div>
   );
 }

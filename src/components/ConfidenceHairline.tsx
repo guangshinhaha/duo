@@ -2,11 +2,15 @@ import type { DraftPipelineResult } from "../api/types.js";
 
 /**
  * The 2px hairline on a draft's leading edge (`client-tech-design.md` Part
- * 4). Never a percentage — `confidenceScore` is a weighted composite
- * against a configurable threshold, not a calibrated probability, so
- * rendering "62%" would be precision the number doesn't have. Four states,
- * derived from the real fields on `DraftPipelineResult` rather than a
- * separately-maintained mapping.
+ * 4) — a vertical rule in the gutter beside the entry, full entry height,
+ * so a column of drafts can be scanned by state. Never a percentage —
+ * `confidenceScore` is a weighted composite against a configurable
+ * threshold, not a calibrated probability, so rendering "62%" would be
+ * precision the number doesn't have. Four states, derived from the real
+ * fields on `DraftPipelineResult` rather than a separately-maintained
+ * mapping. Renders as `self-stretch` inside its parent's `flex-row`: the
+ * parent owns the leading-edge placement, this owns the 2px width and the
+ * colour.
  */
 export function ConfidenceHairline({ result }: { result: DraftPipelineResult }) {
   const state = hairlineState(result);
@@ -14,7 +18,7 @@ export function ConfidenceHairline({ result }: { result: DraftPipelineResult }) 
     state === "hedged"
       ? { backgroundColor: "var(--escalate)", opacity: 0.4 }
       : { backgroundColor: `var(--${colorToken(state)})` };
-  return <div data-testid="confidence-hairline" data-state={state} className="h-0.5 w-full rounded-full" style={style} />;
+  return <div data-testid="confidence-hairline" data-state={state} className="w-0.5 shrink-0 self-stretch rounded-full" style={style} />;
 }
 
 export type HairlineState = "refused" | "escalated" | "hedged" | "confident";

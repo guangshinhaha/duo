@@ -48,20 +48,24 @@ function responseText(draft: DraftRecord): string {
  */
 function ThreadEntry({ draft }: { draft: DraftRecord }) {
   return (
-    <div className="flex flex-col gap-2" data-testid="thread-entry">
+    // flex-row so the hairline leads the entry (#32) — a gutter rule you
+    // scan a column by, not a strip across the top.
+    <div className="flex flex-row gap-2" data-testid="thread-entry">
       <ConfidenceHairline result={toDraftPipelineResult(draft)} />
-      <OwnerMessage>{draft.question}</OwnerMessage>
-      {draft.escalated ? (
-        <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] px-4 py-3 text-[var(--muted)]" data-testid="escalation-reason">
-          {draft.escalationReason}
-        </div>
-      ) : (
-        <DuoMessage>{responseText(draft)}</DuoMessage>
-      )}
-      <p className="text-xs text-[var(--faint)]" data-testid="entry-outcome">
-        {outcomeLabel(draft)}
-      </p>
-      <SourceList sources={draft.sources} />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <OwnerMessage>{draft.question}</OwnerMessage>
+        {draft.escalated ? (
+          <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] px-4 py-3 text-[var(--muted)]" data-testid="escalation-reason">
+            {draft.escalationReason}
+          </div>
+        ) : (
+          <DuoMessage>{responseText(draft)}</DuoMessage>
+        )}
+        <p className="text-xs text-[var(--faint)]" data-testid="entry-outcome">
+          {outcomeLabel(draft)}
+        </p>
+        <SourceList sources={draft.sources} />
+      </div>
     </div>
   );
 }

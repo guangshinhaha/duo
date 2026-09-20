@@ -22,11 +22,10 @@ function AnsweredAnswer({ outcome }: { outcome: Extract<PublicAnswerOutcome, { k
   return (
     <div
       data-testid="duo-answer"
-      className="flex flex-col gap-2 rounded-[var(--r-lg)] border border-[var(--edge)] bg-[var(--surface-2)] px-4 py-3"
+      className="flex flex-row gap-3 rounded-[var(--r-lg)] border border-[var(--edge)] bg-[var(--surface-2)] px-4 py-3"
     >
-      <div className="text-xs font-medium tracking-wide text-[var(--muted)]" data-testid="duo-answer-attribution">
-        the owner&#39;s duo
-      </div>
+      {/* #32: the hairline leads the answer card on its leading edge, same
+          gutter rule as the owner's surfaces. */}
       <ConfidenceHairline
         result={{
           kind: "draft",
@@ -36,12 +35,17 @@ function AnsweredAnswer({ outcome }: { outcome: Extract<PublicAnswerOutcome, { k
           confidence: outcome.confidence,
         }}
       />
-      <p className="whitespace-pre-wrap text-[var(--text)]">{outcome.text}</p>
-      <p className="text-xs text-[var(--faint)]" data-testid="duo-answer-evidence-age">
-        {outcome.evidenceAgeDays === null
-          ? "freshest evidence: undated"
-          : `freshest evidence: ${outcome.evidenceAgeDays} day${outcome.evidenceAgeDays === 1 ? "" : "s"} old`}
-      </p>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div className="text-xs font-medium tracking-wide text-[var(--muted)]" data-testid="duo-answer-attribution">
+          the owner&#39;s duo
+        </div>
+        <p className="whitespace-pre-wrap text-[var(--text)]">{outcome.text}</p>
+        <p className="text-xs text-[var(--faint)]" data-testid="duo-answer-evidence-age">
+          {outcome.evidenceAgeDays === null
+            ? "freshest evidence: undated"
+            : `freshest evidence: ${outcome.evidenceAgeDays} day${outcome.evidenceAgeDays === 1 ? "" : "s"} old`}
+        </p>
+      </div>
     </div>
   );
 }
