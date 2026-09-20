@@ -177,4 +177,33 @@ describe("App — hash routing between the surfaces", () => {
     await waitFor(() => expect(screen.getByTestId("audit-empty")).toBeInTheDocument());
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
+
+  it("navigates to Settings on #settings, and unpair clears the persisted cache and returns to Setup", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "tok" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify([draftFor("A")]), { status: 200 })),
+    );
+
+    render(<App />);
+
+    // Review loads first (the default route) so a query actually runs and
+    // the persister has something to write — Settings itself queries
+    // nothing, so without this the cache-removal below would prove nothing.
+    await waitFor(() => expect(screen.getByText("question from A's daemon")).toBeInTheDocument());
+    await waitFor(() => expect(localStorage.getItem("duo-cache")).toContain("question from A's daemon"), { timeout: 3000 });
+
+    window.location.hash = "#settings";
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => expect(screen.getByTestId("settings")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("settings-unpair"));
+    fireEvent.click(screen.getByTestId("settings-unpair-confirm"));
+
+    // Back to the first-run screen, with neither the config nor the old
+    // duo's cached data left behind on this device.
+    await waitFor(() => expect(screen.getByPlaceholderText("100.64.1.5:7717")).toBeInTheDocument());
+    expect(localStorage.getItem("duo.api-config")).toBeNull();
+    await waitFor(() => expect(localStorage.getItem("duo-cache")).toBeNull());
+  });
 });

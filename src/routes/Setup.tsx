@@ -9,8 +9,11 @@ import type { DuoApiConfig } from "../api/client.js";
  * subsequent API call 404s or hits the wrong server with nothing telling
  * the owner what went wrong. Returns the normalized URL, or `null` for
  * anything the `URL` constructor itself can't parse.
+ *
+ * Exported because Settings re-edits the same field with the same rules
+ * and the same error wording — one validator, no second copy to drift.
  */
-function normalizeBaseUrl(raw: string): string | null {
+export function normalizeBaseUrl(raw: string): string | null {
   const trimmed = raw.trim();
   // No manual trailing-slash strip: `URL.origin` (used below) is always
   // just `protocol://host[:port]` with no trailing slash by construction,
