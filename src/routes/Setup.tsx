@@ -36,8 +36,15 @@ export function normalizeBaseUrl(raw: string): string | null {
   }
 }
 
-/** First-run screen: paste the daemon's address and the token `duo pair new <name>` printed. No auth flow beyond this — a bearer token is the whole scheme (client-tech-design.md Part 2). */
-export function Setup({ onConnect }: { onConnect: (config: DuoApiConfig) => void }) {
+/**
+ * First-run screen: paste the daemon's address and the token `duo pair new
+ * <name>` printed. No auth flow beyond this — a bearer token is the whole
+ * scheme (client-tech-design.md Part 2). `notice` is App's one non-first-run
+ * reason for being here: a revoked token (#41) unpairs from any surface and
+ * lands here saying so, so the owner is never left guessing why the app
+ * signed them out.
+ */
+export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig) => void; notice?: string }) {
   const [baseUrlInput, setBaseUrlInput] = useState("");
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +78,15 @@ export function Setup({ onConnect }: { onConnect: (config: DuoApiConfig) => void
         }}
       >
         <h1 className="text-lg font-medium">Connect to your duo</h1>
+        {notice && (
+          <p
+            className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--escalate)]"
+            data-testid="setup-notice"
+            role="status"
+          >
+            {notice}
+          </p>
+        )}
         <p className="text-sm text-[var(--muted)]">
           Run <code>duo pair new &quot;this device&apos;s name&quot;</code> on your Mac, then paste its address and token here.
         </p>
