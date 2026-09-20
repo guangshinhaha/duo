@@ -344,3 +344,60 @@ describe("mock daemon — paged history (duo #29, mirroring digital-duo #203)", 
     expect(page.map((d) => d.id)).toEqual([pending.at(-1).id]);
   });
 });
+
+describe("mock daemon — the correction queue's disposition routes (duo #44, mirroring digital-duo #173)", () => {
+  it("lists every status bare, and filters on ?status=, the way listCorrectionCandidates does", async () => {
+    const bare = await (await get("/review")).json();
+    // The seed's c-1 is pending; anything earlier tests queued is pending
+    // too — so bare (all statuses) is a superset of the pending filter.
+    const pending = await (await get("/review?status=pending")).json();
+    expect(bare.length).toBeGreaterThanOrEqual(pending.length);
+    expect(pending.every((c) => c.status === "pending")).toBe(true);
+    // Ascending by creation, the daemon's order — never newest-first.
+    const times = bare.map((c) => c.createdAt);
+    expect([...times].sort()).toEqual(times);
+  });
+
+  it("approves a pending candidate: status flips, reviewedAt stamps, the candidate comes back", async () => {
+    const before = await (await get("/review?status=pending")).json();
+    if (before.length === 0) {
+      return; // this run's queue was emptied by earlier tests; nothing to pin
+    }
+    const target = before[0];
+    const res = await post(`/review/${target.id}/approve`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.candidate.id).toBe(target.id);
+    expect(body.candidate.status).toBe("approved");
+    expect(body.candidate.reviewedAt).not.toBeNull();
+    // The route returns the write result beside the candidate, as #173 does.
+    expect(body.result.kind).toBe(target.kind);
+
+    const after = await (await get("/review?status=pending")).json();
+    expect(after.some((c) => c.id === target.id)).toBe(false);
+  });
+
+  it("rejecting works the same, and the daemon's 409 is the honest word for a double decision", async () => {
+    const before = await (await get("/review?status=pending")).json();
+    if (before.length === 0) {
+      return;
+    }
+    const target = before[0];
+    const rejected = await post(`/review/${target.id}/reject`);
+    expect(rejected.status).toBe(200);
+    expect((await rejected.json()).candidate.status).toBe("rejected");
+
+    // Decide it again — the mock is in memory, so the row remembers.
+    const again = await post(`/review/${target.id}/approve`);
+    expect(again.status).toBe(409);
+    const error = (await again.json()).error;
+    expect(error.code).toBe("CandidateAlreadyReviewedError");
+    expect(error.message).toBe(`Correction candidate "${target.id}" was already reviewed (status: "rejected")`);
+  });
+
+  it("an unknown id is the review layer's own 404", async () => {
+    const res = await post("/review/nope/approve");
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.message).toBe('No pending correction candidate with id "nope"');
+  });
+});

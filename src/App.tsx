@@ -15,6 +15,7 @@ import { Setup } from "./routes/Setup.js";
 import { Settings } from "./routes/Settings.js";
 import { Review } from "./routes/Review.js";
 import { Draft } from "./routes/Draft.js";
+import { Corrections } from "./routes/Corrections.js";
 import { Duo } from "./routes/Duo.js";
 import { Trust } from "./routes/Trust.js";
 import { Audit } from "./routes/Audit.js";
@@ -67,7 +68,7 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * opens — modeled as an object so no string compare can ever confuse it
  * with a named route.
  */
-type Route = "review" | "duo" | "trust" | "audit" | "settings" | "mirror" | { draft: string };
+type Route = "review" | "corrections" | "duo" | "trust" | "audit" | "settings" | "mirror" | { draft: string };
 
 function routeFromHash(hash: string): Route {
   if (hash.startsWith("#draft/")) {
@@ -81,6 +82,9 @@ function routeFromHash(hash: string): Route {
   }
   if (hash === "#mirror") {
     return "mirror";
+  }
+  if (hash === "#corrections") {
+    return "corrections";
   }
   if (hash === "#duo") {
     return "duo";
@@ -173,6 +177,8 @@ function routeSurface(route: Route, api: DuoApiConfig, setApi: (config: DuoApiCo
   switch (route) {
     case "mirror":
       return <Mirror api={api} />;
+    case "corrections":
+      return <Corrections api={api} />;
     case "duo":
       return <Duo api={api} />;
     case "trust":
@@ -255,6 +261,12 @@ function AppShell() {
           {/* A draft page belongs to the review loop — Review stays the lit
               entry while one is open, so the way back is always named. */}
           <ReviewLink api={api} active={route === "review" || typeof route === "object"} />
+          {/* #44: the loop's second queue, directly under Review — deciding
+              drafts and confirming what they taught are the same morning's
+              work, so they read together, each still its own surface. */}
+          <NavLink active={route === "corrections"} href="#corrections">
+            Corrections
+          </NavLink>
           <NavLink active={route === "duo"} href="#duo">
             Duo
           </NavLink>

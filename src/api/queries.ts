@@ -102,7 +102,40 @@ export function useDraftsFeed(api: DuoApiConfig) {
 }
 
 export function useReview(api: DuoApiConfig) {
-  return useQuery({ queryKey: queryKeys.review, queryFn: () => apiRequest<CorrectionCandidate[]>(api, "/review") });
+  return useQuery({
+    queryKey: queryKeys.review,
+    // The queue screen is the pending list, so it asks for the daemon's
+    // own filter (#44) rather than every status ever reviewed — the bare
+    // route returns them all, which is history, not a queue.
+    queryFn: () => apiRequest<CorrectionCandidate[]>(api, "/review?status=pending"),
+  });
+}
+
+/**
+ * #44: disposing of a correction candidate — the training signal's moment
+ * of confirmation. `approve`/`reject` are digital-duo #173's routes; the
+ * daemon owns every consequence (voice.md writes, rule writes, finality),
+ * and a 409 (`CandidateAlreadyReviewedError` — another device won the
+ * race — or `CandidateConflictError`) travels as the mutation's error for
+ * the screen to render verbatim.
+ */
+export function useDecideCandidate(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ candidateId, action }: { candidateId: string; action: "approve" | "reject" }) =>
+      apiRequest<{ candidate: CorrectionCandidate }>(api, `/review/${encodeURIComponent(candidateId)}/${action}`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.review });
+      // An approved candidate is a write the Mirror counts — style lands
+      // in voice corrections, substance as a confirmed rule — so the rules
+      // listing is stale the moment a decision lands (§3.2's discipline:
+      // one action writes two surfaces; miss the second and the Mirror
+      // shows a rule count the daemon no longer has).
+      queryClient.invalidateQueries({ queryKey: queryKeys.mirrorRules });
+    },
+  });
 }
 
 export function useMirrorPortrait(api: DuoApiConfig) {
