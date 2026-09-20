@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { askQuestion, isAskLinkUsable, parseAskLink, type AskLinkConfig } from "../api/ask.js";
 import type { PublicAnswerOutcome } from "../api/types.js";
 
@@ -95,6 +95,11 @@ export function Ask() {
   const [outcome, setOutcome] = useState<PublicAnswerOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // The probe promise lives in a ref so React 19 StrictMode's dev-only
+  // mount-cleanup-mount cycle shares one POST instead of firing two: the
+  // real daemon's auth hook counts failures per IP (10/60s), and a dead
+  // link opened in `npm run dev` must not burn the limit twice as fast.
+  const probeRef = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     // A link with connection details is checked once, on load, with a
@@ -105,8 +110,9 @@ export function Ask() {
     if (config === null) {
       return;
     }
+    probeRef.current ??= isAskLinkUsable(config);
     let cancelled = false;
-    void isAskLinkUsable(config).then((usable) => {
+    void probeRef.current.then((usable) => {
       if (!cancelled) {
         setLinkStatus(usable ? "ready" : "dead");
       }

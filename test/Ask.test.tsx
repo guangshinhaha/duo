@@ -167,6 +167,27 @@ describe("Ask — the no-install asker page (duo #1/#2, on digital-duo #158/#159
     expect(screen.getByTestId("ask-question")).toBeInTheDocument();
   });
 
+  it("keeps the question box when the probe is rate-limited — 429 says nothing about the link, unlike 401", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { code: "rate_limited", message: "Too many failed authentication attempts. Try again later." } }), { status: 429 }),
+    );
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(answered), { status: 200 }));
+    await renderReady(fetchMock);
+    await ask();
+
+    await waitFor(() => expect(screen.getByTestId("duo-answer")).toBeInTheDocument());
+    expect(screen.queryByTestId("ask-dead-link")).not.toBeInTheDocument();
+  });
+
+  it("shows no question box while the link check is still in flight", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    render(<Ask />);
+
+    expect(screen.getByTestId("ask-checking")).toBeInTheDocument();
+    expect(screen.queryByTestId("ask-question")).not.toBeInTheDocument();
+  });
+
   it("renders an honest missing-link state when the hash carries no connection details", () => {
     window.location.hash = "";
     const fetchMock = vi.fn();

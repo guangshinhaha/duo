@@ -178,19 +178,28 @@ describe("mock daemon — mirror, trust, audit, ask (D2/D6)", () => {
   it("serves the three public-answer outcomes on POST /ask", async () => {
     const answered = await (await post("/ask", { question: "What's the refund policy?" })).json();
     expect(answered.kind).toBe("answered");
+    expect(answered.duo).toBe("personal");
     expect(typeof answered.text).toBe("string");
-    expect(answered.confidence.threshold).toBe(0.55);
-    expect(answered.evidenceAgeDays).toBe(3);
+    expect(answered.text).toContain("Confidence: 0.84");
+    expect(answered.sources.length).toBeGreaterThan(0);
 
     const passed = await (await post("/ask", { question: "Can you pass this to the owner?" })).json();
     expect(passed.kind).toBe("passed_on");
-    expect(typeof passed.message).toBe("string");
-    // Present on the wire, never for the asker's page to render.
-    expect(typeof passed.ownerNotice).toBe("string");
+    expect(typeof passed.text).toBe("string");
 
     const declined = await (await post("/ask", { question: "What's her salary?" })).json();
     expect(declined.kind).toBe("declined_refused");
-    expect(typeof declined.message).toBe("string");
+    expect(typeof declined.text).toBe("string");
+
+    // The device-principal-only fields never reach an asker (digital-duo
+    // #159 R8) — pinning their absence is what keeps this mock honest
+    // about the asker's envelope rather than the CLI's richer shape.
+    for (const outcome of [answered, passed, declined]) {
+      expect(outcome).not.toHaveProperty("draftId");
+      expect(outcome).not.toHaveProperty("confidence");
+      expect(outcome).not.toHaveProperty("evidenceAgeDays");
+      expect(outcome).not.toHaveProperty("ownerNotice");
+    }
   });
 
   it("seeds the read-only surfaces in their wire shapes", async () => {

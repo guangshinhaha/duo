@@ -154,16 +154,18 @@ export interface ApiError {
   error: { code: string; message: string };
 }
 
-// Mirrors what `POST /ask` actually puts on the wire *for an ask token*
-// (digital-duo #159's route projection in `src/serve/server.ts`), not the
-// CLI's richer `PublicAnswerOutcome` from `src/permissions/public-answer.ts`:
-// the daemon composes the full public post — answer, sources, attribution,
-// confidence, evidence age — into `text` before responding, and the
-// owner-facing extras (`draftId`, `logEntryId`, `topicId`, `confidence`,
-// `evidenceAgeDays`, `ownerNotice`) ride along only for a *device*
-// principal. This page always calls with an ask token, so those fields
-// never arrive and are deliberately absent here — a shape that cannot
-// even express the owner's view is the surest way not to render it.
+// Mirrors what `POST /ask` puts on the wire *for an ask token* (digital-duo
+// #159's route projection in its `src/serve/server.ts` — contract-first
+// against #159's implemented branch while it awaits merge; this repo's
+// `mock/daemon.mjs` serves the same shape meanwhile), not the CLI's richer
+// `PublicAnswerOutcome` from `src/permissions/public-answer.ts`: the daemon
+// composes the full public post — answer, sources, attribution, confidence,
+// evidence age — into `text` before responding, and the owner-facing extras
+// (`draftId`, `logEntryId`, `topicId`, `confidence`, `evidenceAgeDays`,
+// `ownerNotice`) ride along only for a *device* principal. This page always
+// calls with an ask token, so those fields never arrive and are
+// deliberately absent here — a shape that cannot even express the owner's
+// view is the surest way not to render it.
 // `kind` discriminates; the split matters: the two non-answer variants are
 // *distinct* fixed strings by design (#43 AC3), worded so an asker can
 // never infer what the answer might have been — a surface must render
