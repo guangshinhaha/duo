@@ -9,6 +9,8 @@ import { useDraftReadySocket } from "./api/ws.js";
 import { SyncStatusProvider } from "./sync.js";
 import { OfflineBar } from "./components/OfflineBar.js";
 import { notifyDraftReady } from "./notifications.js";
+import { setDockBadgeCount } from "./dockBadge.js";
+import { usePendingDrafts } from "./api/queries.js";
 import { Setup } from "./routes/Setup.js";
 import { Settings } from "./routes/Settings.js";
 import { Review } from "./routes/Review.js";
@@ -78,18 +80,58 @@ function useHashRoute(): Route {
 }
 
 /** One sidebar entry: same shape either way, active vs muted — the whole difference between the routes' links. */
-function NavLink({ active, href, children }: { active: boolean; href: string; children: ReactNode }) {
+function NavLink({
+  active,
+  href,
+  count,
+  children,
+}: {
+  active: boolean;
+  href: string;
+  /** #22: a live count, shown only when non-zero — absent for entries that carry none. */
+  count?: number;
+  children: ReactNode;
+}) {
   return (
     <a
-      className={
-        active
-          ? "rounded-[var(--r-sm)] bg-[var(--surface)] px-2 py-1.5 text-sm"
-          : "rounded-[var(--r-sm)] px-2 py-1.5 text-sm text-[var(--muted)]"
-      }
+      className={`flex items-center gap-2 rounded-[var(--r-sm)] px-2 py-1.5 text-sm ${
+        active ? "bg-[var(--surface)]" : "text-[var(--muted)]"
+      }`}
       href={href}
     >
       {children}
+      {count !== undefined && count > 0 && (
+        <span
+          data-testid="review-badge"
+          className="ml-auto rounded-full bg-[var(--accent)] px-1.5 text-xs font-medium text-[var(--bg)]"
+        >
+          {count}
+        </span>
+      )}
     </a>
+  );
+}
+
+/**
+ * Review's sidebar entry with its count (#22 / §3.1: "badge = drafts where
+ * outcome is null"). The count is the pending-drafts query itself, so it
+ * already follows the one push channel: a `draft-ready` push invalidates
+ * `["drafts"]`, the pending list refetches, and both badges move without a
+ * manual refresh. The dock mirror lives here too — the one place the count
+ * exists — and its cleanup clears the dock on unpair, so a stale count
+ * never outlives its pairing.
+ */
+function ReviewLink({ api, active }: { api: DuoApiConfig; active: boolean }) {
+  const { data } = usePendingDrafts(api);
+  const count = data?.length ?? 0;
+  useEffect(() => {
+    void setDockBadgeCount(count);
+    return () => void setDockBadgeCount(0);
+  }, [count]);
+  return (
+    <NavLink active={active} href="#review" count={count}>
+      Review
+    </NavLink>
   );
 }
 
@@ -165,9 +207,7 @@ function AppShell() {
       <div className="flex h-screen bg-[var(--bg)] text-[var(--text)]">
         <nav className="flex w-56 flex-col gap-1 border-r border-[var(--edge)] p-3">
           <div className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-[var(--faint)]">Duo</div>
-          <NavLink active={route === "review"} href="#review">
-            Review
-          </NavLink>
+          <ReviewLink api={api} active={route === "review"} />
           <NavLink active={route === "duo"} href="#duo">
             Duo
           </NavLink>
