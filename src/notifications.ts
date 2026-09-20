@@ -1,4 +1,4 @@
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { isPermissionGranted, onAction, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 
 /**
  * Native "a new draft is waiting" notifications — build step C5
@@ -15,6 +15,18 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
  * denial is both useless and hostile.
  */
 let permission: "unknown" | "granted" | "denied" = "unknown";
+
+/*
+ * #25: a notification opens the draft it is about. The plugin's action
+ * callback echoes the notification's own options, and its only
+ * caller-controllable field is a 32-bit integer `id` — so each
+ * draft-ready notification carries the next integer and this map carries
+ * the integer→draft-id half the wire cannot. Bounded: a click arriving on
+ * a long-gone notification finds no entry, which the handler treats as
+ * "not ours" and ignores.
+ */
+let nextNotificationId = 1;
+const draftIdByNotificationId = new Map<number, string>();
 
 export async function ensureNotificationPermission(): Promise<boolean> {
   if (permission === "granted") {
@@ -38,14 +50,43 @@ export async function ensureNotificationPermission(): Promise<boolean> {
   }
 }
 
-export async function notifyDraftReady(): Promise<void> {
+export async function notifyDraftReady(draftId: string): Promise<void> {
   if (!(await ensureNotificationPermission())) {
     return;
   }
   try {
-    sendNotification({ title: "Duo", body: "A new draft is waiting for your review." });
+    const id = nextNotificationId++;
+    draftIdByNotificationId.set(id, draftId);
+    if (draftIdByNotificationId.size > 100) {
+      const oldest = draftIdByNotificationId.keys().next();
+      if (!oldest.done) {
+        draftIdByNotificationId.delete(oldest.value);
+      }
+    }
+    sendNotification({ id, title: "Duo", body: "A new draft is waiting for your review." });
   } catch {
     // A failed notification must never break the surface that triggered it —
     // the draft is still in the Review list either way.
+  }
+}
+
+/**
+ * Subscribes, once per app, to notification clicks and routes them to the
+ * clicked draft's own address. Returns the unwire function (the caller owns
+ * the subscription's lifetime) or null outside the shell — a plain browser
+ * tab has no notifications to click, which is not an error anywhere the UI
+ * needs to show.
+ */
+export async function wireDraftNotificationClicks(): Promise<(() => void) | null> {
+  try {
+    const listener = await onAction((notification) => {
+      const draftId = notification.id !== undefined ? draftIdByNotificationId.get(notification.id) : undefined;
+      if (draftId !== undefined) {
+        window.location.hash = `#draft/${draftId}`;
+      }
+    });
+    return () => void listener.unregister();
+  } catch {
+    return null;
   }
 }
