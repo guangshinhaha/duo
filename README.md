@@ -78,6 +78,41 @@ npm run lint
 There's no build-time coupling to the CLI/daemon package — this is a separate npm project talking
 to `duo serve` over HTTP, the same way the Tauri-wrapped Mac and phone apps eventually will.
 
+### Testing without the real daemon
+
+The real daemon doesn't send CORS headers yet (digital-duo #167), so every browser origin —
+including `npm run dev` on this machine — is refused by it today. `mock/daemon.mjs` (#16) is the
+stand-in: the daemon's whole route contract from this repo, zero dependencies, with the CORS
+header set #167 will add (this file doubles as a live reference for it).
+
+```
+npm run mock     # mock daemon on http://127.0.0.1:7720
+npm run dev      # then pair with address http://127.0.0.1:7720 and any non-empty token
+```
+
+What it serves: every route the client calls, including the three the real daemon doesn't yet —
+`POST /ask` (all three public-answer outcomes), the `/ws` handshake, and CORS. State is seeded in
+memory and the POST routes really mutate it, so the whole loop works: ask in Duo, send/edit/ignore
+in Review, answer an escalation, approve a rule. A restart resets everything.
+
+Question keywords pick the outcome, so you can reach each branch on purpose:
+
+| Keyword in the question | Outcome |
+| --- | --- |
+| "refuse" | refused escalation |
+| "should I" / "escalate" | judgment escalation |
+| anything else (drafts) / "pass" (ask) | a draft / passed on |
+| "secret" / "salary" / "address" (ask) | declined |
+
+The asker page works against it too — open
+`ask.html#host=http%3A%2F%2F127.0.0.1%3A7720&token=ask-token`. And the push channel has a demo:
+`POST /mock/push-draft` fabricates a daemon-side draft and broadcasts `draft-ready`, so the socket,
+the refetch, and the notification path can all be watched live (mock-only; the real daemon has no
+such route and needs none).
+
+Swapping to the real daemon when the core work lands is Settings → Forget this device → re-pair
+with the real address and token. Nothing in `src/` knows the mock exists.
+
 The Mac shell needs a Rust toolchain (≥1.89 in practice — the current tauri dependency tree):
 
 ```

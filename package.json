@@ -10,6 +10,7 @@
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "mock": "node mock/daemon.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
