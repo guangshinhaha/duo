@@ -25,6 +25,8 @@ const portrait: InterruptionPortrait = {
   ],
   topFiveShare: 0.85,
   busiestThreads: [{ threadId: "th1", count: 20, share: 0.5 }],
+  tooThin: false,
+  minimumQuestionsToCharacterize: 10,
 };
 
 function ruleFor(id: string, over?: Partial<Rule>): Rule {
@@ -83,10 +85,14 @@ describe("Mirror — the owner's window onto what the duo derived (C6)", () => {
   });
 
   it("renders the honest thin-data state rather than zeros when history is insufficient (AR-19)", async () => {
-    stubMirrorResponses({ ...portrait, insufficientHistory: true }, listing);
+    // Field names as the daemon actually sends them (verified live 2026-09-20):
+    // `tooThin` + `minimumQuestionsToCharacterize`, not a guessed `insufficientHistory`.
+    stubMirrorResponses({ ...portrait, tooThin: true, totalQuestions: 3 }, listing);
     renderWithClient(<Mirror api={api} />);
     await waitFor(() => expect(screen.getByTestId("portrait-thin")).toBeInTheDocument());
     expect(screen.getByTestId("portrait-thin")).toHaveTextContent("Not enough history yet");
+    expect(screen.getByTestId("portrait-thin")).toHaveTextContent("10 questions");
+    expect(screen.getByTestId("portrait-thin")).toHaveTextContent("has 3");
     expect(screen.queryByTestId("portrait")).toBeNull();
   });
 
