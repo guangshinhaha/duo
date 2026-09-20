@@ -19,7 +19,7 @@ export function DuoMessageReference({ ownerName, children }: { ownerName: string
       className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)]"
     >
       <div
-        className="mb-1 text-xs font-medium tracking-wide text-[var(--muted)]"
+        className="mb-1 type-provenance text-[var(--muted)]"
         data-testid="duo-message-reference-attribution"
       >
         {ownerName}&#39;s duo

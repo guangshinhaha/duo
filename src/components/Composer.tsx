@@ -62,7 +62,7 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
       <div className="flex items-start gap-2">
         <textarea
           aria-label="Question for your duo"
-          className="flex-1 resize-none rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1.5 text-[var(--text)]"
+          className="flex-1 resize-none rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
           placeholder="Ask your duo…"
           rows={Math.max(1, Math.min(8, question.split("\n").length))}
           value={question}
@@ -79,7 +79,7 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
         />
         <div className="flex flex-col gap-2">
           <button
-            className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1.5 text-[var(--bg)] disabled:opacity-40"
+            className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
             data-testid="composer-submit"
             disabled={disabled}
             type="submit"
@@ -88,7 +88,7 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
           </button>
           {createDraft.isPending && (
             <button
-              className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1.5 text-[var(--muted)]"
+              className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)]"
               data-testid="composer-cancel"
               onClick={cancel}
               type="button"
@@ -98,7 +98,7 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
           )}
         </div>
       </div>
-      <p className="mt-2 text-xs text-[var(--faint)]" data-testid="composer-thread">
+      <p className="mt-2 type-provenance text-[var(--faint)]" data-testid="composer-thread">
         Asking in: {threadLabel}
       </p>
       <MutationError error={cancelledByOwner ? null : createDraft.error} />

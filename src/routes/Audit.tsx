@@ -14,24 +14,24 @@ function formatWhen(iso: string): string {
  */
 function AuditItem({ entry }: { entry: AuditEntry }) {
   return (
-    <div className="flex flex-col gap-2 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="audit-entry">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+    <div className="flex flex-col gap-2 shape-entry p-4" data-testid="audit-entry">
+      <div className="flex flex-wrap items-center gap-2 type-provenance text-[var(--muted)]">
         <span data-testid="audit-when">{formatWhen(entry.createdAt)}</span>
-        <span data-testid="audit-asker">
+        <span className="type-identifier" data-testid="audit-asker">
           {entry.askerRef}
           {entry.askerResolved ? null : (
-            <span className="ml-1 rounded-[var(--r-sm)] border border-dashed border-[var(--edge)] px-1.5 py-0.5" data-testid="audit-asker-unresolved">
+            <span className="ml-1 rounded-[var(--r-sm)] border border-dashed border-[var(--edge)] px-2 py-0" data-testid="audit-asker-unresolved">
               unresolved
             </span>
           )}
         </span>
         {entry.declined && (
-          <span className="rounded-[var(--r-sm)] border border-[var(--edge)] px-1.5 py-0.5 text-[var(--refused)]" data-testid="audit-declined">
+          <span className="rounded-[var(--r-sm)] border border-[var(--edge)] px-2 py-0 text-[var(--refused)]" data-testid="audit-declined">
             declined
           </span>
         )}
       </div>
-      <div className="text-sm" data-testid="audit-question">
+      <div className="type-body" data-testid="audit-question">
         {entry.question}
       </div>
       <DuoMessage>
@@ -67,10 +67,13 @@ export function Audit({ api }: { api: DuoApiConfig }) {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-6" data-testid="audit-list">
-      {[...entries].reverse().map((entry) => (
-        <AuditItem key={entry.id} entry={entry} />
-      ))}
+    // #33: the log is one panel — a record, grouped as a record.
+    <div className="p-6">
+      <div className="shape-container flex flex-col gap-4 p-4" data-testid="audit-list">
+        {[...entries].reverse().map((entry) => (
+          <AuditItem key={entry.id} entry={entry} />
+        ))}
+      </div>
     </div>
   );
 }

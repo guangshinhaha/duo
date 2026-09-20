@@ -9,11 +9,13 @@ import { useAssertNotInsideDuoMessage } from "./DuoMessage.js";
 export function OwnerMessage({ children }: { children: ReactNode }) {
   useAssertNotInsideDuoMessage("OwnerMessage");
   return (
-    <div
-      data-testid="owner-message"
-      className="rounded-[var(--r-lg)] border border-[var(--edge)] bg-[var(--surface)] px-4 py-3 text-[var(--text)]"
-    >
-      <div className="mb-1 text-xs font-medium tracking-wide text-[var(--muted)]">You</div>
+    // #33: the owner's words stand unboxed — of the two voices, only the
+    // duo's arrives in a container (§1.6: duo output is structurally
+    // distinct, "a different container, not a badge on the same one"), so
+    // the box itself is the label, and the owner's question reads as the
+    // thing being answered rather than another card in the pile.
+    <div data-testid="owner-message" className="type-body text-[var(--text)]">
+      <div className="mb-1 type-provenance text-[var(--muted)]">You</div>
       <div>{children}</div>
     </div>
   );

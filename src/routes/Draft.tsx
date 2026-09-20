@@ -48,11 +48,11 @@ export function Draft({ api, draftId }: { api: DuoApiConfig; draftId: string }) 
     return (
       <div className="flex flex-col items-start gap-3 p-6" data-testid={notOnThisDuo ? "draft-not-found" : "draft-error"}>
         {notOnThisDuo ? (
-          <p className="text-sm">This draft is not on this duo.</p>
+          <p className="type-body">This draft is not on this duo.</p>
         ) : (
           <MutationError error={draft.error} />
         )}
-        <a className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-sm" href="#review">
+        <a className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-body" href="#review">
           Back to Review
         </a>
       </div>

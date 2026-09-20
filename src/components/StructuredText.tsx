@@ -80,7 +80,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
     const [whole, code, linkLabel, linkUrl] = match;
     if (code !== undefined) {
       nodes.push(
-        <code key={`${keyPrefix}-code-${index}`} data-testid="structured-code" className="rounded-[var(--r-sm)] bg-[var(--surface)] px-1 py-0.5 text-[0.9em]">
+        <code key={`${keyPrefix}-code-${index}`} data-testid="structured-code" className="rounded-[var(--r-sm)] bg-[var(--surface)] px-1 py-0 text-[0.9em]">
           {code}
         </code>,
       );
@@ -123,7 +123,7 @@ export function StructuredText({ text }: { text: string }) {
           <pre
             key={index}
             data-testid="structured-codeblock"
-            className="overflow-x-auto rounded-[var(--r-sm)] bg-[var(--surface)] p-2 text-xs"
+            className="overflow-x-auto rounded-[var(--r-sm)] bg-[var(--surface)] p-2 type-body"
           >
             <code>{block.text}</code>
           </pre>

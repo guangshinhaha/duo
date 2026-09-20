@@ -25,19 +25,19 @@ export function QueuedMessages() {
           data-state={message.state}
           className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] px-4 py-3"
         >
-          <p className="whitespace-pre-wrap text-sm text-[var(--text)]">{message.text}</p>
+          <p className="whitespace-pre-wrap type-body text-[var(--text)]">{message.text}</p>
           {message.state !== "failed" ? (
-            <p data-testid="queued-pending" className="mt-1 text-xs text-[var(--muted)]">
+            <p data-testid="queued-pending" className="mt-1 type-provenance text-[var(--muted)]">
               {message.state === "sending" ? "Sending…" : "Sending when the workspace is back"}
             </p>
           ) : (
             <>
-              <p data-testid="queued-error" className="mt-1 text-xs text-[var(--escalate)]">
+              <p data-testid="queued-error" className="mt-1 type-provenance text-[var(--escalate)]">
                 Couldn&apos;t send — {message.error}. Your message is kept here.
               </p>
               <button
                 data-testid="queued-retry"
-                className="mt-1 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-xs"
+                className="mt-1 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-provenance"
                 onClick={() => retry(message.id)}
               >
                 Retry

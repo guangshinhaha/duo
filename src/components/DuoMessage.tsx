@@ -50,11 +50,11 @@ export function DuoAuthoredBoundary({ children }: { children: ReactNode }) {
  */
 export function DuoMessage({ children }: { children: ReactNode }) {
   return (
-    <div
-      data-testid="duo-message"
-      className="rounded-[var(--r-lg)] border border-[var(--edge)] bg-[var(--surface-2)] px-4 py-3 text-[var(--text)]"
-    >
-      <div className="mb-1 text-xs font-medium tracking-wide text-[var(--muted)]" data-testid="duo-message-attribution">
+    // #33: the quiet entry shape — the container tint at entry scale,
+    // borderless — is §1.6's "different container" made structural: the
+    // duo's voice is the only boxed voice, so the box is the label.
+    <div data-testid="duo-message" className="shape-entry-quiet px-4 py-3 type-body text-[var(--text)]">
+      <div className="mb-1 type-provenance text-[var(--muted)]" data-testid="duo-message-attribution">
         Your duo
       </div>
       <div>

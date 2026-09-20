@@ -4,7 +4,7 @@ export function MutationError({ error }: { error: Error | null }) {
     return null;
   }
   return (
-    <p className="text-xs text-[var(--refused)]" data-testid="mutation-error">
+    <p className="type-provenance text-[var(--refused)]" data-testid="mutation-error">
       {error.message}
     </p>
   );

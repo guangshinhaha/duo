@@ -48,9 +48,9 @@ export function RuleCard({ api, rule, bucket }: { api: DuoApiConfig; rule: Rule;
   const { reachable } = useSyncStatus();
 
   return (
-    <div className="flex flex-col gap-2 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="rule-card">
+    <div className="flex flex-col gap-2 shape-entry p-4" data-testid="rule-card">
       <DuoMessage>{rule.text}</DuoMessage>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--muted)]" data-testid="rule-meta">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 type-provenance text-[var(--muted)]" data-testid="rule-meta">
         <span>{rule.origin === "owner_asserted" ? "you asserted" : "derived"}</span>
         <span>
           observed {rule.supportCount} time{rule.supportCount === 1 ? "" : "s"}
