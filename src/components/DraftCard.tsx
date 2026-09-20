@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { DraftRecord } from "../api/types.js";
 import { useAnswerEscalation, useRecordOutcome } from "../api/queries.js";
 import type { DuoApiConfig } from "../api/client.js";
@@ -43,6 +43,16 @@ export function toDraftPipelineResult(draft: DraftRecord): DraftPipelineResult {
 }
 
 /**
+ * #24: how long a clicked Ignore is held client-side before it becomes
+ * real. The daemon has no route to clear an outcome once written, so the
+ * only honest undo is the one that happens before anything is sent — this
+ * window is the entire recoverable surface, and undo inside it means the
+ * discard never existed. Long enough to catch a mis-click, short enough
+ * that "Ignore" still means a decision, not a maybe.
+ */
+export const IGNORE_UNDO_WINDOW_MS = 5_000;
+
+/**
  * One item in the Review surface (`client-tech-design.md` §1.5 /
  * client-design.md §1.5): the question, the duo's draft or escalation,
  * the provenance rail, and Send / Edit / Ignore — the correction loop's
@@ -65,6 +75,32 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
   // a plain Send. Posting "edited" with identical text would manufacture a
   // correction candidate out of a correction that never happened.
   const editChanged = editedText.trim() !== (draft.draftText ?? "").trim();
+  // #24: the open undo window on a clicked Ignore. The timer is a ref, not
+  // state — its firing must not re-render the card, and its cleanup must
+  // not run on unmount: navigating away mid-window is not an undo, and
+  // silently dropping the discard would leave the owner believing a
+  // judgement was recorded that the daemon never received.
+  const [ignoring, setIgnoring] = useState(false);
+  const ignoreTimer = useRef<number | null>(null);
+  const ignoreNow = () => {
+    setIgnoring(false);
+    ignoreTimer.current = null;
+    recordOutcome.mutate({ draftId: draft.id, outcome: "discarded" });
+  };
+  const ignoreWithWindow = () => {
+    setIgnoring(true);
+    // The global timer, not `window.setTimeout`: in the shell they are the
+    // same function, and staying on the global keeps the timer mockable
+    // where `window`'s copy is not.
+    ignoreTimer.current = setTimeout(ignoreNow, IGNORE_UNDO_WINDOW_MS);
+  };
+  const undoIgnore = () => {
+    if (ignoreTimer.current !== null) {
+      clearTimeout(ignoreTimer.current);
+      ignoreTimer.current = null;
+    }
+    setIgnoring(false);
+  };
 
   if (draft.escalated) {
     return (
@@ -130,6 +166,17 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
           )}
         </DuoMessage>
         <SourceList sources={draft.sources} />
+        {ignoring ? (
+          // #24: the undo window. The discard has NOT been sent — the card
+          // says so, because the difference between "held" and "sent" is
+          // the whole point of the window.
+          <div className="flex items-center gap-2" data-testid="ignore-window">
+            <span className="text-xs text-[var(--muted)]">Ignoring — not sent yet.</span>
+            <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={undoIgnore}>
+              Undo
+            </button>
+          </div>
+        ) : (
         <div className="flex gap-2">
           {editing ? (
             <>
@@ -174,13 +221,14 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
               <button
                 className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)] disabled:opacity-40"
                 disabled={recordOutcome.isPending || !reachable}
-                onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "discarded" })}
+                onClick={ignoreWithWindow}
               >
                 Ignore
               </button>
             </>
           )}
         </div>
+        )}
         <MutationError error={recordOutcome.error} />
       </div>
     </div>
