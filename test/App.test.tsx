@@ -69,3 +69,58 @@ describe("App — the query cache never leaks across a reconnect to a different 
     expect(screen.queryByText("question from A's daemon")).toBeNull();
   });
 });
+
+describe("App — hash routing between the surfaces", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    window.location.hash = "";
+  });
+
+  it("opens on Review, navigates to Mirror on #mirror, and back", async () => {
+    // A stored config skips Setup, so the shell renders straight into the
+    // route tree this test is actually about.
+    localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/mirror/portrait")) {
+          return new Response(
+            JSON.stringify({
+              totalQuestions: 0,
+              periodStart: null,
+              periodEnd: null,
+              topicBreakdown: [],
+              topFiveShare: 0,
+              busiestThreads: [],
+              insufficientHistory: true,
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/mirror/rules")) {
+          return new Response(JSON.stringify({ awaitingApproval: [], weakSignals: [], inconsistent: [], approved: [], rejected: [] }), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+
+    render(<App />);
+
+    // Fresh launch: the empty hash is Review, the default surface.
+    await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
+
+    window.location.hash = "#mirror";
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => expect(screen.getByTestId("mirror")).toBeInTheDocument());
+    expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
+
+    window.location.hash = "#review";
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
+    expect(screen.queryByTestId("mirror")).toBeNull();
+  });
+});
