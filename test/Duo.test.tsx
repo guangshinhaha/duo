@@ -57,6 +57,75 @@ function stubDraftsResponse(list: DraftRecord[]) {
   );
 }
 
+describe("#28 — pick a conversation, then read it", () => {
+  beforeEach(() => {
+    stubDraftsResponse(drafts);
+    writeComposerBuffer("");
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows conversations as a list on open, most recently active first, with one General entry for unthreaded drafts", async () => {
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
+    // "leave" holds the newest activity (draft 5) so it leads; the two
+    // unthreaded drafts share ONE General entry instead of scattering
+    // into singles — and on the list, no thread's entries render yet.
+    const labels = screen.getAllByTestId("conversation-entry").map((el) => el.textContent);
+    expect(labels).toEqual(["leave", "General"]);
+    expect(screen.queryByTestId("thread-entry")).toBeNull();
+  });
+
+  it("picking a conversation opens it alone, and back returns to the list", async () => {
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
+
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[0]);
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(3));
+    expect(screen.getByText("question 1")).toBeInTheDocument();
+    expect(screen.queryByText("question 2")).toBeNull();
+    expect(screen.getByTestId("thread-group-heading")).toHaveTextContent("leave");
+    expect(screen.queryByTestId("conversation-list")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("back-to-conversations"));
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
+    expect(screen.queryByTestId("thread-entry")).toBeNull();
+  });
+
+  it("a vanished thread falls back to General — the view and the composer's target together", async () => {
+    let list = drafts;
+    let captured: { question: string; threadContext: string | null } | null = null;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.endsWith("/drafts")) {
+        captured = JSON.parse(init.body as string);
+        list = drafts.filter((d) => d.threadContext === null); // the next GET loses "leave" entirely
+        return Promise.resolve(
+          new Response(JSON.stringify({ kind: "draft", draftId: "x", text: "t", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } }), { status: 201 }),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify(list), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[0]);
+    await waitFor(() => expect(screen.getByTestId("composer-thread")).toHaveTextContent("Asking in: leave"));
+
+    fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "asked while leave is open" } });
+    fireEvent.click(screen.getByTestId("composer-submit"));
+    await waitFor(() => expect(captured).not.toBeNull());
+    expect(captured).toEqual({ question: "asked while leave is open", threadContext: "leave" });
+
+    // The refetch drops every "leave" draft: the open view lands on
+    // General, and the composer's target follows it there.
+    await waitFor(() => expect(screen.getByTestId("composer-thread")).toHaveTextContent("Asking in: General"));
+    await waitFor(() => expect(screen.getByText("question 2")).toBeInTheDocument());
+    expect(screen.queryByText("question 1")).toBeNull();
+  });
+});
+
 describe("Duo — the thread view and composer (issue #8)", () => {
   beforeEach(() => {
     stubDraftsResponse(drafts);
@@ -69,18 +138,11 @@ describe("Duo — the thread view and composer (issue #8)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("groups drafts by threadContext with one General group for unthreaded, most recently active first", async () => {
-    renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("thread-group")).toHaveLength(2));
-    const headings = screen.getAllByTestId("thread-group-heading").map((el) => el.textContent);
-    // "leave" holds draft 5 (newest overall activity), so it leads; the
-    // null-threadContext drafts share one "General" group regardless of count.
-    expect(headings).toEqual(["leave", "General"]);
-  });
-
   it("reads each entry as a conversation turn: question as the owner, response as the duo, outcome named", async () => {
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[1]); // General holds draft 3
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(2));
     const edited = screen.getByText("the edited text that was sent").closest('[data-testid="thread-entry"]')!;
     expect(edited).not.toBeNull();
     expect(edited.querySelector('[data-testid="owner-message"]')).toHaveTextContent("question 3");
@@ -92,7 +154,9 @@ describe("Duo — the thread view and composer (issue #8)", () => {
 
   it("shows the sent text for a sent-as-drafted entry, not the draft text", async () => {
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[1]); // General holds draft 2
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(2));
     const sent = screen.getByText("sent as drafted").closest('[data-testid="thread-entry"]')!;
     expect(sent.querySelector('[data-testid="entry-outcome"]')).toHaveTextContent("Sent");
     expect(sent.querySelector('[data-testid="duo-message"]')).not.toHaveTextContent("draft 2");
@@ -100,7 +164,9 @@ describe("Duo — the thread view and composer (issue #8)", () => {
 
   it("renders escalations in the dashed Review idiom with their outcome, never as duo words", async () => {
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[0]); // "leave" holds draft 4
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(3));
     const escalated = screen.getByText("no supporting evidence").closest('[data-testid="thread-entry"]')!;
     expect(escalated.querySelector('[data-testid="escalation-reason"]')).toHaveTextContent("no supporting evidence");
     expect(escalated.querySelector('[data-testid="duo-message"]')).toBeNull();
@@ -109,7 +175,9 @@ describe("Duo — the thread view and composer (issue #8)", () => {
 
   it("names pending and ignored entries honestly", async () => {
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[0]); // "leave" holds drafts 1 and 5
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(3));
     expect(screen.getByText("Waiting on you in Review.")).toBeInTheDocument();
     expect(screen.getByText("Ignored")).toBeInTheDocument();
   });
@@ -125,6 +193,8 @@ describe("Duo — the thread view and composer (issue #8)", () => {
       }),
     ]);
     renderWithClient(<Duo api={api} />);
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[0]);
     await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(1));
     expect(screen.getByTestId("entry-outcome")).toHaveTextContent("Your duo refused this one.");
     expect(screen.queryByText("Waiting on you in Review.")).toBeNull();
@@ -136,6 +206,7 @@ describe("Duo — the thread view and composer (issue #8)", () => {
     await waitFor(() => expect(screen.getByTestId("duo-empty")).toBeInTheDocument());
     expect(screen.getByTestId("duo-empty")).toHaveTextContent("No conversation yet");
     expect(screen.queryByTestId("thread-group")).toBeNull();
+    expect(screen.queryByTestId("conversation-list")).toBeNull();
   });
 
   it("submits a question to POST /drafts, clears the input on success, and the new draft reads back", async () => {
@@ -157,7 +228,9 @@ describe("Duo — the thread view and composer (issue #8)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[1]); // ask from inside General
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(2));
 
     fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "  How much leave do I get?  " } });
     fireEvent.click(screen.getByTestId("composer-submit"));
@@ -174,7 +247,7 @@ describe("Duo — the thread view and composer (issue #8)", () => {
     expect(screen.getByLabelText("Question for your duo")).toHaveValue("");
   });
 
-  it("targets the selected thread's context when a group heading is chosen", async () => {
+  it("targets the open conversation's context when asking from it (#28)", async () => {
     let captured: { question: string; threadContext: string | null } | null = null;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === "POST" && url.endsWith("/drafts")) {
@@ -186,10 +259,10 @@ describe("Duo — the thread view and composer (issue #8)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("thread-group")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
     expect(screen.getByTestId("composer-thread")).toHaveTextContent("General");
 
-    fireEvent.click(screen.getAllByTestId("thread-group-heading")[0]);
+    fireEvent.click(screen.getAllByTestId("conversation-entry")[0]);
     expect(screen.getByTestId("composer-thread")).toHaveTextContent("Asking in: leave");
 
     fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "more leave questions" } });
@@ -208,7 +281,7 @@ describe("Duo — the thread view and composer (issue #8)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
 
     fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "a question worth keeping" } });
     fireEvent.click(screen.getByTestId("composer-submit"));
@@ -230,7 +303,7 @@ describe("Duo — the thread view and composer (issue #8)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(2));
 
     const input = screen.getByLabelText("Question for your duo");
     const submit = screen.getByTestId("composer-submit") as HTMLButtonElement;
