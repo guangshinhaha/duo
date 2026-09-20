@@ -401,3 +401,49 @@ describe("mock daemon — the correction queue's disposition routes (duo #44, mi
     expect((await res.json()).error.message).toBe('No pending correction candidate with id "nope"');
   });
 });
+
+describe("mock daemon — the knowledge read (duo #45, mirroring digital-duo #175)", () => {
+  it("composes the corpus slice from the portrait it already serves — one verdict, not two", async () => {
+    const knowledge = await (await get("/knowledge")).json();
+    const portrait = await (await get("/mirror/portrait")).json();
+    // The knowledge screen's corpus fields are the portrait's own — the
+    // same tooThin, the same topics, the same threshold. If these ever
+    // diverge, the mock is serving two verdicts about one corpus.
+    expect(knowledge.corpus).toEqual({
+      tooThin: portrait.tooThin,
+      minimumQuestionsToCharacterize: portrait.minimumQuestionsToCharacterize,
+      totalQuestions: portrait.totalQuestions,
+      periodStart: portrait.periodStart,
+      periodEnd: portrait.periodEnd,
+      topicBreakdown: portrait.topicBreakdown,
+    });
+  });
+
+  it("counts rules from the buckets it already serves, and names its providers", async () => {
+    const knowledge = await (await get("/knowledge")).json();
+    const rules = await (await get("/mirror/rules")).json();
+    // pending = everything awaiting a decision in any bucket; the decided
+    // statuses count their own buckets; superseded is nothing the mock mints.
+    expect(knowledge.rules.byReviewStatus).toEqual({
+      pending: rules.awaitingApproval.length + rules.weakSignals.length + rules.inconsistent.length,
+      approved: rules.approved.length,
+      rejected: rules.rejected.length,
+      superseded: 0,
+    });
+    expect(typeof knowledge.providers.inference).toBe("string");
+    expect(knowledge.providers.embedding).toHaveProperty("model");
+    expect(knowledge.records.total).toBeGreaterThan(0);
+  });
+
+  it("reports usage with the daemon's own arithmetic — rates that match their counts", async () => {
+    const knowledge = await (await get("/knowledge")).json();
+    const usage = knowledge.sharedUsage;
+    expect(usage.answerRate).toBeCloseTo(usage.answeredCount / usage.totalQuestions, 10);
+    expect(usage.summary).toMatch(/shared duo/i);
+    if (usage.totalQuestions === 0) {
+      // The core's exact never-used line — the one place that sentence is
+      // guaranteed (core #71 AC4).
+      expect(usage.summary).toBe("The shared duo is not being used.");
+    }
+  });
+});

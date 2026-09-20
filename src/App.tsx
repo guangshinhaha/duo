@@ -20,6 +20,7 @@ import { Duo } from "./routes/Duo.js";
 import { Trust } from "./routes/Trust.js";
 import { Audit } from "./routes/Audit.js";
 import { Mirror } from "./routes/Mirror.js";
+import { Knowledge } from "./routes/Knowledge.js";
 
 // §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
 // is stretched to match maxAge — the 5-minute default would garbage-collect
@@ -68,7 +69,7 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * opens — modeled as an object so no string compare can ever confuse it
  * with a named route.
  */
-type Route = "review" | "corrections" | "duo" | "trust" | "audit" | "settings" | "mirror" | { draft: string };
+type Route = "review" | "corrections" | "duo" | "trust" | "audit" | "settings" | "mirror" | "knowledge" | { draft: string };
 
 function routeFromHash(hash: string): Route {
   if (hash.startsWith("#draft/")) {
@@ -82,6 +83,9 @@ function routeFromHash(hash: string): Route {
   }
   if (hash === "#mirror") {
     return "mirror";
+  }
+  if (hash === "#knowledge") {
+    return "knowledge";
   }
   if (hash === "#corrections") {
     return "corrections";
@@ -177,6 +181,8 @@ function routeSurface(route: Route, api: DuoApiConfig, setApi: (config: DuoApiCo
   switch (route) {
     case "mirror":
       return <Mirror api={api} />;
+    case "knowledge":
+      return <Knowledge api={api} />;
     case "corrections":
       return <Corrections api={api} />;
     case "duo":
@@ -278,6 +284,11 @@ function AppShell() {
           </NavLink>
           <NavLink active={route === "mirror"} href="#mirror">
             Mirror
+          </NavLink>
+          {/* #45: with the your-duo surfaces — what it derived (Mirror),
+              then what it knows (Knowledge). */}
+          <NavLink active={route === "knowledge"} href="#knowledge">
+            Knowledge
           </NavLink>
           <NavLink active={route === "settings"} href="#settings">
             Settings

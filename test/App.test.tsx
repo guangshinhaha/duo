@@ -24,6 +24,38 @@ function draftFor(owner: string): DraftRecord {
   };
 }
 
+function knowledgeFor() {
+  return {
+    records: { total: 0, bySource: {} },
+    lastImport: null,
+    corpus: {
+      tooThin: true,
+      minimumQuestionsToCharacterize: 10,
+      totalQuestions: 0,
+      periodStart: null,
+      periodEnd: null,
+      topicBreakdown: [],
+    },
+    rules: { byReviewStatus: { pending: 0, approved: 0, rejected: 0, superseded: 0 } },
+    providers: { inference: null, embedding: null },
+    sharedUsage: {
+      totalQuestions: 0,
+      distinctAskers: 0,
+      repeatAskers: 0,
+      answeredCount: 0,
+      declinedCount: 0,
+      answerRate: 0,
+      escalationRate: 0,
+      weeklyTrend: [],
+      gaps: [],
+      lastAskedAt: null,
+      daysSinceLastAsk: null,
+      abandoned: false,
+      summary: "The shared duo is not being used.",
+    },
+  };
+}
+
 describe("App — the query cache never leaks across a reconnect to a different daemon", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -150,6 +182,34 @@ describe("App — hash routing between the surfaces", () => {
     // GET /review returns [] against this stub, so the queue shows its
     // honest empty state — the route mounted, not Review with no drafts.
     await waitFor(() => expect(screen.getByTestId("corrections-empty")).toBeInTheDocument());
+    expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
+  });
+
+  it("navigates to Knowledge on #knowledge, beside the your-duo surfaces", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/knowledge")) {
+          return new Response(JSON.stringify(knowledgeFor()), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+
+    render(<App />);
+
+    // Knowledge sits with the your-duo surfaces, right after Mirror — what
+    // it derived, then what it knows.
+    const link = screen.getByRole("link", { name: "Knowledge" });
+    expect(link).toHaveAttribute("href", "#knowledge");
+    const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
+    expect(entries.indexOf("Mirror")).toBeLessThan(entries.indexOf("Knowledge"));
+    expect(entries.indexOf("Knowledge")).toBeLessThan(entries.indexOf("Settings"));
+
+    window.location.hash = "#knowledge";
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => expect(screen.getByTestId("knowledge")).toBeInTheDocument());
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 

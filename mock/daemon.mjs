@@ -154,6 +154,42 @@ function seedState() {
       tooThin: false,
       minimumQuestionsToCharacterize: 10,
     },
+    // The knowledge read's daemon-side facts (#175), seeded. The corpus
+    // slice and the rule counts are NOT here — the route composes them
+    // from the portrait and rules this mock already serves, so the two
+    // surfaces can never disagree about one corpus. Arithmetic stays
+    // honest: staged = written + alreadyPresent + skipped + discarded.
+    knowledge: {
+      records: { total: 312, bySource: { slack: 288, markdown: 24 } },
+      lastImport: {
+        runAt: minutesAgo(60 * 26),
+        staged: 318,
+        written: 24,
+        alreadyPresent: 288,
+        skippedDmConversations: 4,
+        discardedOtherText: 2,
+        discardedAboveCeiling: 0,
+      },
+      providers: { inference: "qwen-local", embedding: { name: "ollama", model: "nomic-embed-text" } },
+      sharedUsage: {
+        totalQuestions: 55,
+        distinctAskers: 9,
+        repeatAskers: 4,
+        answeredCount: 41,
+        declinedCount: 14,
+        answerRate: 41 / 55,
+        escalationRate: 14 / 55,
+        weeklyTrend: [
+          { weekStart: "2026-09-07", questionCount: 21 },
+          { weekStart: "2026-09-14", questionCount: 34 },
+        ],
+        gaps: [{ question: "What's the wifi password?", count: 3 }],
+        lastAskedAt: minutesAgo(60 * 20),
+        daysSinceLastAsk: 1,
+        abandoned: false,
+        summary: "The shared duo answered 41 of 55 questions over the last month.",
+      },
+    },
     grid: [
       { topicId: "t-sched", topicLabel: "scheduling", tier: "T1", level: "approve", source: "earned", stale: false },
       { topicId: "t-money", topicLabel: "money", tier: "T2", level: "auto", source: "earned", stale: false },
@@ -451,6 +487,38 @@ export function createMockDaemon() {
         },
       ],
       ["GET", /^\/mirror\/portrait$/, () => ok(state.portrait)],
+      [
+        "GET",
+        /^\/knowledge$/,
+        () => {
+          // describeDuoKnowledge's discipline (#175): compose, never
+          // derive. The corpus slice IS the portrait's — same verdict,
+          // same topics — and the rule counts come straight off the
+          // buckets this mock serves: everything undecided is pending,
+          // the decided statuses count themselves, and superseded is
+          // nothing this mock mints.
+          return ok({
+            ...state.knowledge,
+            corpus: {
+              tooThin: state.portrait.tooThin,
+              minimumQuestionsToCharacterize: state.portrait.minimumQuestionsToCharacterize,
+              totalQuestions: state.portrait.totalQuestions,
+              periodStart: state.portrait.periodStart,
+              periodEnd: state.portrait.periodEnd,
+              topicBreakdown: state.portrait.topicBreakdown,
+            },
+            rules: {
+              byReviewStatus: {
+                pending:
+                  state.rules.awaitingApproval.length + state.rules.weakSignals.length + state.rules.inconsistent.length,
+                approved: state.rules.approved.length,
+                rejected: state.rules.rejected.length,
+                superseded: 0,
+              },
+            },
+          });
+        },
+      ],
       ["GET", /^\/mirror\/rules$/, () => ok(state.rules)],
       [
         "GET",

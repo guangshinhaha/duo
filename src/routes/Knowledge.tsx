@@ -1,0 +1,184 @@
+import type { DuoApiConfig } from "../api/client.js";
+import { useKnowledge } from "../api/queries.js";
+import type { DuoKnowledge } from "../api/types.js";
+import { MeterBar } from "../components/MeterBar.js";
+
+function formatDate(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleDateString() : "—";
+}
+
+/**
+ * AR-19 in one surface: "a sleek shell around four rules reads as a demo,
+ * and the gap between how good it looks and how much it knows is itself a
+ * trust problem." This screen exists to close that gap by naming it — the
+ * corpus counts for what they are, thinness in the portrait's own words,
+ * and no figure dressed in precision the data cannot carry (§1.6: counts
+ * and bars, never invented numerals).
+ */
+function RecordsSection({ knowledge }: { knowledge: DuoKnowledge }) {
+  return (
+    <section className="flex flex-col gap-2" data-testid="knowledge-records">
+      <h2 className="text-sm font-medium">
+        Records ({knowledge.records.total})
+      </h2>
+      {Object.entries(knowledge.records.bySource).map(([source, count]) => (
+        // The source names are the daemon's own strings, verbatim — this
+        // client keeps no registry of sources to translate them through.
+        <div key={source} className="flex justify-between text-xs text-[var(--muted)]" data-testid="record-source">
+          <span>{source}</span>
+          <span>{count}</span>
+        </div>
+      ))}
+      <p className="text-xs text-[var(--faint)]" data-testid="last-import">
+        {knowledge.lastImport
+          ? `Last import ${formatDate(knowledge.lastImport.runAt)}: ${knowledge.lastImport.written} written, ${knowledge.lastImport.alreadyPresent} already present, ${knowledge.lastImport.skippedDmConversations} DM conversations skipped.`
+          : "No import yet — importing your records is what gives the duo something to answer from."}
+      </p>
+    </section>
+  );
+}
+
+/**
+ * The corpus verdict is the portrait's own (`tooThin`, same threshold,
+ * same breakdown — #175 composes, it never recomputes), so it renders
+ * under the portrait's contract too: thin is stated in words that name
+ * the bar and what clears it, and a breakdown below the bar renders
+ * nowhere — four questions spread over topics would be costume jewellery.
+ */
+function CorpusSection({ knowledge }: { knowledge: DuoKnowledge }) {
+  const corpus = knowledge.corpus;
+  if (corpus.tooThin) {
+    return (
+      <div
+        className="rounded-[var(--r-lg)] border border-dashed border-[var(--edge)] p-4 text-[var(--muted)]"
+        data-testid="corpus-thin"
+      >
+        Not enough history yet — the corpus starts to mean something at {corpus.minimumQuestionsToCharacterize} questions,
+        and this duo has {corpus.totalQuestions}. Importing more records is what thickens it.
+      </div>
+    );
+  }
+  return (
+    <section className="flex flex-col gap-2 rounded-[var(--r-lg)] border border-[var(--edge)] p-4" data-testid="corpus">
+      <div>
+        <h2 className="text-sm font-medium">Corpus</h2>
+        <p className="text-xs text-[var(--muted)]">
+          {corpus.totalQuestions} question{corpus.totalQuestions === 1 ? "" : "s"} · {formatDate(corpus.periodStart)} –{" "}
+          {formatDate(corpus.periodEnd)}
+        </p>
+      </div>
+      {corpus.topicBreakdown.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {corpus.topicBreakdown.map((topic) => (
+            <div key={topic.topicId} className="flex flex-col gap-1" data-testid="knowledge-topic">
+              <div className="flex justify-between text-xs text-[var(--muted)]">
+                <span>{topic.label}</span>
+                <span>{topic.count}</span>
+              </div>
+              <MeterBar value={topic.share} testId="knowledge-topic-share" />
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function KnowledgeScreen({ knowledge }: { knowledge: DuoKnowledge }) {
+  const usage = knowledge.sharedUsage;
+  return (
+    <div className="flex flex-col gap-6 p-6" data-testid="knowledge">
+      <header className="flex flex-col gap-1">
+        <h1 className="text-base font-medium">Knowledge</h1>
+        <p className="text-xs text-[var(--muted)]">
+          What this duo actually knows, so its answers can be trusted in proportion to what is behind them.
+        </p>
+      </header>
+
+      <RecordsSection knowledge={knowledge} />
+      <CorpusSection knowledge={knowledge} />
+
+      <section className="flex flex-col gap-1" data-testid="knowledge-rules">
+        <h2 className="text-sm font-medium">Derived rules</h2>
+        {/* Every status key the daemon sends, count beside it — zero
+            included, because "no superseded rules" is a fact worth seeing,
+            not an absence worth hiding. */}
+        <p className="text-xs text-[var(--muted)]" data-testid="rule-counts">
+          {Object.entries(knowledge.rules.byReviewStatus)
+            .map(([status, count]) => `${status} ${count}`)
+            .join(" · ")}
+        </p>
+      </section>
+
+      <section className="flex flex-col gap-1" data-testid="knowledge-providers">
+        <h2 className="text-sm font-medium">Providers</h2>
+        <p className="text-xs text-[var(--muted)]" data-testid="inference-provider">
+          {knowledge.providers.inference
+            ? `Answering with ${knowledge.providers.inference}.`
+            : "No inference provider configured — nothing is answering."}
+        </p>
+        <p className="text-xs text-[var(--muted)]" data-testid="embedding-provider">
+          {knowledge.providers.embedding
+            ? `Embedding with ${knowledge.providers.embedding.name} (${knowledge.providers.embedding.model}).`
+            : "No embedding provider configured."}
+        </p>
+      </section>
+
+      <section className="flex flex-col gap-2" data-testid="shared-usage">
+        <h2 className="text-sm font-medium">Shared usage</h2>
+        {/* The daemon's own sentence, verbatim — it is the one place the
+            report's honest verdict ("not being used", in those words) is
+            guaranteed (#71 AC4); re-wording it here would soften it. */}
+        <p className="text-xs text-[var(--muted)]" data-testid="shared-usage-summary">
+          {usage.summary}
+        </p>
+        <div className="flex flex-col gap-1">
+          <div className="flex justify-between text-xs text-[var(--muted)]">
+            <span>
+              answered — asked by {usage.distinctAskers} {usage.distinctAskers === 1 ? "person" : "people"}
+            </span>
+            <span>
+              {usage.answeredCount} of {usage.totalQuestions}
+            </span>
+          </div>
+          {/* The rate arrives as a fraction off the wire; it renders as a
+              bar with its counts beside it — formatted, never recomputed,
+              never a percentage numeral (§1.6). */}
+          <MeterBar value={usage.answerRate} testId="answer-rate" />
+        </div>
+        {usage.gaps.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--faint)]">Asked for and missing</h3>
+            {usage.gaps.map((gap) => (
+              <div key={gap.question} className="flex justify-between text-xs text-[var(--muted)]" data-testid="usage-gap">
+                <span>{gap.question}</span>
+                <span>{gap.count}×</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/**
+ * The knowledge screen (#45) — what the duo knows, where it came from,
+ * what is running, and how much it has been used. Read-only by design
+ * (the issue's own out-of-scope: configuration changes from here are not
+ * this screen's to make), and honest by the same law: a thin corpus reads
+ * as thin here, in words, before any number gets a chance to dress it up.
+ */
+export function Knowledge({ api }: { api: DuoApiConfig }) {
+  const knowledge = useKnowledge(api);
+  if (knowledge.isLoading) {
+    return <div className="p-6 text-[var(--muted)]">Loading…</div>;
+  }
+  if (knowledge.error) {
+    return <div className="p-6 text-[var(--refused)]">{(knowledge.error as Error).message}</div>;
+  }
+  if (knowledge.data) {
+    return <KnowledgeScreen knowledge={knowledge.data} />;
+  }
+  return null;
+}

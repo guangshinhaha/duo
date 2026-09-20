@@ -7,6 +7,7 @@ import type {
   DraftOutcome,
   DraftPipelineResult,
   DraftRecord,
+  DuoKnowledge,
   DuoSummary,
   GridRow,
   InterruptionPortrait,
@@ -45,6 +46,7 @@ export const queryKeys = {
   mirrorRules: ["mirror", "rules"] as const,
   trustGrid: ["trust", "grid"] as const,
   audit: ["audit"] as const,
+  knowledge: ["knowledge"] as const,
 };
 
 export function useDuos(api: DuoApiConfig, options?: Partial<UseQueryOptions<DuoSummary[]>>) {
@@ -144,6 +146,11 @@ export function useMirrorPortrait(api: DuoApiConfig) {
 
 export function useMirrorRules(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.mirrorRules, queryFn: () => apiRequest<RuleReviewListing>(api, "/mirror/rules") });
+}
+
+/** #45: what this duo knows, in one read (digital-duo #175's composition). Read-only — no client route writes it, so nothing invalidates it but a refetch. */
+export function useKnowledge(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.knowledge, queryFn: () => apiRequest<DuoKnowledge>(api, "/knowledge") });
 }
 
 export function useTrustGrid(api: DuoApiConfig) {

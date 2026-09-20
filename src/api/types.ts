@@ -137,6 +137,62 @@ export interface InterruptionPortrait {
   minimumQuestionsToCharacterize: number;
 }
 
+/** One completed ingest run, as `GET /knowledge` reports it (digital-duo #175's `ImportRun`) — every count is a fact the run already kept. */
+export interface ImportRunSummary {
+  runAt: string;
+  staged: number;
+  written: number;
+  alreadyPresent: number;
+  skippedDmConversations: number;
+  discardedOtherText: number;
+  discardedAboveCeiling: number;
+}
+
+/** The shared duo's usage report, exactly as `duo shared usage` computes it (#175 reuses #71's builder verbatim — the summary string is the daemon's own sentence, rendered as-is). */
+export interface SharedUsageReport {
+  totalQuestions: number;
+  distinctAskers: number;
+  repeatAskers: number;
+  answeredCount: number;
+  declinedCount: number;
+  /** answeredCount / totalQuestions, off the wire — formatted, never recomputed. */
+  answerRate: number;
+  /** declinedCount / totalQuestions — every decline routes to the owner. */
+  escalationRate: number;
+  weeklyTrend: { weekStart: string; questionCount: number }[];
+  gaps: { question: string; count: number }[];
+  lastAskedAt: string | null;
+  daysSinceLastAsk: number | null;
+  abandoned: boolean;
+  summary: string;
+}
+
+/**
+ * `GET /knowledge` (digital-duo #175): what this duo knows, in one read.
+ * Every field is a fact the daemon already computed — the corpus verdict
+ * is the portrait's own `tooThin` (same threshold, same breakdown), the
+ * rates are the usage report's own arithmetic. This client composes and
+ * renders; it never derives, never re-judges.
+ */
+export interface DuoKnowledge {
+  records: { total: number; bySource: Record<string, number> };
+  /** Null when this store has never seen an import. */
+  lastImport: ImportRunSummary | null;
+  corpus: {
+    tooThin: boolean;
+    minimumQuestionsToCharacterize: number;
+    totalQuestions: number;
+    periodStart: string | null;
+    periodEnd: string | null;
+    topicBreakdown: TopicShare[];
+  };
+  /** Every review-status key present, zero included. */
+  rules: { byReviewStatus: Record<RuleReviewStatus, number> };
+  /** Echoed from the daemon's configuration; null means unconfigured. */
+  providers: { inference: string | null; embedding: { name: string; model: string } | null };
+  sharedUsage: SharedUsageReport;
+}
+
 export type RuleReviewStatus = "pending" | "approved" | "rejected" | "superseded";
 export type RuleOrigin = "derived" | "owner_asserted";
 
