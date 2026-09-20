@@ -24,6 +24,13 @@ in this pass).
   carry.
 - **`src/routes/Setup.tsx`** — first run: paste the daemon's tailnet address and a `duo pair new`
   token.
+- **`ask.html` / `src/routes/Ask.tsx`** (#1/#2) — the no-install asker page: a colleague opens
+  `ask.html#host=…&token=…`, asks one question, and gets one of the daemon's three public-answer
+  outcomes, rendered verbatim (the fixed passed-on / refusal strings are the contract — #43 AC3).
+  Its own Vite entry and its own attribution ("the owner's duo" — the reader isn't the owner), on
+  the `POST /ask` contract from digital-duo #157/#159. That route isn't served by the daemon yet,
+  so this page is contract-first: fully built and tested against mocked fetches, waiting on the
+  core to go live end-to-end.
 
 ## Running it
 
