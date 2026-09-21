@@ -154,8 +154,8 @@ export function useMirrorRules(api: DuoApiConfig) {
 }
 
 /** #45: what this duo knows, in one read (digital-duo #175's composition). Read-only — no client route writes it, so nothing invalidates it but a refetch. */
-export function useKnowledge(api: DuoApiConfig) {
-  return useQuery({ queryKey: queryKeys.knowledge, queryFn: () => apiRequest<DuoKnowledge>(api, "/knowledge") });
+export function useKnowledge(api: DuoApiConfig, options?: Partial<UseQueryOptions<DuoKnowledge>>) {
+  return useQuery({ queryKey: queryKeys.knowledge, queryFn: () => apiRequest<DuoKnowledge>(api, "/knowledge"), ...options });
 }
 
 /**

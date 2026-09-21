@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { usePendingDrafts } from "../api/queries.js";
+import { useKnowledge, usePendingDrafts } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
 import { DraftCard } from "../components/DraftCard.js";
+import { RouteError } from "../components/RouteError.js";
+import { RouteLoading } from "../components/RouteLoading.js";
+import { corpusSentence, lastImportSentence } from "./Knowledge.js";
 
 /**
  * #50's three queue states, straight off the record's own fields: a draft
@@ -41,7 +44,15 @@ function stateOf(draft: DraftRecord): "draft" | "escalation" | "refusal" {
  * counting everything, because it reads its own query, not this view.
  */
 export function Review({ api }: { api: DuoApiConfig }) {
-  const { data: drafts, isLoading, error } = usePendingDrafts(api);
+  const { data: drafts, isLoading, error, refetch } = usePendingDrafts(api);
+  // #37: the empty queue's second read — what the duo knows so far, from
+  // the same knowledge key the Knowledge screen and search use (deduped,
+  // cached). It enriches the empty state only, so it is gated to fire only
+  // once the queue is known empty — never beside a loaded queue, and never
+  // while the queue itself is still loading, when there is nothing to
+  // enrich yet and the read would only compete with the queue for the
+  // wire. A failed read must never blank the queue it is decorating.
+  const knowledge = useKnowledge(api, { enabled: !isLoading && (drafts ?? []).length === 0 });
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [channelFilter, setChannelFilter] = useState("all");
   const [askerFilter, setAskerFilter] = useState("all");
@@ -91,13 +102,37 @@ export function Review({ api }: { api: DuoApiConfig }) {
   };
 
   if (isLoading) {
-    return <div className="p-6 text-[var(--muted)]">Loading…</div>;
+    return <RouteLoading />;
   }
   if (error) {
-    return <div className="p-6 text-[var(--refused)]">{(error as Error).message}</div>;
+    return <RouteError api={api} error={error} onRetry={() => void refetch()} />;
   }
   if (pending.length === 0) {
-    return <div className="p-6 text-[var(--muted)]">Nothing waiting on you.</div>;
+    const known = knowledge.data;
+    return (
+      <div className="p-6" data-testid="review-empty">
+        {/* AR-19: an empty Review is this app's opening screen for weeks —
+            so it makes the product's argument, not an apology. The headline
+            stays the headline; beneath it, what the duo knows so far and the
+            one thing that would teach it more, every count the daemon's own
+            (#45's read) and every sentence the one Knowledge ships. */}
+        <h1 className="type-heading">Nothing waiting on you.</h1>
+        <div className="shape-container mt-4 flex max-w-xl flex-col gap-2 p-4" data-testid="review-empty-knowledge">
+          {known?.records && known.corpus ? (
+            <>
+              <p className="type-body text-[var(--text)]">
+                {known.records.total} record{known.records.total === 1 ? "" : "s"} so far · {lastImportSentence(known.lastImport)}
+              </p>
+              <p className="type-body text-[var(--text)]">{corpusSentence(known.corpus)}</p>
+            </>
+          ) : knowledge.isLoading ? (
+            // The read is on its way — a quiet shape, not a word.
+            <div className="shape-entry-quiet animate-pulse p-4" />
+          ) : null}
+          <p className="type-provenance text-[var(--muted)]">⌘K searches what your duo knows.</p>
+        </div>
+      </div>
+    );
   }
 
   return (

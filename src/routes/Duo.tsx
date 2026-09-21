@@ -9,6 +9,8 @@ import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { DuoMessage } from "../components/DuoMessage.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
 import { ProvenanceLine } from "../components/ProvenanceLine.js";
+import { RouteError } from "../components/RouteError.js";
+import { RouteLoading } from "../components/RouteLoading.js";
 import { SourceList } from "../components/SourceList.js";
 import { StructuredText } from "../components/StructuredText.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -156,7 +158,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
   // isLoading covers the FIRST page only — the feed renders as soon as the
   // newest window arrives, never waiting on history behind it (#29).
   if (feed.isLoading) {
-    return <div className="p-6 text-[var(--muted)]">Loading…</div>;
+    return <RouteLoading />;
   }
   // Only a first-page failure blanks the route. A failed REFRESH (pages
   // already on screen) must not: swapping the feed for an error screen
@@ -164,7 +166,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
   // position" promises — the loaded pages stay rendered and the next
   // invalidation retries them.
   if (feed.error && feed.data === undefined) {
-    return <div className="p-6 text-[var(--refused)]">{(feed.error as Error).message}</div>;
+    return <RouteError api={api} error={feed.error} onRetry={() => void feed.refetch()} />;
   }
 
   return (

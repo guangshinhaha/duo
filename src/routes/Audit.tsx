@@ -2,6 +2,8 @@ import type { DuoApiConfig } from "../api/client.js";
 import { useAudit } from "../api/queries.js";
 import type { AuditEntry } from "../api/types.js";
 import { DuoMessage } from "../components/DuoMessage.js";
+import { RouteError } from "../components/RouteError.js";
+import { RouteLoading } from "../components/RouteLoading.js";
 
 function formatWhen(iso: string): string {
   return new Date(iso).toLocaleString();
@@ -50,13 +52,13 @@ function AuditItem({ entry }: { entry: AuditEntry }) {
  * redacts.
  */
 export function Audit({ api }: { api: DuoApiConfig }) {
-  const { data: entries, isLoading, error } = useAudit(api);
+  const { data: entries, isLoading, error, refetch } = useAudit(api);
 
   if (isLoading) {
-    return <div className="p-6 text-[var(--muted)]">Loading…</div>;
+    return <RouteLoading variant="rows" />;
   }
   if (error) {
-    return <div className="p-6 text-[var(--refused)]">{(error as Error).message}</div>;
+    return <RouteError api={api} error={error} onRetry={() => void refetch()} />;
   }
   if (!entries || entries.length === 0) {
     return (

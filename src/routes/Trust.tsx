@@ -1,6 +1,8 @@
 import type { DuoApiConfig } from "../api/client.js";
 import { useTrustGrid } from "../api/queries.js";
 import type { GridRow } from "../api/types.js";
+import { RouteError } from "../components/RouteError.js";
+import { RouteLoading } from "../components/RouteLoading.js";
 
 /** The daemon's own trust vocabulary renders verbatim (tier, level, source) — a paraphrase here would be a second vocabulary to keep in sync with the core. */
 function TrustRow({ row }: { row: GridRow }) {
@@ -36,13 +38,13 @@ function TrustRow({ row }: { row: GridRow }) {
  * a control here would be a promise the core would refuse.
  */
 export function Trust({ api }: { api: DuoApiConfig }) {
-  const { data: rows, isLoading, error } = useTrustGrid(api);
+  const { data: rows, isLoading, error, refetch } = useTrustGrid(api);
 
   if (isLoading) {
-    return <div className="p-6 text-[var(--muted)]">Loading…</div>;
+    return <RouteLoading variant="rows" />;
   }
   if (error) {
-    return <div className="p-6 text-[var(--refused)]">{(error as Error).message}</div>;
+    return <RouteError api={api} error={error} onRetry={() => void refetch()} />;
   }
   if (!rows || rows.length === 0) {
     return (

@@ -5,6 +5,8 @@ import { DuoMessage } from "../components/DuoMessage.js";
 import { EditDiff } from "../components/EditDiff.js";
 import { MutationError } from "../components/MutationError.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
+import { RouteError } from "../components/RouteError.js";
+import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { useSyncStatus } from "../sync.js";
 
@@ -73,13 +75,13 @@ function CandidateCard({ api, candidate }: { api: DuoApiConfig; candidate: Corre
  * Approve away.
  */
 export function Corrections({ api }: { api: DuoApiConfig }) {
-  const { data: candidates, isLoading, error } = useReview(api);
+  const { data: candidates, isLoading, error, refetch } = useReview(api);
 
   if (isLoading) {
-    return <div className="p-6 text-[var(--muted)]">Loading…</div>;
+    return <RouteLoading />;
   }
   if (error) {
-    return <div className="p-6 text-[var(--refused)]">{(error as Error).message}</div>;
+    return <RouteError api={api} error={error} onRetry={() => void refetch()} />;
   }
   if (!candidates || candidates.length === 0) {
     return (

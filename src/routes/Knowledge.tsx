@@ -2,9 +2,36 @@ import type { DuoApiConfig } from "../api/client.js";
 import { useKnowledge } from "../api/queries.js";
 import type { DuoKnowledge } from "../api/types.js";
 import { MeterBar } from "../components/MeterBar.js";
+import { RouteError } from "../components/RouteError.js";
+import { RouteLoading } from "../components/RouteLoading.js";
 
 function formatDate(iso: string | null): string {
   return iso ? new Date(iso).toLocaleDateString() : "—";
+}
+
+/**
+ * #37: the import and corpus sentences, built once. Review's empty state
+ * makes the same argument this screen makes, and it must make it with the
+ * same words — both screens render the daemon's counts through these, so
+ * the argument can only drift if the sentence itself does, in one place.
+ */
+export function lastImportSentence(lastImport: DuoKnowledge["lastImport"]): string {
+  return lastImport
+    ? `Last import ${formatDate(lastImport.runAt)}: ${lastImport.written} written, ${lastImport.alreadyPresent} already present, ${lastImport.skippedDmConversations} DM conversations skipped.`
+    : "No import yet — importing your records is what gives the duo something to answer from.";
+}
+
+/**
+ * The corpus verdict in words (#37 shares it with Review's empty state):
+ * thin in the portrait's own terms — the bar and what clears it — and past
+ * the bar, the count with the action the facts support. No percentage, no
+ * invented numeral (§1.6).
+ */
+export function corpusSentence(corpus: DuoKnowledge["corpus"]): string {
+  if (corpus.tooThin) {
+    return `Not enough history yet — the corpus starts to mean something at ${corpus.minimumQuestionsToCharacterize} questions, and this duo has ${corpus.totalQuestions}. Importing more records is what thickens it.`;
+  }
+  return `${corpus.totalQuestions} question${corpus.totalQuestions === 1 ? "" : "s"} so far — asking it questions is what thickens it.`;
 }
 
 /**
@@ -30,9 +57,7 @@ function RecordsSection({ knowledge }: { knowledge: DuoKnowledge }) {
         </div>
       ))}
       <p className="type-provenance text-[var(--faint)]" data-testid="last-import">
-        {knowledge.lastImport
-          ? `Last import ${formatDate(knowledge.lastImport.runAt)}: ${knowledge.lastImport.written} written, ${knowledge.lastImport.alreadyPresent} already present, ${knowledge.lastImport.skippedDmConversations} DM conversations skipped.`
-          : "No import yet — importing your records is what gives the duo something to answer from."}
+        {lastImportSentence(knowledge.lastImport)}
       </p>
     </section>
   );
@@ -53,8 +78,7 @@ function CorpusSection({ knowledge }: { knowledge: DuoKnowledge }) {
         className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] p-4 type-body text-[var(--muted)]"
         data-testid="corpus-thin"
       >
-        Not enough history yet — the corpus starts to mean something at {corpus.minimumQuestionsToCharacterize} questions,
-        and this duo has {corpus.totalQuestions}. Importing more records is what thickens it.
+        {corpusSentence(corpus)}
       </div>
     );
   }
@@ -163,6 +187,25 @@ function KnowledgeScreen({ knowledge }: { knowledge: DuoKnowledge }) {
 }
 
 /**
+ * The cached payload is typed as `DuoKnowledge`, but the cache is a
+ * storage layer, not a promise — it can hold a shape the daemon never
+ * sent (an array where the object should be, say, written under the same
+ * CACHE_BUSTER by an older build). A payload that is not the daemon's
+ * documented shape is not an answer, and the screen must read it as
+ * "still asking", never crash on it — the same braces-and-belt law App.tsx
+ * states for the persisted cache as a whole.
+ */
+function isDuoKnowledgeShape(value: unknown): value is DuoKnowledge {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as DuoKnowledge;
+  return [candidate.records, candidate.corpus, candidate.rules, candidate.providers, candidate.sharedUsage].every(
+    (section) => section !== null && typeof section === "object",
+  );
+}
+
+/**
  * The knowledge screen (#45) — what the duo knows, where it came from,
  * what is running, and how much it has been used. Read-only by design
  * (the issue's own out-of-scope: configuration changes from here are not
@@ -172,13 +215,16 @@ function KnowledgeScreen({ knowledge }: { knowledge: DuoKnowledge }) {
 export function Knowledge({ api }: { api: DuoApiConfig }) {
   const knowledge = useKnowledge(api);
   if (knowledge.isLoading) {
-    return <div className="p-6 text-[var(--muted)]">Loading…</div>;
+    return <RouteLoading variant="panels" />;
   }
   if (knowledge.error) {
-    return <div className="p-6 text-[var(--refused)]">{(knowledge.error as Error).message}</div>;
+    return <RouteError api={api} error={knowledge.error} onRetry={() => void knowledge.refetch()} />;
   }
-  if (knowledge.data) {
+  if (knowledge.data && isDuoKnowledgeShape(knowledge.data)) {
     return <KnowledgeScreen knowledge={knowledge.data} />;
   }
-  return null;
+  // A cached payload that failed the shape check renders as waiting, not
+  // as a crash: the mount's staleness refetch is already re-asking the
+  // daemon, and what comes back is what the screen renders.
+  return <RouteLoading variant="panels" />;
 }
