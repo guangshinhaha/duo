@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import { useKnowledge, usePendingDrafts } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
@@ -56,6 +56,13 @@ export function Review({ api }: { api: DuoApiConfig }) {
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [channelFilter, setChannelFilter] = useState("all");
   const [askerFilter, setAskerFilter] = useState("all");
+  // #36: roving tabindex — the queue is ONE tab stop, not one per draft.
+  // The entry holding it walks entry by entry with the arrows, and Tab
+  // from a focused entry walks into its actions, which are real buttons
+  // inside it. The tab stop follows real focus, so clicking or tabbing
+  // into an entry makes that entry the queue's stop.
+  const [focusIndex, setFocusIndex] = useState(0);
+  const entryRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const channels = useMemo(() => {
     const kinds = new Set(
@@ -204,7 +211,38 @@ export function Review({ api }: { api: DuoApiConfig }) {
             Nothing in this slice — {hidden} hidden by the filter.
           </div>
         ) : (
-          visible.map((draft) => <DraftCard key={draft.id} api={api} draft={draft} />)
+          visible.map((draft, index) => (
+            <div
+              key={draft.id}
+              aria-label={`Review entry ${index + 1} of ${visible.length}`}
+              data-testid="review-entry"
+              ref={(element) => {
+                entryRefs.current[index] = element;
+              }}
+              role="group"
+              // The clamped stop: a disposition can shrink the queue out
+              // from under the remembered index, and exactly one entry
+              // must still hold the stop.
+              tabIndex={index === Math.min(focusIndex, visible.length - 1) ? 0 : -1}
+              onFocus={() => setFocusIndex(index)}
+              onKeyDown={(event) => {
+                // Arrows inside a text field are the caret's, not the queue's.
+                const target = event.target as HTMLElement;
+                if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+                  return;
+                }
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  const next = index + (event.key === "ArrowDown" ? 1 : -1);
+                  const clamped = Math.max(0, Math.min(visible.length - 1, next));
+                  setFocusIndex(clamped);
+                  entryRefs.current[clamped]?.focus();
+                }
+              }}
+            >
+              <DraftCard api={api} draft={draft} />
+            </div>
+          ))
         )}
       </div>
     </div>

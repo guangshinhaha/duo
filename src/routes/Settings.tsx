@@ -104,6 +104,31 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
       </section>
 
       <section className="shape-container flex flex-col gap-3 p-4">
+        <h2 className="type-heading">Keyboard</h2>
+        {/* #36: the one place the shortcuts are listed — only what
+            exists, so the list can never promise a key nothing answers
+            to. */}
+        <dl className="flex flex-col gap-2 type-provenance text-[var(--muted)]">
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">⌘K</dt>
+            <dd>Search what your duo knows.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">↑ ↓</dt>
+            <dd>Move through the Review queue, entry by entry.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">Tab</dt>
+            <dd>Reach the focused entry's actions.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">Esc</dt>
+            <dd>Leave an open editor, dialog or menu.</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4">
         <h2 className="type-heading">This device</h2>
         {/* #34: the destructive confirmation is the alert-dialog primitive
             — focus trap, Escape-equals-Cancel and the alertdialog role come

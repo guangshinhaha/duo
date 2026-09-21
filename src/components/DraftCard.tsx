@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DraftRecord } from "../api/types.js";
 import { useAnswerEscalation, useRecordOutcome } from "../api/queries.js";
 import type { DuoApiConfig } from "../api/client.js";
@@ -90,6 +90,18 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
   const [editing, setEditing] = useState(false);
   const [editedText, setEditedText] = useState(draft.draftText ?? "");
   const [answerText, setAnswerText] = useState("");
+  // #36: Escape on the editor hands focus back to the Edit that opened
+  // it. The flag is consumed by the effect below, which runs after the
+  // action row has rendered back — the ref is null until then, so the
+  // focus can't happen in the handler itself.
+  const editButtonRef = useRef<HTMLButtonElement | null>(null);
+  const focusEditOnClose = useRef(false);
+  useEffect(() => {
+    if (!editing && focusEditOnClose.current) {
+      focusEditOnClose.current = false;
+      editButtonRef.current?.focus();
+    }
+  }, [editing]);
   const result = toDraftPipelineResult(draft);
   // #23: "nothing changed is nothing changed" — an edit that leaves the
   // duo's text as it was (whitespace included, since the send trims it) is
@@ -197,6 +209,16 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
                 className="w-full rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] p-2 text-[var(--text)]"
                 value={editedText}
                 onChange={(e) => setEditedText(e.target.value)}
+                onKeyDown={(e) => {
+                  // #36: Escape is Cancel — the same discard the button
+                  // makes and nothing more, with focus returned to the
+                  // control that opened the editor.
+                  if (e.key === "Escape") {
+                    focusEditOnClose.current = true;
+                    setEditedText(draft.draftText ?? "");
+                    setEditing(false);
+                  }
+                }}
                 rows={4}
               />
             </div>
@@ -265,7 +287,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
               >
                 {selfAsked ? "Keep" : "Send"}
               </button>
-              <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={() => setEditing(true)}>
+              <button ref={editButtonRef} className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={() => setEditing(true)}>
                 Edit
               </button>
               <button

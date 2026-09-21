@@ -184,7 +184,7 @@ export function Ask() {
       <form className="flex flex-col gap-2" onSubmit={onSubmit}>
         <textarea
           data-testid="ask-question"
-          className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+          className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-[var(--text)]"
           rows={3}
           placeholder="What do you want to ask?"
           value={question}
