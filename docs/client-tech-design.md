@@ -291,7 +291,7 @@ from a guideline to a structural rule, which means it needs a mechanism, not a c
 ```css
 :root {
   --bg:        #0B0C0E;   --surface:  #141619;   --surface-2: #1C1F24;
-  --text:      #E8EAED;   --muted:    #9AA0A6;   --faint:     #5F6469;
+  --text:      #E8EAED;   --muted:    #A6ACB2;   --faint:     #5F6469;
   --accent:    #7C8CFF;                  /* action available. nothing else. */
   --edge:      #24282E;
   --escalate:  #D9A441;   --confident: #4B9E6A;  --refused:   #6B7280;

@@ -9,6 +9,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "../components/primitives/AlertDialog.js";
+import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import { normalizeBaseUrl } from "./Setup.js";
 
 /** Masked to the last few characters — a paired token is a bearer credential, and a settings screen is exactly where screens get shared. */
@@ -28,6 +29,7 @@ function maskedToken(token: string): string {
 export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigChange: (config: DuoApiConfig | null) => void }) {
   const [addressInput, setAddressInput] = useState(api.baseUrl);
   const [error, setError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
 
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-testid="settings">
@@ -72,6 +74,33 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
             </p>
           )}
         </form>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4">
+        <h2 className="type-heading">Appearance</h2>
+        {/* #35: light, dark, or follow the system — applied the moment it
+            is picked and remembered for the next launch. "System" is the
+            absence of a stamp: the OS's own prefers-color-scheme media
+            query carries the palette from there, without a reload. */}
+        <label className="type-provenance text-[var(--muted)]" htmlFor="settings-theme-input">
+          Theme
+        </label>
+        <select
+          aria-label="Theme"
+          className="self-start rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+          data-testid="settings-theme"
+          id="settings-theme-input"
+          value={theme}
+          onChange={(e) => {
+            const next = e.target.value as ThemePreference;
+            setThemePreference(next);
+            setTheme(next);
+          }}
+        >
+          <option value="system">Follow the system</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
       </section>
 
       <section className="shape-container flex flex-col gap-3 p-4">
