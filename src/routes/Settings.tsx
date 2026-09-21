@@ -1,5 +1,14 @@
 import { useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../components/primitives/AlertDialog.js";
 import { normalizeBaseUrl } from "./Setup.js";
 
 /** Masked to the last few characters — a paired token is a bearer credential, and a settings screen is exactly where screens get shared. */
@@ -19,7 +28,6 @@ function maskedToken(token: string): string {
 export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigChange: (config: DuoApiConfig | null) => void }) {
   const [addressInput, setAddressInput] = useState(api.baseUrl);
   const [error, setError] = useState<string | null>(null);
-  const [confirmingUnpair, setConfirmingUnpair] = useState(false);
 
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-testid="settings">
@@ -68,37 +76,39 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
 
       <section className="shape-container flex flex-col gap-3 p-4">
         <h2 className="type-heading">This device</h2>
-        {confirmingUnpair ? (
-          <div className="flex flex-col gap-3" data-testid="settings-unpair-confirmation">
-            <p className="type-provenance text-[var(--muted)]">
+        {/* #34: the destructive confirmation is the alert-dialog primitive
+            — focus trap, Escape-equals-Cancel and the alertdialog role come
+            with it; a stray click outside is not an answer. The copy and
+            the two buttons are exactly what the inline version had. */}
+        <AlertDialog>
+          <AlertDialogTrigger
+            className="self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)]"
+            data-testid="settings-unpair"
+          >
+            Forget this device…
+          </AlertDialogTrigger>
+          <AlertDialogContent className="w-[calc(100vw-3rem)] max-w-md" data-testid="settings-unpair-confirmation">
+            <AlertDialogTitle className="type-heading">Forget this device?</AlertDialogTitle>
+            <AlertDialogDescription className="type-provenance text-[var(--muted)]">
               Forget this device's stored connection? The daemon keeps its own record — this removes the address and token here, on this device only.
-            </p>
+            </AlertDialogDescription>
             <div className="flex gap-2">
-              <button
+              <AlertDialogAction
                 className="rounded-[var(--r-sm)] bg-[var(--refused)] px-3 py-1 text-white"
                 data-testid="settings-unpair-confirm"
                 onClick={() => onConfigChange(null)}
               >
                 Forget this device
-              </button>
-              <button
+              </AlertDialogAction>
+              <AlertDialogCancel
                 className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1"
                 data-testid="settings-unpair-cancel"
-                onClick={() => setConfirmingUnpair(false)}
               >
                 Cancel
-              </button>
+              </AlertDialogCancel>
             </div>
-          </div>
-        ) : (
-          <button
-            className="self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)]"
-            data-testid="settings-unpair"
-            onClick={() => setConfirmingUnpair(true)}
-          >
-            Forget this device…
-          </button>
-        )}
+          </AlertDialogContent>
+        </AlertDialog>
       </section>
     </div>
   );

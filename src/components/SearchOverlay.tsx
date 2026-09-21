@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import { useCorpusSearch, useKnowledge } from "../api/queries.js";
 import type { CorpusRecord } from "../api/types.js";
+import { Dialog, DialogContent } from "./primitives/Dialog.js";
 import { Timestamp } from "./Timestamp.js";
 
 /** Mechanical preview truncation — presentation only. The full text is one click away (#46 AC2); the summary never edits it. */
@@ -43,6 +44,12 @@ function SearchResultRow({ record }: { record: CorpusRecord }) {
  * this" is a question about the corpus, not a draft request, so it never
  * touches the drafting pipeline: every result, its rank, and the
  * degraded-retrieval warning are the daemon's own, rendered verbatim.
+ *
+ * #34: the overlay is the dialog primitive — the portal, focus trap and
+ * Escape handling are Radix's now, not this file's hand-rolled `onKeyDown`
+ * on a raw `<dialog>`; only the search itself is this surface's. The
+ * backdrop press now closes too, which is the primitive's own semantics
+ * rather than something added here.
  */
 export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: () => void }) {
   const [query, setQuery] = useState("");
@@ -57,18 +64,18 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
   const warning = pages.length > 0 ? pages[pages.length - 1]!.warning : undefined;
 
   return (
-    // Fixed overlay: the route underneath stays mounted — search opens
-    // *over* a screen, never *instead of* one (AC3).
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--bg)]/80 p-6" data-testid="search-overlay">
-      <dialog
-        className="shape-container w-full max-w-2xl p-4 open:flex open:flex-col open:gap-3"
-        open
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            onClose();
-          }
-        }}
-      >
+    // The route underneath stays mounted — search opens *over* a screen,
+    // never *instead of* one (AC3): App keeps the surface rendered and
+    // this dialog portals above it.
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) {
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="w-[calc(100vw-3rem)] max-w-2xl" data-testid="search-overlay">
         <form
           className="flex gap-2"
           onSubmit={(e) => {
@@ -140,7 +147,7 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
             )}
           </div>
         )}
-      </dialog>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
