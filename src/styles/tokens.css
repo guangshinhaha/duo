@@ -22,7 +22,9 @@
   --surface: #141619;
   --surface-2: #1c1f24;
   --text: #e8eaed;
-  --muted: #9aa0a6;
+  /* #35: provenance lands on bg, surface and surface-2 alike, so the
+     ramp's carrier holds AAA (7:1) on the worst of the three. */
+  --muted: #a6acb2;
   --faint: #5f6469;
   --accent: #7c8cff; /* action available. nothing else. */
   --edge: #24282e;
@@ -44,7 +46,7 @@
   --surface: #ffffff;
   --surface-2: #f0f0f2;
   --text: #17181a;
-  --muted: #55585e;
+  --muted: #4d5055;
   --faint: #8a8d93;
   --accent: #4d5fe0;
   --edge: #e2e3e6;
@@ -61,7 +63,7 @@
     --surface: #ffffff;
     --surface-2: #f0f0f2;
     --text: #17181a;
-    --muted: #55585e;
+    --muted: #4d5055;
     --faint: #8a8d93;
     --accent: #4d5fe0;
     --edge: #e2e3e6;
