@@ -164,3 +164,16 @@ h3 {
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
+
+/*
+ * #36: one focus law, stated once for everything focusable. A 2px accent
+ * ring, offset so it never eats the control's own border; --accent
+ * clears the 3:1 non-text floor against every backdrop in both themes,
+ * so the ring reads on the ground, on an entry, and on a quiet entry
+ * alike. :focus-visible only — a pointer click never summons it, which
+ * is what keeps the ring a keyboard signal rather than noise.
+ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
