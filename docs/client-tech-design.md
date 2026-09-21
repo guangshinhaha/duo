@@ -110,6 +110,8 @@ thing to drift, and the only client is the owner, so there is nothing to redact.
 | `GET` | `/mirror/portrait` | `InterruptionPortrait` | `derivation/portrait` |
 | `GET` | `/mirror/rules` | `RuleReviewListing` | `derivation/rule-review` |
 | `POST` | `/mirror/rules/:id/:action` | `Rule` | `derivation/rule-review` |
+| `GET` | `/mirror/rules/:id` | `RuleWithEvidence` — the rule with the supporting evidence exchanges behind it | `derivation/rule-review` |
+| `GET` | `/mirror/refusals` | `{ decided: boolean, refusals: Refusal[] }` — the same shape `duo mirror refusals list` prints (`commands/mirror`'s `RefusalsListing`) | `trust/refusals` |
 | `GET` | `/trust/grid` | `GridRow[]` | `trust/grid` |
 | `GET` | `/audit` | `AuditEntry[]` | `permissions/audit` |
 
