@@ -171,6 +171,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
             ) : (
               <div className="flex gap-2">
                 <input
+                  aria-label="Answer it yourself — becomes a standing-order candidate"
                   className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
                   placeholder="Answer it yourself — becomes a standing-order candidate"
                   value={answerText}

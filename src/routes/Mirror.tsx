@@ -44,9 +44,11 @@ function RuleBucketSection({ api, listing, bucket }: { api: DuoApiConfig; listin
 
   return (
     <section className="shape-container flex flex-col gap-2 p-4" data-testid={`bucket-${bucket.key}`}>
-      <h3 className="type-heading">
+      {/* #39: h2, not h3 — a bucket sits directly under the page's h1,
+          and skipping a level is a heading-order break. */}
+      <h2 className="type-heading">
         {bucket.heading} ({rules.length})
-      </h3>
+      </h2>
       {body}
     </section>
   );

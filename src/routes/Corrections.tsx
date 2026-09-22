@@ -86,6 +86,7 @@ export function Corrections({ api }: { api: DuoApiConfig }) {
   if (!candidates || candidates.length === 0) {
     return (
       <div className="p-6 text-[var(--muted)]" data-testid="corrections-empty">
+        <h1 className="type-heading sr-only">Corrections</h1>
         Nothing to confirm yet. Editing a draft before you send it is what puts a correction here.
       </div>
     );
@@ -95,6 +96,7 @@ export function Corrections({ api }: { api: DuoApiConfig }) {
     // #33: the second queue reads as one panel, like the first — the
     // container shape is what makes a queue a thing rather than a pile.
     <div className="p-6">
+      <h1 className="type-heading sr-only">Corrections</h1>
       <div className="shape-container flex flex-col gap-4 p-4" data-testid="corrections-list">
         {candidates.map((candidate) => (
           <CandidateCard key={candidate.id} api={api} candidate={candidate} />

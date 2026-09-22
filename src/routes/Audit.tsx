@@ -63,6 +63,7 @@ export function Audit({ api }: { api: DuoApiConfig }) {
   if (!entries || entries.length === 0) {
     return (
       <div className="p-6 text-[var(--muted)]" data-testid="audit-empty">
+        <h1 className="type-heading sr-only">Audit</h1>
         No one has asked this duo anything yet. When someone does — and it answers, passes, or declines — the exchange lands here.
       </div>
     );
@@ -71,6 +72,7 @@ export function Audit({ api }: { api: DuoApiConfig }) {
   return (
     // #33: the log is one panel — a record, grouped as a record.
     <div className="p-6">
+      <h1 className="type-heading sr-only">Audit</h1>
       <div className="shape-container flex flex-col gap-4 p-4" data-testid="audit-list">
         {[...entries].reverse().map((entry) => (
           <AuditItem key={entry.id} entry={entry} />

@@ -4,7 +4,10 @@ export function MutationError({ error }: { error: Error | null }) {
     return null;
   }
   return (
-    <p className="type-provenance text-[var(--refused)]" data-testid="mutation-error">
+    // #39: role="status" — a failed outcome announces politely; it is
+    // information the owner needs at their own pace, not an interruption
+    // (the button still on screen is the retry path).
+    <p className="type-provenance text-[var(--refused)]" data-testid="mutation-error" role="status">
       {error.message}
     </p>
   );

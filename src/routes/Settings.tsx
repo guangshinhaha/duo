@@ -33,6 +33,9 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
 
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-testid="settings">
+      {/* #39: the page's h1 above its sections' h2s — the sections name
+          themselves; the page did not. */}
+      <h1 className="type-heading sr-only">Settings</h1>
       <section className="shape-container flex flex-col gap-3 p-4">
         <h2 className="type-heading">Connection</h2>
         <div className="flex flex-col gap-1 type-provenance text-[var(--muted)]">

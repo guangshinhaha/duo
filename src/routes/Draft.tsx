@@ -47,6 +47,9 @@ export function Draft({ api, draftId }: { api: DuoApiConfig; draftId: string }) 
     const notOnThisDuo = draft.error instanceof ApiRequestError && draft.error.status === 404;
     return (
       <div className="flex flex-col items-start gap-3 p-6" data-testid={notOnThisDuo ? "draft-not-found" : "draft-error"}>
+        {/* #39: the page's h1 — the route is a page like the named ones
+            are, whatever it says about the draft. */}
+        <h1 className="type-heading sr-only">Draft</h1>
         {notOnThisDuo ? (
           <p className="type-body">This draft is not on this duo.</p>
         ) : (
@@ -60,6 +63,9 @@ export function Draft({ api, draftId }: { api: DuoApiConfig; draftId: string }) 
   }
   return (
     <div className="flex flex-col gap-4 p-6" data-testid="draft-page">
+      {/* #39: the page's h1 — the card's question is content, not the
+          page's name; the address names the page. */}
+      <h1 className="type-heading sr-only">Draft</h1>
       <DraftCard api={api} draft={draft.data} />
     </div>
   );

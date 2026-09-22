@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
@@ -210,6 +210,18 @@ function AppShell() {
   // renders above whatever surface is on screen, so opening it costs
   // nothing that was there, and closing returns to exactly it.
   const [searchOpen, setSearchOpen] = useState(false);
+  // #39: the polite channel for draft arrivals — text set by the
+  // draft-ready push below, self-cleared so each arrival announces.
+  const [arrivalNotice, setArrivalNotice] = useState("");
+  const noticeTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) {
+        clearTimeout(noticeTimer.current);
+      }
+    },
+    [],
+  );
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
@@ -226,7 +238,19 @@ function AppShell() {
   // (C5) it posts "a new draft is waiting", tagged so a click opens that
   // draft's own address (#25); in a plain browser tab notifyDraftReady
   // quietly no-ops (feature-detected, never throws).
-  useDraftReadySocket(api, (draftId) => void notifyDraftReady(draftId));
+  useDraftReadySocket(api, (draftId) => {
+    void notifyDraftReady(draftId);
+    // #39: the same push that fires the OS notification also feeds the
+    // app's polite live region — a draft arriving is otherwise silent to
+    // a screen reader. The notice self-clears, because a live region
+    // does not repeat identical content: the next arrival needs an empty
+    // region to fill.
+    setArrivalNotice("A draft is waiting in the Review queue.");
+    if (noticeTimer.current !== null) {
+      clearTimeout(noticeTimer.current);
+    }
+    noticeTimer.current = setTimeout(() => setArrivalNotice(""), 5000);
+  });
 
   // #25: one subscription for the app's life — a clicked notification
   // routes to the draft it was about. Null outside the shell (nothing to
@@ -278,7 +302,7 @@ function AppShell() {
   return (
     <SyncStatusProvider>
       <div className="flex h-screen bg-[var(--bg)] text-[var(--text)]">
-        <nav className="flex w-56 flex-col gap-1 border-r border-[var(--edge)] p-3">
+        <nav aria-label="Surfaces" className="flex w-56 flex-col gap-1 border-r border-[var(--edge)] p-3">
           <div className="mb-2 px-2 type-provenance uppercase text-[var(--faint)]">Duo</div>
           {/* A draft page belongs to the review loop — Review stays the lit
               entry while one is open, so the way back is always named. */}
@@ -318,6 +342,11 @@ function AppShell() {
               is true of the whole app, not of whichever route is mounted. */}
           <OfflineBar />
           <main className="flex-1 overflow-y-auto">{routeSurface(route, api, setApi)}</main>
+          {/* #39: the app's polite live region — a draft arriving
+              announces here, once, never stealing focus. */}
+          <p className="sr-only" role="status">
+            {arrivalNotice}
+          </p>
           {/* #46: over the screen, never instead of it — the main surface
               stays mounted underneath while search is open. */}
           {searchOpen && api && <SearchOverlay api={api} onClose={() => setSearchOpen(false)} />}
