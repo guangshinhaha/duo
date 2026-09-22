@@ -147,6 +147,10 @@ export function Review({ api }: { api: DuoApiConfig }) {
     // thing on it (the entry shape) — the ground/thing distinction the
     // flat triple erased.
     <div className="p-6">
+      {/* #39: the page's own h1 — the queue's heading is the route, not
+          any one draft; the empty state below carries its visible h1
+          instead. */}
+      <h1 className="type-heading sr-only">Review</h1>
       <div className="shape-container flex flex-col gap-4 p-4" data-testid="review-list">
         <div className="flex flex-wrap items-center gap-2 type-provenance text-[var(--muted)]">
           <label className="flex items-center gap-1">

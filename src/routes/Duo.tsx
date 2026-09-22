@@ -171,6 +171,9 @@ export function Duo({ api }: { api: DuoApiConfig }) {
 
   return (
     <div className="flex h-full flex-col" data-testid="duo-thread">
+      {/* #39: the page's h1 — the thread's own headings are the group's,
+          below it. */}
+      <h1 className="type-heading sr-only">Duo</h1>
       <div className="flex-1 overflow-y-auto p-6">
         {groups.length === 0 ? (
           <div className="p-6 text-[var(--muted)]" data-testid="duo-empty">

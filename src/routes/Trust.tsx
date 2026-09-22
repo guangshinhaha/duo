@@ -49,6 +49,7 @@ export function Trust({ api }: { api: DuoApiConfig }) {
   if (!rows || rows.length === 0) {
     return (
       <div className="p-6 text-[var(--muted)]" data-testid="trust-empty">
+        <h1 className="type-heading sr-only">Trust</h1>
         Nothing earned yet. As your duo answers and you correct it, topics it handles well will show up here.
       </div>
     );
@@ -57,6 +58,7 @@ export function Trust({ api }: { api: DuoApiConfig }) {
   return (
     // #33: the grid is one panel, like every other list of decisionable things.
     <div className="p-6">
+      <h1 className="type-heading sr-only">Trust</h1>
       <div className="shape-container flex flex-col gap-2 p-4" data-testid="trust-grid">
         {rows.map((row) => (
           <TrustRow key={row.topicId} row={row} />

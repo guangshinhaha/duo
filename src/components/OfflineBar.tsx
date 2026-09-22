@@ -29,7 +29,10 @@ export function OfflineBar() {
   }
 
   return (
-    <div data-testid="offline-bar" className="flex flex-col border-b border-[var(--edge)] bg-[var(--surface-2)]">
+    // #39: role="status" — the bar APPEARING is the announcement, polite,
+    // once, no focus moved. Nothing needs dismissing (the bar is true
+    // exactly while the outage is), which is also why it is not an alert.
+    <div data-testid="offline-bar" role="status" className="flex flex-col border-b border-[var(--edge)] bg-[var(--surface-2)]">
       {workspaceTime !== null && (
         <p data-testid="offline-bar-workspace" className="px-4 py-1 text-center type-provenance text-[var(--escalate)]">
           Last synced {workspaceTime}. The workspace is unreachable.

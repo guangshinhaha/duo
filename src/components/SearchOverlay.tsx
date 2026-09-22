@@ -84,6 +84,7 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
           }}
         >
           <input
+            aria-label="Search what your duo knows"
             autoFocus
             className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-[var(--text)]"
             placeholder="Search what your duo knows"
