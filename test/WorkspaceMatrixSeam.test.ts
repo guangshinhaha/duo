@@ -63,6 +63,8 @@ function fakeEvent(
     relatesTo?: { rel_type: string; event_id: string; key?: string; is_falling_back?: boolean };
     /** A replacement's new body, under m.new_content. */
     newContent?: { msgtype: string; body: string };
+    /** The user ids the message mentions, under m.mentions — the half the push rules read (#65). */
+    mentions?: string[];
     /** True once the homeserver (or a member) struck the event. */
     redacted?: boolean;
   },
@@ -79,6 +81,7 @@ function fakeEvent(
       "m.mentions": shape.mentions === undefined ? undefined : { user_ids: shape.mentions },
       "m.new_content": shape.newContent,
       "m.relates_to": shape.relatesTo,
+      "m.mentions": shape.mentions ? { user_ids: shape.mentions } : undefined,
     }),
     getTs: () => shape.ts,
     isRedacted: () => shape.redacted ?? false,
@@ -119,6 +122,7 @@ type FakeClient = MatrixClient & {
   leave: ReturnType<typeof vi.fn>;
   addPushRule: ReturnType<typeof vi.fn>;
   deletePushRule: ReturnType<typeof vi.fn>;
+  setRoomAccountData: ReturnType<typeof vi.fn>;
   searchUserDirectory: ReturnType<typeof vi.fn>;
   sendReadReceipt: ReturnType<typeof vi.fn>;
   sendEvent: ReturnType<typeof vi.fn>;
@@ -157,6 +161,7 @@ function fakeClient(
     leave: vi.fn(async () => ({})),
     addPushRule: vi.fn(async () => ({})),
     deletePushRule: vi.fn(async () => ({})),
+    setRoomAccountData: vi.fn(async () => ({})),
     searchUserDirectory: vi.fn(async () => ({
       results: [
         { user_id: "@carol:workspace.example", display_name: "Carol" },
@@ -183,6 +188,8 @@ function summaryRoom(shape: {
   notificationCount: number;
   highlightCount: number;
   events: MatrixEvent[];
+  /** #69: the room's account-data notification mode, as another device wrote it. */
+  accountDataMode?: "mentions";
 }): Room {
   return {
     roomId: shape.roomId,
@@ -197,6 +204,10 @@ function summaryRoom(shape: {
       const member = shape.members.find((candidate) => candidate.userId === userId);
       return member ? ({ name: member.name ?? null } as RoomMember) : null;
     },
+    getAccountData: (type: string) =>
+      type === "duo.notifications" && shape.accountDataMode
+        ? ({ getContent: () => ({ mode: shape.accountDataMode }) } as MatrixEvent)
+        : undefined,
   } as unknown as Room;
 }
 
@@ -345,6 +356,64 @@ describe("the projection from Matrix events to room messages", () => {
     timelineHandler?.(fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "np", ts: 1 }), client.getRoom("!x")!);
 
     expect(arrivals).toEqual(["!project-x:workspace.example"]);
+  });
+
+  it("a live text arrival carries what a notification needs — sender, words, and whether it mentions the member (#69)", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const arrivals: Array<{ roomId: string; arrival: unknown }> = [];
+    connection.subscribe((roomId, arrival) => arrivals.push({ roomId, arrival }));
+    const timelineHandler = client.on.mock.calls.find(([event]) => event === RoomEvent.Timeline)?.[1] as (
+      event: MatrixEvent,
+      room: Room,
+    ) => void;
+    const room = client.getRoom("!x")!;
+
+    // A mention of the member: the structured half the push rules read is
+    // the same half the arrival reads — one grammar, everywhere.
+    timelineHandler?.(
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "@ana, ship it?", ts: 1, mentions: [SESSION.userId] }),
+      room,
+    );
+    // No mention, no marker — false is a fact here, not an absence.
+    timelineHandler?.(fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "np", ts: 2 }), room);
+    // A thread reply is a message — it interrupts like one.
+    timelineHandler?.(
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "in thread", ts: 3, relatesTo: { rel_type: "m.thread", event_id: "$1" } }),
+      room,
+    );
+    // An amendment of an old message is not a new one — the room hears it,
+    // the notification path does not.
+    timelineHandler?.(
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.text",
+        body: "*",
+        ts: 4,
+        relatesTo: { rel_type: "m.replace", event_id: "$2" },
+        newContent: { msgtype: "m.text", body: "np, 30 days" },
+      }),
+      room,
+    );
+    // A reaction is not a message at all.
+    timelineHandler?.(fakeEvent({ type: "m.reaction", sender: "@ana:workspace.example", body: "👍", ts: 5, relatesTo: { rel_type: "m.annotation", event_id: "$2", key: "👍" } }), room);
+
+    expect(arrivals).toEqual([
+      {
+        roomId: "!project-x:workspace.example",
+        arrival: { senderId: "@bose:workspace.example", senderName: "Bose", body: "@ana, ship it?", mentionsMe: true },
+      },
+      { roomId: "!project-x:workspace.example", arrival: { senderId: "@bose:workspace.example", senderName: "Bose", body: "np", mentionsMe: false } },
+      {
+        roomId: "!project-x:workspace.example",
+        arrival: { senderId: "@bose:workspace.example", senderName: "Bose", body: "in thread", mentionsMe: false },
+      },
+      { roomId: "!project-x:workspace.example", arrival: undefined }, // the replacement
+      { roomId: "!project-x:workspace.example", arrival: undefined }, // the reaction
+    ]);
   });
 
   it("a mention rides the wire in the spec's full shape — anchors in formatted_body, ids in m.mentions (#65 AC4)", async () => {
@@ -617,6 +686,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         latest: { at: 3_000, body: "lunch?" },
         unread: { notifications: 0, mentions: 0 },
         muted: false,
+        notifications: "all", // nothing muted, nothing scoped — the default
       },
       {
         roomId: "!project-x:workspace.example",
@@ -629,6 +699,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         latest: { at: 2_000, body: "ship it" },
         unread: { notifications: 3, mentions: 0 },
         muted: false,
+        notifications: "all",
       },
       {
         roomId: "!announce:workspace.example",
@@ -641,8 +712,35 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         latest: { at: 1_500, body: "all-hands friday" },
         unread: { notifications: 9, mentions: 9 },
         muted: true, // the server's own push rule — true on every device
+        notifications: "nothing", // the same rule, read as the mode it is (#69)
       },
     ]);
+  });
+
+  it("a mentions-only room reads from the room's account data — another device's write, honored here (#69 AC1)", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "r",
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@bose:workspace.example", name: "Bose" },
+          ],
+          notificationCount: 2,
+          highlightCount: 1,
+          events: [],
+          accountDataMode: "mentions",
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [room] = await connection.rooms();
+    expect(room?.notifications).toBe("mentions");
+    expect(room?.muted).toBe(false); // audible — for mentions alone
   });
 
   it("markRead receipts the room's latest event — the durable read position", async () => {
@@ -684,12 +782,17 @@ describe("the rooms projection the conversation list reads (#63)", () => {
     await connection.leave("!r:workspace.example");
     expect(client.leave).toHaveBeenCalledWith("!r:workspace.example");
 
-    // Muting is the account's push rule, server-side — the state every
-    // device of this member reads the same way.
-    await connection.setMuted("!r:workspace.example", true);
+    // The per-conversation notification setting (#69 AC1) is server-side
+    // state every device of this member reads the same way: "nothing" is
+    // the account's own push rule (the mute the list has shown since #63),
+    // and the audible modes stand in the room's account data beside it.
+    await connection.setNotificationMode("!r:workspace.example", "nothing");
     expect(client.addPushRule).toHaveBeenCalledWith("global", "room", "!r:workspace.example", { actions: [], conditions: [] });
-    await connection.setMuted("!r:workspace.example", false);
+    await connection.setNotificationMode("!r:workspace.example", "mentions");
     expect(client.deletePushRule).toHaveBeenCalledWith("global", "room", "!r:workspace.example");
+    expect(client.setRoomAccountData).toHaveBeenCalledWith("!r:workspace.example", "duo.notifications", { mode: "mentions" });
+    await connection.setNotificationMode("!r:workspace.example", "all");
+    expect(client.setRoomAccountData).toHaveBeenCalledWith("!r:workspace.example", "duo.notifications", { mode: "all" });
 
     const people = await connection.searchPeople("carol");
     expect(client.searchUserDirectory).toHaveBeenCalledWith({ term: "carol", limit: expect.any(Number) });

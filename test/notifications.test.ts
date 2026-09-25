@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type SentNotification = { id?: number; title: string; body: string };
 // The handler only reads the echoed id — the payload the shell sends back
-// is the whole notification, but the contract under test is id→draft.
+// is the whole notification, but the contract under test is id→address.
 type ActionCallback = (notification: { id?: number }) => void;
 
 const plugin = {
@@ -85,9 +85,9 @@ describe("#25 — a notification opens the draft it is about", () => {
       onClick = cb;
       return { unregister: () => {} };
     });
-    const { notifyDraftReady, wireDraftNotificationClicks } = await import("../src/notifications.js");
+    const { notifyDraftReady, wireNotificationClicks } = await import("../src/notifications.js");
 
-    expect(await wireDraftNotificationClicks()).not.toBeNull();
+    expect(await wireNotificationClicks()).not.toBeNull();
     expect(plugin.onAction).toHaveBeenCalledTimes(1);
     await notifyDraftReady("d9");
 
@@ -103,8 +103,8 @@ describe("#25 — a notification opens the draft it is about", () => {
       onClick = cb;
       return { unregister: () => {} };
     });
-    const { notifyDraftReady, wireDraftNotificationClicks } = await import("../src/notifications.js");
-    await wireDraftNotificationClicks();
+    const { notifyDraftReady, wireNotificationClicks } = await import("../src/notifications.js");
+    await wireNotificationClicks();
     await notifyDraftReady("d9");
 
     onClick!({ id: 999999 });
@@ -113,7 +113,78 @@ describe("#25 — a notification opens the draft it is about", () => {
 
   it("wiring degrades to null outside the shell, where onAction rejects", async () => {
     plugin.onAction.mockRejectedValue(new Error("window.__TAURI_INTERNALS__ is undefined"));
-    const { wireDraftNotificationClicks } = await import("../src/notifications.js");
-    await expect(wireDraftNotificationClicks()).resolves.toBeNull();
+    const { wireNotificationClicks } = await import("../src/notifications.js");
+    await expect(wireNotificationClicks()).resolves.toBeNull();
+  });
+});
+
+/*
+ * #69: the notification surface widens past drafts — a message, and the
+ * owner's duo acting on the owner's behalf, notify too — under the same
+ * shell adapter and the same degradation rule (#69 AC4): every call
+ * feature-detects and quietly no-ops in a plain browser tab.
+ */
+describe("#69 — notifications beyond drafts, degrading the same way (AC4)", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    plugin.isPermissionGranted.mockReset();
+    plugin.requestPermission.mockReset();
+    plugin.sendNotification.mockReset();
+    plugin.onAction.mockReset();
+    window.location.hash = "";
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.location.hash = "";
+  });
+
+  it("posts a message notification under the app's name, and a click opens its conversation", async () => {
+    plugin.isPermissionGranted.mockResolvedValue(true);
+    let onClick: ActionCallback | undefined;
+    plugin.onAction.mockImplementation(async (cb: ActionCallback) => {
+      onClick = cb;
+      return { unregister: () => {} };
+    });
+    const { postNotification, wireNotificationClicks } = await import("../src/notifications.js");
+    await wireNotificationClicks();
+
+    await postNotification("Bose in project-x: ship it", "#room/%21project-x%3Aworkspace.example");
+    expect(plugin.sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Duo", body: "Bose in project-x: ship it" }),
+    );
+
+    const sent = plugin.sendNotification.mock.calls[0]![0];
+    onClick!({ id: sent.id });
+    expect(window.location.hash).toBe("#room/%21project-x%3Aworkspace.example");
+  });
+
+  it("quietly no-ops in a plain browser, where the plugin calls reject", async () => {
+    plugin.isPermissionGranted.mockRejectedValue(new Error("window.__TAURI_INTERNALS__ is undefined"));
+    const { postNotification } = await import("../src/notifications.js");
+    await expect(postNotification("Bose in project-x: ship it", "#room/x")).resolves.toBeUndefined();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("never sends and never re-asks after a denial", async () => {
+    plugin.isPermissionGranted.mockResolvedValue(false);
+    plugin.requestPermission.mockResolvedValue("denied");
+    const { postNotification } = await import("../src/notifications.js");
+    await postNotification("Bose in project-x: ship it", "#room/x");
+    await postNotification("Your duo escalated a question to you.", "#draft/d1");
+    expect(plugin.requestPermission).toHaveBeenCalledTimes(1);
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+});
+
+describe("#69 AC3 — the duo's own acts carry their own words", () => {
+  it("an escalation and a refusal each say what happened, in words distinct from a draft's", async () => {
+    vi.resetModules();
+    const { draftArrivalBody } = await import("../src/notifications.js");
+    expect(draftArrivalBody({ escalated: true, refused: false })).toBe("Your duo escalated a question to you.");
+    expect(draftArrivalBody({ escalated: true, refused: true })).toBe("Your duo refused to answer for you.");
+    // A plain draft is none of the duo's own acts — the caller keeps the
+    // draft copy that already exists ("A new draft is waiting for your
+    // review."), so the two categories can never blur.
+    expect(draftArrivalBody({ escalated: false, refused: false })).toBeNull();
   });
 });
