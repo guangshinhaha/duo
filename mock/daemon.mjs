@@ -431,7 +431,10 @@ export function createMockDaemon() {
     };
 
     const routes = [
-      ["GET", /^\/duos$/, () => ok([{ kind: "personal" }])],
+      // #40: both shapes the wire defines, so the roster's two labels are
+      // exercisable against the mock — the shared entry is what a trusted
+      // device sees, with the owner's own name as the daemon sends it.
+      ["GET", /^\/duos$/, () => ok([{ kind: "personal" }, { kind: "shared", ownerId: "owner-1", ownerName: "River" }])],
       [
         "GET",
         /^\/drafts$/,

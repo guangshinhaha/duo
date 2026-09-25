@@ -23,6 +23,7 @@ import { Audit } from "./routes/Audit.js";
 import { Mirror } from "./routes/Mirror.js";
 import { Knowledge } from "./routes/Knowledge.js";
 import { SearchOverlay } from "./components/SearchOverlay.js";
+import { DuoRoster } from "./components/DuoRoster.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./components/primitives/Dialog.js";
 
 // §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
@@ -242,6 +243,10 @@ function MobileNav({
           </button>
         </div>
         <DialogDescription className="sr-only">The surfaces, folded for this width.</DialogDescription>
+        {/* #40: the same roster the sidebar carries — one map, folded. The
+            title stays "Duo" (the dialog's name); whose duos these are is
+            the roster's half to say. */}
+        <DuoRoster api={api} />
         <nav aria-label="Surfaces" className="flex flex-col gap-1">
           <ReviewLink api={api} active={onReview} onNavigate={close} />
           <NavLink active={route === "corrections"} href="#corrections" onClick={close}>
@@ -436,7 +441,10 @@ function AppShell() {
         </header>
         <MobileNav api={api} route={route} open={navOpen} onOpenChange={setNavOpen} onDisconnect={() => setApi(null)} />
         <nav aria-label="Surfaces" className="hidden w-56 flex-col gap-1 border-r border-[var(--edge)] p-3 md:flex">
-          <div className="mb-2 px-2 type-provenance uppercase text-[var(--faint)]">Duo</div>
+          {/* #40: the duos the daemon reports, where the hardcoded wordmark
+              stood — `useDuos` stops being dead code the moment the shell
+              renders it. Falls back to the plain wordmark above. */}
+          <DuoRoster api={api} />
           {/* A draft page belongs to the review loop — Review stays the lit
               entry while one is open, so the way back is always named. */}
           <ReviewLink api={api} active={route === "review" || typeof route === "object"} />
