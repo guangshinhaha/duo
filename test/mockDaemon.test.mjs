@@ -275,7 +275,10 @@ describe("mock daemon — mirror, trust, audit, ask (D2/D6)", () => {
     expect(audit.some((e) => !e.askerResolved)).toBe(true);
 
     const duos = await (await get("/duos")).json();
-    expect(duos).toEqual([{ kind: "personal" }]);
+    // #40: the seed now carries both wire shapes — the shared duo is what
+    // a trusted device sees, so the roster's two labels are exercisable
+    // against the mock, not only against unit stubs.
+    expect(duos).toEqual([{ kind: "personal" }, { kind: "shared", ownerId: "owner-1", ownerName: "River" }]);
   });
 });
 

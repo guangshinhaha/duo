@@ -71,6 +71,12 @@ describe("App — the query cache never leaks across a reconnect to a different 
       if (url.includes("daemon-a")) {
         return Promise.resolve(new Response(JSON.stringify([draftFor("A")]), { status: 200 }));
       }
+      // #40: the sidebar's roster query answers on its own, so the one
+      // deliberately-held promise below is the drafts request this test
+      // is about — not whichever query happened to fire last.
+      if (url.includes("/duos")) {
+        return Promise.resolve(new Response(JSON.stringify([{ kind: "personal" }]), { status: 200 }));
+      }
       // daemon B's request is held open deliberately, so a synchronous
       // stale-cache read (if the bug were still present) would be
       // observable before this ever resolves.
