@@ -37,6 +37,53 @@ const duoNeverPosesAsAPerson = ["OwnerMessage", "RoomPersonMessage"].flatMap((pe
   })),
 );
 
+/*
+ * #43: this client must never know what Slack is. Channels are the core's
+ * concern (digital-duo #168): the daemon sends a channel kind and an
+ * adapter-supplied label, and this repository renders both without
+ * recognising either — adding a channel to the core must require no
+ * change here. Same class of rule as AR-13 above, and for the same
+ * reason: a principle with a failing lint is a principle.
+ *
+ * The selectors match external product names wherever code can carry
+ * them — string literals, template quasis, JSX text, identifiers, JSX
+ * element and attribute names — so a `slackIcon` import, a
+ * `<SlackBadge/>`, a `data-slack` attribute, or copy that names a
+ * product all fail, with the message saying why. Icons need no selector
+ * of their own: a channel-specific icon reaches this client only through
+ * one of these shapes (the #34 law already bars hand-rolled `<svg>`).
+ *
+ * Two boundaries are deliberate:
+ *
+ * - Comments are invisible to the AST, so documentation that names a
+ *   product to explain this very rule stays legal — "no matches outside
+ *   documentation" is structural, not a filter.
+ * - The list is a BLOCKLIST of external product names, never an allowlist
+ *   of kinds: the native kind is ours (first-class, not a bridge — the
+ *   issue's clarification after #57) and every kind this client has
+ *   never seen must pass through untouched, so both are permitted by
+ *   construction, not by enumeration. The names are curated for
+ *   unambiguity (no "signal", which collides with Mirror's weak
+ *   signals, no "line", which is a common word) — the list is the
+ *   products a reader would recognise, not an exhaustive registry.
+ *
+ * Scoped to `src/` only: tests speak the DAEMON'S side of the wire, and
+ * a fixture may legitimately carry `channelKind: "slack"` — that is the
+ * core's data crossing the seam, not this client's knowledge.
+ */
+const externalChannelProduct =
+  "slack|discord|telegram|whatsapp|imessage|skype|teams|msteams|email|gmail|outlook|wechat";
+const channelsBelongToTheCore =
+  "names a messaging product — channels belong to the core, not this client (#43): the daemon sends the kind and the adapter's label; render them verbatim, add nothing keyed on either.";
+const noExternalChannelNames = [
+  { selector: `Literal[value=/\\b(${externalChannelProduct})\\b/i]`, message: `This string ${channelsBelongToTheCore}` },
+  { selector: `JSXText[value=/\\b(${externalChannelProduct})\\b/i]`, message: `This text ${channelsBelongToTheCore}` },
+  { selector: `TemplateElement[value.cooked=/\\b(${externalChannelProduct})\\b/i]`, message: `This template ${channelsBelongToTheCore}` },
+  { selector: `Identifier[name=/${externalChannelProduct}/i]`, message: `This name ${channelsBelongToTheCore}` },
+  { selector: `JSXOpeningElement[name.name=/${externalChannelProduct}/i]`, message: `This element ${channelsBelongToTheCore}` },
+  { selector: `JSXAttribute[name.name=/${externalChannelProduct}/i]`, message: `This attribute ${channelsBelongToTheCore}` },
+];
+
 export default tseslint.config(
   // `src-tauri/target/**` is cargo build output (vendored/bundled JS among
   // the artifacts); linting generated files can only ever produce noise.
@@ -46,6 +93,16 @@ export default tseslint.config(
     files: ["**/*.tsx"],
     rules: {
       "no-restricted-syntax": ["error", ...duoNeverPosesAsAPerson],
+    },
+  },
+  // Flat configs override, not merge, the same rule for the same file —
+  // so this block carries BOTH selector sets: inside `src/` the AR-13
+  // composition rule and the channel-vocabulary rule apply together,
+  // while tests keep only AR-13 (their fixtures speak the daemon's wire).
+  {
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    rules: {
+      "no-restricted-syntax": ["error", ...duoNeverPosesAsAPerson, ...noExternalChannelNames],
     },
   },
 );
