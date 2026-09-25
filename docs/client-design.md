@@ -274,7 +274,11 @@ fifth row with a disabled toggle — which teaches the owner it is a policy valu
 enable, quietly undoing the thing the type system was shaped to prevent.
 **→ T4 is not a disabled control. It is absent, with one line of prose saying why. Unknown cells
 render as `ask`, matching `resolveAutonomy`'s default, and no client path can write a cell the
-CLI could not.**
+CLI could not. Trust-grid controls become possible once core exposes the shared module path
+(decision recorded in the core repo's `trust-surface.md`, #179): a grant made from either
+surface reads identically in the grid, carries the acting device in the ledger, and still cannot
+touch T4 — the type system and the store's CHECK constraint, not the route surface, are the
+enforcement.**
 
 ### AR-18 · Two editors, one file, and the files are supposed to win — MEDIUM
 `duo/rules/*.md` is the source of truth for humans; the `rules` table is a projection, hand-edits

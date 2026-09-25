@@ -86,8 +86,9 @@ handles well will show up here."
 ### autonomy level
 
 Per topic, what the duo may do without asking — shown beside its tier, never
-as a control (the daemon has no route to change it; a control would be a
-promise the core would refuse).
+as a control in this cut: the surface stays read-only until the core exposes
+the shared module path (that writes are exposeable in principle is the
+ratified decision, recorded in the core repo's `trust-surface.md`, #179).
 
 ## The verbs
 
