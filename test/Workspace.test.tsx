@@ -96,7 +96,7 @@ function fakeConnection(state: {
   people?: Array<{ userId: string; name: string }>;
 }) {
   let listener: ((roomId: string) => void) | null = null;
-  const roomOf = (roomId: string): RoomSummary | undefined => state.rooms.find((room) => room.roomId === roomId);
+  const roomAt = (roomId: string): number => state.rooms.findIndex((room) => room.roomId === roomId);
   const connection: WorkspaceConnection = {
     rooms: vi.fn(async () =>
       // A fresh array of fresh objects per call, like the real seam's
@@ -116,9 +116,9 @@ function fakeConnection(state: {
     // The homeserver's own read accounting moves — what another device
     // would also see on its next sync.
     markRead: vi.fn(async (roomId: string) => {
-      const room = roomOf(roomId);
-      if (room) {
-        room.unread = { notifications: 0, mentions: 0 };
+      const at = roomAt(roomId);
+      if (at >= 0) {
+        state.rooms[at] = { ...state.rooms[at]!, unread: { notifications: 0, mentions: 0 } };
       }
     }),
     startDirect: vi.fn(async (userId: string) => {
@@ -141,9 +141,9 @@ function fakeConnection(state: {
       }
     }),
     setMuted: vi.fn(async (roomId: string, muted: boolean) => {
-      const room = roomOf(roomId);
-      if (room) {
-        room.muted = muted;
+      const at = roomAt(roomId);
+      if (at >= 0) {
+        state.rooms[at] = { ...state.rooms[at]!, muted };
       }
     }),
     searchPeople: vi.fn(async (query: string) =>
@@ -264,7 +264,9 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     // The entry is a real link to the room's own address; happy-dom's click
     // doesn't follow hashes, so the test drives the same navigation the
     // browser would.
-    expect(screen.getByText("project-x")).toHaveAttribute("href", "#room/!project-x%3Aworkspace.example");
+    // #63's entry markup puts the title in its own element inside the link;
+    // the destination is the link's, resolved by role.
+    expect(screen.getByRole("link", { name: /project-x/ })).toHaveAttribute("href", "#room/!project-x%3Aworkspace.example");
     window.location.hash = "#room/!project-x%3Aworkspace.example";
     window.dispatchEvent(new Event("hashchange"));
 
@@ -489,8 +491,8 @@ describe("#63 AC2 — mentions outrank unread", () => {
     const rooms = roomsFixture();
     // project-x mentioned the member twice among five unread; Bose is
     // merely unread — same list, different demands.
-    rooms[1]!.unread = { notifications: 5, mentions: 2 };
-    rooms[0]!.unread = { notifications: 3, mentions: 0 };
+    rooms[1] = { ...rooms[1]!, unread: { notifications: 5, mentions: 2 } };
+    rooms[0] = { ...rooms[0]!, unread: { notifications: 3, mentions: 0 } };
     const fake = fakeConnection({ rooms, timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
@@ -594,7 +596,7 @@ describe("#63 — read state is durable, not local", () => {
   it("opening a conversation marks it read over the connection, and the badge clears on return", async () => {
     seedSession();
     const rooms = roomsFixture();
-    rooms[1]!.unread = { notifications: 3, mentions: 0 };
+    rooms[1] = { ...rooms[1]!, unread: { notifications: 3, mentions: 0 } };
     const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
 

@@ -4,16 +4,23 @@ import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
+import { roomTitle } from "./Conversations.js";
 import type { RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
 import { duoOwnerLabel, isDuoUserId } from "../workspace/identity.js";
 
 /**
- * #62: one conversation — the timeline and the composer. Who said what is
- * read STRUCTURALLY: a duo-shaped sender (`@duo-<owner>`, identity.ts)
- * renders as the multi-party `RoomDuoMessage` with the possessive
- * attribution ("carol's duo") derived from the id, and a person renders
- * `RoomPersonMessage` by their name. A display name can claim anything; the
- * user-id grammar cannot — which is the whole of AR-13 in a shared room.
+ * #62 + #63: one conversation — the timeline and the composer. Who said
+ * what is read STRUCTURALLY: a duo-shaped sender (`@duo-<owner>`,
+ * identity.ts) renders as the multi-party `RoomDuoMessage` with the
+ * possessive attribution ("carol's duo") derived from the id, and a person
+ * renders `RoomPersonMessage` by their name. A display name can claim
+ * anything; the user-id grammar cannot — which is the whole of AR-13 in a
+ * shared room.
+ *
+ * Opening the conversation is also reading it (#63): the read position is
+ * a receipt on the member's account, sent once the timeline has loaded —
+ * the homeserver's own durable state, which is why the unread badge clears
+ * on every device, not just here.
  *
  * Live arrivals land through the query cache: the subscription invalidates
  * the timeline, the refetch is the truth, and no message is ever spliced
@@ -43,7 +50,32 @@ export function Room({ connection, roomId }: { connection: WorkspaceConnection |
     meta: { target: "workspace" },
   });
 
-  const roomName = rooms.data?.find((room) => room.roomId === roomId)?.name ?? roomId;
+  const room = rooms.data?.find((candidate) => candidate.roomId === roomId);
+  const roomName = room ? roomTitle(room) : roomId;
+
+  // Reading is an account-level fact: receipt the room's latest event once
+  // the timeline is in hand, then let the list re-read the server's
+  // accounting. A failed receipt leaves the room usable — the next open
+  // tries again, and nothing local pretends it happened.
+  useEffect(() => {
+    if (!connection || !timeline.isSuccess || timeline.data === undefined) {
+      return;
+    }
+    let cancelled = false;
+    void connection
+      .markRead(roomId)
+      .then(() => {
+        if (!cancelled) {
+          void queryClient.invalidateQueries({ queryKey: ["workspace", "rooms"] });
+        }
+      })
+      .catch(() => {
+        // The unread badge keeps telling the truth; nothing else breaks.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, roomId, timeline.isSuccess, timeline.data, queryClient]);
 
   if (!connection || timeline.isLoading) {
     return (

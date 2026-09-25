@@ -25,6 +25,7 @@ vi.mock("matrix-js-sdk", () => ({
   MsgType: { Text: "m.text" },
   ReceiptType: { Read: "m.read", FullyRead: "m.fully_read", ReadPrivate: "m.read.private" },
   NotificationCountType: { Highlight: "highlight", Total: "total" },
+  PushRuleKind: { Override: "override", ContentSpecific: "content", RoomSpecific: "room", SenderSpecific: "sender", Underride: "underride" },
   MatrixError: class MatrixError extends Error {
     errcode?: string;
   },
@@ -107,7 +108,7 @@ function fakeClient(
     startClient: vi.fn(),
     stopClient: vi.fn(() => Promise.resolve()),
     getRooms: vi.fn(() => over.rooms ?? [fakeRoom()]),
-    getRoom: vi.fn(() => fakeRoom()),
+    getRoom: vi.fn(() => over.rooms?.[0] ?? fakeRoom()),
     sendMessage: vi.fn(() => Promise.resolve()),
     login: vi.fn(() => Promise.resolve({ access_token: "syt_workspace_token", user_id: "@ana:workspace.example", device_id: "YGBNAUIOMK" })),
     getAccountData: vi.fn((eventType: string) =>
@@ -302,8 +303,9 @@ describe("the rooms projection the conversation list reads (#63)", () => {
           notificationCount: 3,
           highlightCount: 0,
           events: [
-            fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "ship it", ts: 2_000 }),
+            // Matrix timelines read oldest first — the last event is the latest word.
             fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "earlier", ts: 1_000 }),
+            fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "ship it", ts: 2_000 }),
           ],
         }),
         summaryRoom({

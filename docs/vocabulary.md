@@ -111,6 +111,13 @@ colleague's duo appears in a conversation as "{owner}'s duo", attributed
 structurally from its user id (`@duo-<owner>`) — never as a colleague, never
 by a display name it could set to anything.
 
+### mention
+
+A conversation naming the member specifically. On the list, a mention reads
+differently from mere unread — "@ 2" beside the unread count — because it
+is a different demand: unread says you haven't looked, a mention says
+someone is waiting on you.
+
 ## The verbs
 
 One action, one name, everywhere it appears. If a control and a sentence
@@ -169,6 +176,17 @@ Connecting this device to a duo daemon — "Pair your duo" where it's offered
 (the front door's second card, the member shell's offer, Settings' empty
 state). Pairing is offered, never demanded: a member without one messages
 fully and sees the explanation wherever a duo surface would be.
+
+### start / leave / mute
+
+The member's verbs over their own conversations, each an operation on the
+member's workspace account — which is why each holds on every device, and
+why the list's reflection after any of them is the workspace's next answer,
+never a flag this device keeps. Starting searches the workspace's people
+("New conversation"); leaving asks first and can be undone by an invite;
+muting silences without leaving. Reading a conversation is the quiet fourth:
+opening it receipts the latest event, and the unread badge clears
+everywhere the member is signed in.
 
 ## The daemon-owned strings — contract, not suggestions
 

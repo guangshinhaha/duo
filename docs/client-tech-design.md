@@ -286,6 +286,15 @@ grammar mirrored from the core's identity work, digital-duo #187) renders as the
 `RoomDuoMessage` with the possessive attribution derived from the id; a display name can claim
 anything, the id grammar cannot.
 
+#63 widens the seam's read side and adds the member's verbs, all against the member's own
+account — which is what makes them durable across devices: the list's projection (name or
+members, the latest word, unread and its mention half, kind from the `m.direct` account data and
+the join rule, mute from the account's push rules) is composed homeserver-side; the verbs map to
+`createRoom` (a direct conversation), `leave`, a push-rule write (mute), and the user directory
+(search). Opening a conversation receipts the room's latest event (`m.read`, unthreaded) — the
+read position is account state, so the unread badge clears on every device, and no read or mute
+fact is ever stored locally.
+
 ## 3.3 Offline
 
 The query cache persists to storage and rehydrates at launch. Two connections fail for
