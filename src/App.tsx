@@ -11,6 +11,7 @@ import { SyncStatusProvider } from "./sync.js";
 import { OfflineBar } from "./components/OfflineBar.js";
 import { notifyDraftReady, wireDraftNotificationClicks } from "./notifications.js";
 import { setDockBadgeCount } from "./dockBadge.js";
+import { setTrayPendingCount, wireTrayReview } from "./tray.js";
 import { usePendingDrafts } from "./api/queries.js";
 import { Setup } from "./routes/Setup.js";
 import { Settings } from "./routes/Settings.js";
@@ -173,7 +174,14 @@ function ReviewLink({ api, active, onNavigate }: { api: DuoApiConfig; active: bo
   const count = data?.length ?? 0;
   useEffect(() => {
     void setDockBadgeCount(count);
-    return () => void setDockBadgeCount(0);
+    // #42: the menu-bar mirror — the same count, carried to the tray the
+    // same way. The cleanup clears it on unpair (and unmount) so a stale
+    // count never outlives its pairing, exactly like the dock's.
+    void setTrayPendingCount(count);
+    return () => {
+      void setDockBadgeCount(0);
+      void setTrayPendingCount(0);
+    };
   }, [count]);
   return (
     <NavLink active={active} href="#review" count={count} onClick={onNavigate}>
@@ -376,6 +384,17 @@ function AppShell() {
   useEffect(() => {
     let unwire: (() => void) | null = null;
     void wireDraftNotificationClicks().then((dispose) => {
+      unwire = dispose;
+    });
+    return () => unwire?.();
+  }, []);
+
+  // #42: the tray's Review item — the same shape as the subscription above
+  // it. The Rust half shows and focuses the window; the navigation to
+  // Review is the client's half, exactly as a notification click's is.
+  useEffect(() => {
+    let unwire: (() => void) | null = null;
+    void wireTrayReview().then((dispose) => {
       unwire = dispose;
     });
     return () => unwire?.();
