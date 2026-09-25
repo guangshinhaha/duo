@@ -338,8 +338,12 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
     });
   }
 
-  // Pass two — reactions: annotations aggregate under their target and key.
-  const reactions = new Map<string, Map<string, { count: number; mine: boolean }>>();
+  // Pass two — reactions: annotations aggregate under their target and key,
+  // one per sender — the spec's counting rule (client-server API §Event
+  // annotations) is that a duplicate annotation of the same key from one
+  // sender counts once, so the tally is the SET of senders, not the pile
+  // of events: a resent 👍 is not a second person's agreement.
+  const reactions = new Map<string, Map<string, Set<string>>>();
   for (const event of events) {
     if (event.getType() !== EventType.Reaction || event.isRedacted()) {
       continue;
@@ -348,9 +352,10 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
     if (relation?.rel_type !== RelationType.Annotation || relation.event_id === undefined || relation.key === undefined) {
       continue;
     }
-    const under = reactions.get(relation.event_id) ?? new Map<string, { count: number; mine: boolean }>();
-    const tally = under.get(relation.key) ?? { count: 0, mine: false };
-    under.set(relation.key, { count: tally.count + 1, mine: tally.mine || event.getSender() === client.getUserId() });
+    const under = reactions.get(relation.event_id) ?? new Map<string, Set<string>>();
+    const senders = under.get(relation.key) ?? new Set<string>();
+    senders.add(event.getSender() ?? "");
+    under.set(relation.key, senders);
     reactions.set(relation.event_id, under);
   }
 
@@ -387,7 +392,11 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
       redacted: base.redacted,
       reactions: base.redacted
         ? []
-        : [...(reactions.get(eventId) ?? new Map())].map(([key, tally]) => ({ key, count: tally.count, mine: tally.mine })),
+        : [...(reactions.get(eventId) ?? new Map())].map(([key, senders]) => ({
+            key,
+            count: senders.size,
+            mine: senders.has(client.getUserId() ?? ""),
+          })),
       thread: thread
         ? {
             replyCount: thread.replyCount,
@@ -530,10 +539,24 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
     replyInThread: async (roomId, rootEventId, body) => {
       // The wire shape is the thread relation plus its fallback reply
       // (clients that don't thread still see an in-reply-to, instead of
-      // losing the answer's context wholesale). The SDK's m.relates_to
-      // typing models a relation OR a reply, never both — the spec's thread
-      // fallback is exactly both — so the relation is cast to the reply arm
-      // of the type sendMessage takes, and the seam test pins the shape.
+      // losing the answer's context wholesale): the relation targets the
+      // ROOT — the thread's address — while the fallback names the most
+      // recent message known in the thread (spec §Threads), the latest
+      // reply this client has synced or the root itself when nothing has
+      // answered yet. The SDK's m.relates_to typing models a relation OR a
+      // reply, never both — the spec's thread fallback is exactly both —
+      // so the relation is cast to the reply arm of the type sendMessage
+      // takes, and the seam test pins the shape.
+      const room = client.getRoom(roomId);
+      const latestKnownReply = (room?.getLiveTimeline().getEvents() ?? [])
+        .filter((event) => {
+          if (event.getType() !== EventType.RoomMessage || event.isRedacted()) {
+            return false;
+          }
+          const relation = relationOf(event);
+          return relation?.rel_type === RelationType.Thread && relation.event_id === rootEventId;
+        })
+        .at(-1);
       await client.sendMessage(roomId, {
         msgtype: MsgType.Text,
         body,
@@ -541,7 +564,7 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
           rel_type: RelationType.Thread,
           event_id: rootEventId,
           is_falling_back: true,
-          "m.in_reply_to": { event_id: rootEventId },
+          "m.in_reply_to": { event_id: latestKnownReply?.getId() ?? rootEventId },
         } as unknown as { "m.in_reply_to"?: { event_id: string } },
       });
     },
