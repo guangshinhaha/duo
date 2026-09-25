@@ -127,6 +127,8 @@ function fakeClient(
   over: { rooms?: Room[]; directRoomIds?: string[]; mutedRoomIds?: string[] } = {},
 ): FakeClient {
   const client = {
+    userId: SESSION.userId,
+    getUserId: () => SESSION.userId,
     on: vi.fn(),
     off: vi.fn(),
     startClient: vi.fn(),
@@ -181,7 +183,12 @@ function summaryRoom(shape: {
     getMembers: () => shape.members.map((member) => ({ userId: member.userId, name: member.name, membership: "join" })),
     getUnreadNotificationCount: (type?: string) => (type === "highlight" ? shape.highlightCount : shape.notificationCount),
     getLiveTimeline: () => ({ getEvents: () => shape.events }),
-    getMember: () => null,
+    // Membership lookup and the member list agree, the way the SDK's do —
+    // the timeline projection resolves sender names through this door.
+    getMember: (userId: string) => {
+      const member = shape.members.find((candidate) => candidate.userId === userId);
+      return member ? ({ name: member.name ?? null } as RoomMember) : null;
+    },
   } as unknown as Room;
 }
 
@@ -276,6 +283,13 @@ describe("the projection from Matrix events to room messages", () => {
         senderName: "Bose",
         body: "what's our refund policy?",
         originServerTs: 1_700_000_000_000,
+        // #64 widened the projection: the verbs' folded outcomes ride every
+        // row now, at their neutral defaults where nothing happened.
+        edited: false,
+        redacted: false,
+        reactions: [],
+        thread: null,
+        threadRootEventId: null,
       },
       {
         eventId: expect.any(String),
@@ -284,6 +298,11 @@ describe("the projection from Matrix events to room messages", () => {
         senderName: "duo-carol", // no membership record: the localpart, never a blank
         body: "Refunds within 30 days, full amount.",
         originServerTs: 1_700_000_000_002,
+        edited: false,
+        redacted: false,
+        reactions: [],
+        thread: null,
+        threadRootEventId: null,
       },
     ]);
     // The topic event and the file message are not conversation text.
@@ -507,7 +526,10 @@ describe("the timeline projection the message surface reads (#64)", () => {
           roomId: "!project-x:workspace.example",
           name: "project-x",
           joinRule: "invite",
-          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@bose:workspace.example", name: "Bose" },
+          ],
           notificationCount: 0,
           highlightCount: 0,
           events,
@@ -584,6 +606,36 @@ describe("the timeline projection the message surface reads (#64)", () => {
         threadRootEventId: null,
       },
     ]);
+  });
+
+  it("a redaction that pruned the content still keeps its row — a tombstone is a row by having been said", async () => {
+    // What a synced redaction looks like: the event type survives, the
+    // content is pruned whole (msgtype with it). The tombstone must render
+    // from the redaction alone, not from any content the event no longer has.
+    const events = [
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "kept", ts: 1 }),
+      fakeEvent({ type: "m.room.message", sender: "@carol:workspace.example", ts: 2, redacted: true }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timeline("!project-x:workspace.example");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({ body: "kept", redacted: false });
+    expect(messages[1]).toMatchObject({ senderId: "@carol:workspace.example", body: "", redacted: true });
   });
 
   it("edit, delete, react, unreact, and reply-in-thread map to the homeserver's verbs", async () => {

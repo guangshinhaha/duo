@@ -742,11 +742,15 @@ describe("#64 AC1 — messages send and arrive", () => {
     await screen.findByTestId("room-timeline");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    // The async act lets the cache's microtask-batched notification flush —
+    // the row renders from the click alone, before anything arrives.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
 
     // Immediately — nothing has arrived from anywhere yet; the row is this
     // device's own optimistic copy, marked as on its way.
-    const optimistic = await messageRow("thanks all");
+    const optimistic = messageRow("thanks all");
     expect(within(optimistic).getByTestId("room-message-pending")).toBeInTheDocument();
     expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "thanks all");
 
@@ -801,7 +805,9 @@ describe("#64 AC2 — editing and deleting are honest", () => {
       fake.deliver(messageFor({ eventId: "$1", senderId: "@bose:workspace.example", senderName: "Bose", body: "what IS our refund policy?", edited: true })),
     );
 
-    const row = await messageRow("what IS our refund policy?");
+    // The refetch the arrival kicked off is async; waitFor polls the same
+    // mounted DOM — no manual refresh, no remount.
+    const row = await waitFor(() => messageRow("what IS our refund policy?"));
     expect(within(row).getByTestId("room-message-edited")).toBeInTheDocument();
     expect(within(row).queryByText("what's our refund policy?")).toBeNull();
   });
