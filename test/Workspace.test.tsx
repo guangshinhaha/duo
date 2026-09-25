@@ -84,6 +84,7 @@ function messageFor(over: Partial<RoomMessage> & Pick<RoomMessage, "eventId" | "
     reactions: [],
     thread: null,
     threadRootEventId: null,
+    parts: null,
     ...over,
   };
 }
@@ -253,6 +254,24 @@ function fakeConnection(state: {
         list[at] = message;
       } else {
         list.push(message);
+        // #65: a first-time arrival that mentions this user moves the
+        // homeserver's mention accounting with it (the spec's
+        // `.m.rule.is_user_mention` reading `m.mentions.user_ids` — the
+        // badge is the server's count, not something the client tallies),
+        // and a mention is a notification too. An edit never re-counts.
+        if (
+          message.senderId !== SESSION.userId &&
+          message.parts?.some((part) => part.kind === "mention" && part.userId === SESSION.userId)
+        ) {
+          const roomIndex = roomAt(message.roomId);
+          if (roomIndex >= 0) {
+            const unread = state.rooms[roomIndex]!.unread;
+            state.rooms[roomIndex] = {
+              ...state.rooms[roomIndex]!,
+              unread: { notifications: unread.notifications + 1, mentions: unread.mentions + 1 },
+            };
+          }
+        }
       }
       listener?.(message.roomId);
     },
@@ -999,11 +1018,12 @@ describe("#65 AC2 — mentioning a duo asks it", () => {
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
     });
     // The mention rode the wire: the body says it in words people read,
-    // m.mentions says it in ids the homeserver's push rules read.
+    // m.mentions says it in ids the homeserver's push rules read, and the
+    // pick's id+label pair is what the seam anchors the pill from.
     expect(fake.connection.send).toHaveBeenCalledWith(
       "!project-x:workspace.example",
       "@carol's duo what's our refund policy?",
-      ["@duo-carol:workspace.example"],
+      [{ userId: "@duo-carol:workspace.example", label: "carol's duo" }],
     );
 
     // The answer arrives — here, one that was held while its owner's Mac
@@ -1069,6 +1089,106 @@ describe("#65 AC3 — a duo that may not answer says so", () => {
       return row!;
     });
     expect(declinedRow.textContent).toContain(declined);
+  });
+});
+
+/*
+ * #65's receiving half: a mentioning message arrives carrying its parts
+ * (the seam's projection of the formatted body's anchors), and the client
+ * renders each mention as the mention it is — the pill. A duo's pill IS
+ * the duo: its label is re-derived from the user id at the render site, so
+ * a display name a sender claimed for it can never put the owner's name on
+ * somebody's duo.
+ */
+describe("#65 — a delivered mention renders as the mention it is", () => {
+  it("person and duo pills render from the parts, the duo's label from its id, never a claimed name", async () => {
+    seedSession();
+    // Bose's message mentions a person and a duo. The duo's part carries a
+    // lying label — a display name somebody chose — and the pill must not
+    // believe it: the grammar says whose duo it is, the same structural
+    // rule message attribution has always followed.
+    const fake = fakeConnection({
+      rooms: roomsFixture(),
+      timelines: {
+        "!project-x:workspace.example": [
+          messageFor({
+            eventId: "$m1",
+            senderId: "@bose:workspace.example",
+            senderName: "Bose",
+            body: "@Carol, @carol's duo — what's our refund policy?",
+            parts: [
+              { kind: "mention", userId: "@carol:workspace.example", label: "Carol" },
+              { kind: "text", text: ", " },
+              { kind: "mention", userId: "@duo-carol:workspace.example", label: "The Refund Bot" },
+              { kind: "text", text: " — what's our refund policy?" },
+            ],
+          }),
+        ],
+      },
+    });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const pills = await screen.findAllByTestId("room-mention");
+    expect(pills).toHaveLength(2);
+    // The person's pill: their resolved label, the accent's solid border.
+    expect(pills[0]).toHaveTextContent("@Carol");
+    expect(pills[0].dataset.mentionedUser).toBe("@carol:workspace.example");
+    expect(pills[0].className).toContain("border-[var(--accent)]");
+    // The duo's pill: "carol's duo" from `@duo-carol` — not "The Refund
+    // Bot" — wearing the dashed idiom the duo's own messages wear.
+    expect(pills[1]).toHaveTextContent("@carol's duo");
+    expect(pills[1].dataset.mentionedUser).toBe("@duo-carol:workspace.example");
+    expect(pills[1].className).toContain("border-dashed");
+    // The pill said the words; the body's plain text no longer repeats them.
+    expect(screen.queryByText("@Carol, @carol's duo — what's our refund policy?")).toBeNull();
+  });
+});
+
+/*
+ * #65's badge: a mention of you is not just any unread — the list's entry
+ * for that conversation carries the mention badge beside the unread count,
+ * the client-visible receipt of the homeserver's push accounting (the
+ * spec's `.m.rule.is_user_mention` reading `m.mentions.user_ids` — #65
+ * AC4's "notified according to their settings" lands as server state; this
+ * is the count arriving back).
+ */
+describe("#65 — a mention of you marks the conversation in the list", () => {
+  it("a delivered mention-of-you raises the mention badge beside the unread count", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    // project-x starts at 3 unread, no mentions — the badge isn't there.
+    expect(within(entryFor("project-x")).getByTestId("room-unread").textContent).toBe("3 unread");
+    expect(within(entryFor("project-x")).queryByTestId("room-mentions")).toBeNull();
+
+    // Bose mentions ana; the arrival moves the server's counts — a mention
+    // is also a notification — and the entry shows both.
+    act(() =>
+      fake.deliver(
+        messageFor({
+          eventId: "$m2",
+          senderId: "@bose:workspace.example",
+          senderName: "Bose",
+          body: "@ana — can you look at this?",
+          parts: [
+            { kind: "mention", userId: "@ana:workspace.example", label: "ana" },
+            { kind: "text", text: " — can you look at this?" },
+          ],
+        }),
+      ),
+    );
+
+    await waitFor(() => expect(within(entryFor("project-x")).getByTestId("room-mentions").textContent).toBe("@ 1"));
+    expect(within(entryFor("project-x")).getByTestId("room-unread").textContent).toBe("4 unread");
   });
 });
 

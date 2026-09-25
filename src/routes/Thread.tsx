@@ -195,6 +195,7 @@ function ThreadComposer({
             senderId: connection.userId,
             senderName: localpartOf(connection.userId),
             body,
+            parts: null,
             originServerTs: Date.now(),
             edited: false,
             redacted: false,

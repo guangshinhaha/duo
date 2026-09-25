@@ -54,6 +54,11 @@ function fakeEvent(
     msgtype?: string;
     body?: string;
     ts: number;
+    /** #65: the HTML body a mentioning message carries its matrix.to pill anchors in. */
+    format?: string;
+    formattedBody?: string;
+    /** #65: the m.mentions user ids as sent — the intentional-mention list. */
+    mentions?: string[];
     /** The event's relation — a replacement, an annotation, or a thread reply. */
     relatesTo?: { rel_type: string; event_id: string; key?: string; is_falling_back?: boolean };
     /** A replacement's new body, under m.new_content. */
@@ -69,6 +74,9 @@ function fakeEvent(
     getContent: () => ({
       msgtype: shape.msgtype,
       body: shape.body,
+      format: shape.format,
+      formatted_body: shape.formattedBody,
+      "m.mentions": shape.mentions === undefined ? undefined : { user_ids: shape.mentions },
       "m.new_content": shape.newContent,
       "m.relates_to": shape.relatesTo,
     }),
@@ -284,12 +292,14 @@ describe("the projection from Matrix events to room messages", () => {
         body: "what's our refund policy?",
         originServerTs: 1_700_000_000_000,
         // #64 widened the projection: the verbs' folded outcomes ride every
-        // row now, at their neutral defaults where nothing happened.
+        // row now, at their neutral defaults where nothing happened. #65
+        // added `parts` the same way: null where the body is plain words.
         edited: false,
         redacted: false,
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        parts: null,
       },
       {
         eventId: expect.any(String),
@@ -303,6 +313,7 @@ describe("the projection from Matrix events to room messages", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        parts: null,
       },
     ]);
     // The topic event and the file message are not conversation text.
@@ -316,7 +327,14 @@ describe("the projection from Matrix events to room messages", () => {
 
     await connection.send("!project-x:workspace.example", "thanks all");
 
-    expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", { msgtype: MsgType.Text, body: "thanks all" });
+    // #65: even a mention-less send carries m.mentions — the spec
+    // recommends it on every event, because the legacy display-name push
+    // rules otherwise fire on any message that happens to contain a name.
+    expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
+      msgtype: MsgType.Text,
+      body: "thanks all",
+      "m.mentions": { user_ids: [] },
+    });
 
     const arrivals: string[] = [];
     connection.subscribe((roomId) => arrivals.push(roomId));
@@ -329,26 +347,210 @@ describe("the projection from Matrix events to room messages", () => {
     expect(arrivals).toEqual(["!project-x:workspace.example"]);
   });
 
-  it("a mention rides the wire as m.mentions.user_ids — the half the homeserver's push rules read (#65 AC4)", async () => {
+  it("a mention rides the wire in the spec's full shape — anchors in formatted_body, ids in m.mentions (#65 AC4)", async () => {
     const client = fakeClient();
     vi.mocked(createClient).mockReturnValue(client);
     const connection = await connectPrepared(client);
 
-    // The body says the mention in words people read; the structured half
-    // says it in ids — which is what drives the receiving member's
-    // settings-governed notification (the server's conditional push rule).
+    // The body says the mention in words people read; the pills half says
+    // it as matrix.to anchors over exactly those words; the structured
+    // half says it in ids — which is what drives the receiving member's
+    // settings-governed notification (the server's conditional push rule
+    // .m.rule.is_user_mention, and with it the list's mention badge).
     await connection.send("!project-x:workspace.example", "@carol's duo what's our refund policy?", [
-      "@duo-carol:workspace.example",
+      { userId: "@duo-carol:workspace.example", label: "The Refund Bot" },
     ]);
 
     expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
       msgtype: MsgType.Text,
       body: "@carol's duo what's our refund policy?",
+      format: "org.matrix.custom.html",
+      // A duo's anchor text is the grammar's — "@carol's duo" from
+      // @duo-carol — never the caller's claim, so every reader's pill
+      // names the duo, not a name the sender chose.
+      formatted_body: "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol's duo</a> what's our refund policy?",
       "m.mentions": { user_ids: ["@duo-carol:workspace.example"] },
     });
-    // The no-mentions payload carries no m.mentions at all — an empty
-    // mentions object is wire noise, and the send above it already pins
-    // that shape without the key.
+    // The mention-less half of the wire contract is pinned by the send
+    // above: m.mentions always rides, empty when nothing is addressed.
+  });
+});
+
+describe("the pills half of the mention wire (#65)", () => {
+  it("send anchors each mention's addressed words in order — a duo's derived, a repeat anchored once", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.send("!project-x:workspace.example", "@Carol, @carol's duo — what's our refund policy?", [
+      { userId: "@carol:workspace.example", label: "Carol" },
+      // The duo's label is advisory only — the seam derives it.
+      { userId: "@duo-carol:workspace.example", label: "The Refund Bot" },
+      // A repeated id anchors nothing new and pings once.
+      { userId: "@carol:workspace.example", label: "Carol" },
+    ]);
+
+    expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
+      msgtype: MsgType.Text,
+      body: "@Carol, @carol's duo — what's our refund policy?",
+      format: "org.matrix.custom.html",
+      formatted_body:
+        '<a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>, ' +
+        "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol's duo</a> — what's our refund policy?",
+      "m.mentions": { user_ids: ["@carol:workspace.example", "@duo-carol:workspace.example"] },
+    });
+  });
+
+  it("projects formatted_body anchors into parts — a duo's label structural even when the sender lied, a mismatch plain", async () => {
+    const events = [
+      // Bose mentions Carol (a person) and a colleague's duo. The duo's
+      // anchor text is a LIE — "@carol", the owner's name, as if the
+      // person were the duo speaking. The projection derives the duo's
+      // label from the id.
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.text",
+        body: "@Carol, @carol — what's our refund policy?",
+        ts: 1_000,
+        format: "org.matrix.custom.html",
+        formattedBody:
+          '<a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>, ' +
+          '<a href="https://matrix.to/#/@duo-carol:workspace.example">@carol</a> — what\'s our refund policy?',
+        mentions: ["@carol:workspace.example", "@duo-carol:workspace.example"],
+      }),
+      // A plain message beside it: no anchors, no parts.
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "ship it", ts: 2_000 }),
+      // An anchor whose words the body doesn't carry: no pills rather than
+      // wrong ones — the row renders plain.
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.text",
+        body: "lunch?",
+        ts: 3_000,
+        format: "org.matrix.custom.html",
+        formattedBody: '<a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>?',
+      }),
+      // An edit of the mentioning message: the replacement's words ride
+      // m.new_content; this client sends no anchors with an edit, and a
+      // fold never carries pills — the row reads plain words, marked.
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.text",
+        body: "* @Carol, @carol — what IS our refund policy?",
+        ts: 4_000,
+        relatesTo: { rel_type: "m.replace", event_id: "$1000" },
+        newContent: { msgtype: "m.text", body: "@Carol, @carol — what IS our refund policy?" },
+      }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@bose:workspace.example", name: "Bose" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.timeline("!project-x:workspace.example")).toEqual([
+      {
+        eventId: "$1000",
+        roomId: "!project-x:workspace.example",
+        senderId: "@bose:workspace.example",
+        senderName: "Bose",
+        body: "@Carol, @carol — what IS our refund policy?",
+        originServerTs: 1_000,
+        edited: true,
+        redacted: false,
+        reactions: [],
+        thread: null,
+        threadRootEventId: null,
+        parts: null, // the fold's words stand plain — pills don't survive an edit
+      },
+      {
+        eventId: "$2000",
+        roomId: "!project-x:workspace.example",
+        senderId: "@bose:workspace.example",
+        senderName: "Bose",
+        body: "ship it",
+        originServerTs: 2_000,
+        edited: false,
+        redacted: false,
+        reactions: [],
+        thread: null,
+        threadRootEventId: null,
+        parts: null,
+      },
+      {
+        eventId: "$3000",
+        roomId: "!project-x:workspace.example",
+        senderId: "@bose:workspace.example",
+        senderName: "Bose",
+        body: "lunch?",
+        originServerTs: 3_000,
+        edited: false,
+        redacted: false,
+        reactions: [],
+        thread: null,
+        threadRootEventId: null,
+        // The anchor words "@Carol" aren't in the body: degrade to plain.
+        parts: null,
+      },
+    ]);
+    // The pre-edit projection, pinned apart from the fold above: the pills
+    // the message carried before Bose amended it. A person's label falls
+    // back to the anchor's words (no membership record); a duo's label
+    // comes from the id, the lie in the anchor text notwithstanding.
+    events.splice(3, 1);
+    const clientBeforeEdit = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@bose:workspace.example", name: "Bose" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(clientBeforeEdit);
+    const before = await connectPrepared(clientBeforeEdit);
+    expect((await before.timeline("!project-x:workspace.example"))[0]).toEqual({
+      eventId: "$1000",
+      roomId: "!project-x:workspace.example",
+      senderId: "@bose:workspace.example",
+      senderName: "Bose",
+      body: "@Carol, @carol — what's our refund policy?",
+      originServerTs: 1_000,
+      edited: false,
+      redacted: false,
+      reactions: [],
+      thread: null,
+      threadRootEventId: null,
+      parts: [
+        { kind: "mention", userId: "@carol:workspace.example", label: "Carol" },
+        { kind: "text", text: ", " },
+        { kind: "mention", userId: "@duo-carol:workspace.example", label: "carol's duo" },
+        { kind: "text", text: " — what's our refund policy?" },
+      ],
+    });
   });
 });
 
@@ -574,6 +776,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [{ key: "👍", count: 2, mine: true }],
         thread: { replyCount: 1, latestReply: { senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: "np, 30 days" } },
         threadRootEventId: null,
+        parts: null, // a fold keeps the words and drops the pills — see the #65 projection test
       },
       {
         eventId: "$2000",
@@ -587,6 +790,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [], // the only 🎉 was redacted before it ever counted
         thread: null,
         threadRootEventId: null,
+        parts: null,
       },
       {
         eventId: "$3500",
@@ -600,6 +804,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: "$1000", // a thread reply: carried, not a row of the main flow
+        parts: null,
       },
       {
         eventId: "$3600",
@@ -613,6 +818,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        parts: null,
       },
       {
         eventId: "$3700",
@@ -626,6 +832,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        parts: null,
       },
     ]);
   });

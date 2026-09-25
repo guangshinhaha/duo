@@ -15,6 +15,14 @@ import {
   type Room as MatrixRoom,
 } from "matrix-js-sdk";
 import { localpartOf } from "./identity.js";
+import {
+  formattedBodyWithMentions,
+  mentionAnchorsFrom,
+  mentionLabelOf,
+  partsFromBody,
+  type MessageMention,
+  type MessagePart,
+} from "./mentions.js";
 
 /**
  * #62: the workspace seam — the one module this app has that speaks
@@ -110,6 +118,15 @@ export interface RoomMessage {
   /** The sender's name from room membership, or the localpart when the room hasn't told us — a display name is a claim; the id is a fact. */
   readonly senderName: string;
   readonly body: string;
+  /**
+   * #65: the body in parts when the message was sent with mention anchors
+   * — words and mention pills, split where each pill's words sit. Null
+   * when the body is plain words (or the anchors don't line up with it):
+   * the render shows the plain body rather than guessing pills. A fold
+   * (an edit) drops the pills — this client sends no anchors with an
+   * edit, and words that moved render honestly as words.
+   */
+  readonly parts: readonly MessagePart[] | null;
   /** The homeserver's epoch-ms timestamp — server time, not arrival time. */
   readonly originServerTs: number;
   /** True when a same-sender replacement amended these words — the "(edited)" mark is the honesty. */
@@ -135,11 +152,18 @@ export interface WorkspaceConnection {
   timeline(roomId: string): Promise<readonly RoomMessage[]>;
   /**
    * Sends a text message (#65): the body says what people read; when the
-   * message addresses members, their user ids ride `m.mentions.user_ids` —
-   * the structured half the homeserver's push rules read, which is the
-   * whole of "notified according to their settings" from the sender's side.
+   * message addresses members, the seam builds the spec's full mention
+   * shape from their ids and labels — each mention's addressed words ride
+   * `formatted_body` as a matrix.to permalink anchor (a duo's derived
+   * from its user id, never from the caller's label), and the ids ride
+   * `m.mentions.user_ids`, the structured half the homeserver's push
+   * rules read — which is the whole of "notified according to their
+   * settings" from the sender's side. Every send carries `m.mentions`
+   * (empty when nothing is mentioned): the spec recommends it on each
+   * event so the legacy display-name push rules can't fire on a message
+   * that merely contains a name.
    */
-  send(roomId: string, body: string, mentions?: readonly string[]): Promise<void>;
+  send(roomId: string, body: string, mentions?: readonly MessageMention[]): Promise<void>;
   /**
    * Amends this member's own message (#64): a replacement event — the new
    * words ride `m.new_content`, the relation points back at the base, and
@@ -280,6 +304,19 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
   }
   const events = room.getLiveTimeline().getEvents();
   const nameOf = (senderId: string): string => room.getMember(senderId)?.name || localpartOf(senderId);
+  // #65: the pills the message was sent with, read from its formatted
+  // body's matrix.to user anchors. A person's label prefers the room's own
+  // record of their name (membership), else the anchor's text minus its
+  // addressing "@" — the display name as of sending, the spec's own
+  // guidance for anchor text. A duo's label is always the grammar's,
+  // whatever the anchor claimed.
+  const partsOfEvent = (body: string, content: Record<string, unknown>): readonly MessagePart[] | null => {
+    return partsFromBody(
+      body,
+      mentionAnchorsFrom(typeof content?.formatted_body === "string" ? content.formatted_body : undefined),
+      (anchor) => mentionLabelOf(anchor.userId, room.getMember(anchor.userId)?.name || anchor.text.replace(/^@/, "")),
+    );
+  };
 
   // Pass one — the bases: every text message in timeline order, with
   // same-sender replacements folded into the base they amend.
@@ -287,6 +324,7 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
     senderId: string;
     senderName: string;
     body: string;
+    parts: readonly MessagePart[] | null;
     ts: number;
     edited: boolean;
     redacted: boolean;
@@ -312,6 +350,7 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
         senderId,
         senderName: nameOf(senderId),
         body: "",
+        parts: null,
         ts: event.getTs(),
         edited: false,
         redacted: true,
@@ -319,7 +358,8 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
       });
       continue;
     }
-    if (event.getContent()?.msgtype !== MsgType.Text) {
+    const content = event.getContent();
+    if (content?.msgtype !== MsgType.Text) {
       continue;
     }
     if (relation?.rel_type === RelationType.Replace) {
@@ -327,16 +367,23 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
       // place — and only when the sender is the base's own author.
       const targetId = relation.event_id;
       const base = targetId !== undefined ? bases.get(targetId) : undefined;
-      const newBody = (event.getContent()?.["m.new_content"] as { body?: string } | undefined)?.body;
+      const newBody = (content?.["m.new_content"] as { body?: string } | undefined)?.body;
       if (base && !base.redacted && targetId !== undefined && newBody !== undefined && senderId === base.senderId) {
-        bases.set(targetId, { ...base, body: String(newBody), edited: true });
+        // The fold keeps the replacement's words and drops the pills: this
+        // client sends no anchors with an edit, and words that moved
+        // render honestly as words.
+        bases.set(targetId, { ...base, body: String(newBody), parts: null, edited: true });
       }
       continue;
     }
+    // The body the row renders and the body the pills split are one string,
+    // read once — a parts projection of anything else would half-render.
+    const body = String(content?.body ?? "");
     bases.set(event.getId() ?? "", {
       senderId,
       senderName: nameOf(senderId),
-      body: String(event.getContent()?.body ?? ""),
+      body,
+      parts: partsOfEvent(body, content ?? {}),
       ts: event.getTs(),
       edited: false,
       redacted: false,
@@ -393,6 +440,7 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
       senderId: base.senderId,
       senderName: base.senderName,
       body: base.body,
+      parts: base.parts,
       originServerTs: base.ts,
       edited: base.edited,
       redacted: base.redacted,
@@ -501,15 +549,19 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
         .sort((a, b) => (b.latest?.at ?? Number.MIN_SAFE_INTEGER) - (a.latest?.at ?? Number.MIN_SAFE_INTEGER));
     },
     timeline: async (roomId) => timelineOf(client, roomId),
-    send: async (roomId, body, mentions) => {
-      // An empty mentions list is no mention: the key rides the wire only
-      // when there is somebody addressed.
-      await client.sendMessage(
-        roomId,
-        mentions && mentions.length > 0
-          ? { msgtype: MsgType.Text, body, "m.mentions": { user_ids: [...mentions] } }
-          : { msgtype: MsgType.Text, body },
-      );
+    send: async (roomId, body, mentions = []) => {
+      // #65: the spec's mention wire shape (§User and room mentions). The
+      // HTML half rides only when something was anchored; the intent half
+      // always does — empty when nothing is mentioned, because the legacy
+      // display-name push rules otherwise fire on any message that merely
+      // contains a name.
+      const formatted = formattedBodyWithMentions(body, mentions);
+      await client.sendMessage(roomId, {
+        msgtype: MsgType.Text,
+        body,
+        ...(formatted === null ? {} : { format: "org.matrix.custom.html", formatted_body: formatted }),
+        "m.mentions": { user_ids: [...new Set(mentions.map((mention) => mention.userId))] },
+      });
     },
     // The verbs are all homeserver operations on the room — the surface adds
     // no behaviour, it asks the server to move its own state and renders the

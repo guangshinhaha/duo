@@ -117,10 +117,15 @@ Addressing a person or somebody's duo — the product's central gesture, and
 one word for both halves of it. Composing one: an "@" in the composer offers
 the room's members, clearly distinguished — a person by their name, a duo as
 "{owner}'s duo" from the user-id grammar, never from a name a sender chose;
-the pick lands in the text as words people read and rides the wire as ids
-(`m.mentions`) the homeserver's notification settings read, and a mention
-deleted from the text doesn't ride the wire — what the message doesn't say,
-the wire doesn't claim. Receiving one: on the list, a mention reads
+the pick lands in the text as words people read and rides the wire both ways
+the spec carries a mention — as ids (`m.mentions.user_ids`) the homeserver's
+notification settings read, and as the pill half (`formatted_body` matrix.to
+anchors around exactly those words) the receiving client renders — and a
+mention deleted from the text doesn't ride the wire: what the message
+doesn't say, the wire doesn't claim. Receiving one: the message's mentions
+render as mentions — a pill per mention, a person's by the resolved name, a
+duo's reading "{owner}'s duo" re-derived from its user id so a claimed
+display name can never misname it — and on the list, a mention reads
 differently from mere unread — "@ 2" beside the unread count — because it
 is a different demand: unread says you haven't looked, a mention says
 someone is waiting on you. A mentioned duo's answer arrives in the

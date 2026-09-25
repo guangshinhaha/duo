@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
@@ -6,6 +7,7 @@ import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { roomTitle } from "./Conversations.js";
 import type { RoomMemberRef, RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
+import { addressed, mentionLabelOf, type MessageMention } from "../workspace/mentions.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 
@@ -49,7 +51,43 @@ export function threadHref(roomId: string, rootEventId: string): string {
 
 /** The latest reply's author as the id says they are — "carol's duo" from `@duo-carol`, never a chosen name. */
 function threadPreviewLabel(reply: { senderId: string; senderName: string }): string {
-  return isDuoUserId(reply.senderId) ? `${duoOwnerLabel(reply.senderId) ?? reply.senderName}'s duo` : reply.senderName;
+  return mentionLabelOf(reply.senderId, reply.senderName);
+}
+
+/**
+ * #65: one mention pill. A duo's pill IS the duo — its label re-derived
+ * from the user id here at the render site (the projection already did;
+ * this is the same structural rule holding at the last inch, so no lying
+ * delivered label can put the owner's name on the duo), carried visually
+ * by the dashed border the duo's own messages use. A person's pill is
+ * solid and reads the label the projection resolved. The pill's text is
+ * the addressed words the body carries — the same "@" the composer's pick
+ * left there.
+ */
+function MentionPill({ userId, label }: { userId: string; label: string }) {
+  return (
+    <span
+      className={`rounded-[var(--r-sm)] border px-1 ${
+        isDuoUserId(userId)
+          ? "border-dashed border-[var(--edge)] bg-[var(--surface-2)] text-[var(--text)]"
+          : "border-[var(--accent)] text-[var(--text)]"
+      }`}
+      data-mentioned-user={userId}
+      data-testid="room-mention"
+    >
+      {addressed(userId, label)}
+    </span>
+  );
+}
+
+/** The message's words for rendering: the plain body, or its parts with a pill at each mention (#65). */
+function messageWords(message: RoomMessage): ReactNode {
+  if (message.parts === null) {
+    return message.body;
+  }
+  return message.parts.map((part, index) =>
+    part.kind === "mention" ? <MentionPill key={index} label={part.label} userId={part.userId} /> : part.text,
+  );
 }
 
 export function Room({ connection, roomId }: { connection: WorkspaceConnection | null; roomId: string }) {
@@ -277,9 +315,9 @@ export function MessageBody({
   return (
     <div className="flex flex-col gap-1">
       {fromDuo ? (
-        <RoomDuoMessage ownerName={duoOwnerLabel(message.senderId) ?? message.senderName}>{message.body}</RoomDuoMessage>
+        <RoomDuoMessage ownerName={duoOwnerLabel(message.senderId) ?? message.senderName}>{messageWords(message)}</RoomDuoMessage>
       ) : (
-        <RoomPersonMessage authorName={message.senderName}>{message.body}</RoomPersonMessage>
+        <RoomPersonMessage authorName={message.senderName}>{messageWords(message)}</RoomPersonMessage>
       )}
       <p className="type-provenance text-[var(--faint)]">
         <Timestamp iso={new Date(message.originServerTs).toISOString()} />
@@ -492,11 +530,13 @@ interface MentionCandidate {
 function mentionCandidatesOf(members: readonly RoomMemberRef[], selfId: string): readonly MentionCandidate[] {
   return members
     .filter((member) => member.userId !== selfId)
-    .map((member) =>
-      isDuoUserId(member.userId)
-        ? { userId: member.userId, label: `${duoOwnerLabel(member.userId) ?? localpartOf(member.userId)}'s duo`, kind: "duo" }
-        : { userId: member.userId, label: member.name ?? localpartOf(member.userId), kind: "person" },
-    );
+    .map((member) => ({
+      userId: member.userId,
+      // The label comes from the one home of the rule — a duo offers as
+      // "{owner}'s duo" from the @duo- grammar, never from a display name.
+      label: mentionLabelOf(member.userId, member.name ?? localpartOf(member.userId)),
+      kind: isDuoUserId(member.userId) ? "duo" : "person",
+    }));
 }
 
 /**
@@ -537,10 +577,12 @@ function RoomComposer({
   const [text, setText] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // The picks made from the offer; only those whose label still stands in
-  // the text at send time ride the wire — what the message doesn't say, the
-  // wire doesn't claim.
-  const [picks, setPicks] = useState<{ userId: string; label: string }[]>([]);
+  // The picks made from the offer; only those whose addressed words still
+  // stand in the text at send time ride the wire — what the message
+  // doesn't say, the wire doesn't claim. The pick carries its label beside
+  // its id: the seam derives each pill's anchor from the pair, a duo's
+  // from the id's grammar alone.
+  const [picks, setPicks] = useState<readonly MessageMention[]>([]);
   const trimmed = text.trim();
   const disabled = trimmed.length === 0 || pending;
 
@@ -555,7 +597,7 @@ function RoomComposer({
   const pickMention = (candidate: MentionCandidate): void => {
     // The half-typed token goes, the chosen label lands with its trailing
     // space — the text now says the mention in words people read.
-    setText(text.replace(/@[^@\s]*$/, `@${candidate.label} `));
+    setText(text.replace(/@[^@\s]*$/, `${addressed(candidate.userId, candidate.label)} `));
     setPicks((current) => [...current.filter((pick) => pick.userId !== candidate.userId), { userId: candidate.userId, label: candidate.label }]);
   };
 
@@ -569,7 +611,7 @@ function RoomComposer({
           return;
         }
         const body = trimmed;
-        const mentionIds = [...new Set(picks.filter((pick) => text.includes(`@${pick.label}`)).map((pick) => pick.userId))];
+        const livePicks = picks.filter((pick) => text.includes(addressed(pick.userId, pick.label)));
         const echoId = `pending-${(echoSequence += 1)}`;
         setPending(true);
         setError(null);
@@ -584,6 +626,7 @@ function RoomComposer({
             senderId: connection.userId,
             senderName: localpartOf(connection.userId),
             body,
+            parts: null,
             originServerTs: Date.now(),
             edited: false,
             redacted: false,
@@ -593,7 +636,7 @@ function RoomComposer({
             pending: true,
           },
         ]);
-        const sending = mentionIds.length > 0 ? connection.send(roomId, body, mentionIds) : connection.send(roomId, body);
+        const sending = livePicks.length > 0 ? connection.send(roomId, body, livePicks) : connection.send(roomId, body);
         sending
           .then(() => {
             setText("");

@@ -311,14 +311,25 @@ the copy, and nothing else ever renders it.
 
 #65 adds mentioning, on the same principle: the surface adds no behaviour, it addresses. The
 composer offers the room's own members (the member themself excepted) — a person by their name,
-a duo as "{owner}'s duo" from the user-id grammar — and a surviving pick rides the wire as
-`m.mentions.user_ids` on `m.room.message`, the structured half the homeserver's push rules read
-(the body carries "@label" for humans; a pick deleted from the text rides nothing — the key is
-omitted entirely, not sent empty). The duo's answer — a question asked while its owner's Mac
-slept is answered on wake (core #186, held-not-lost) — arrives through the room like any duo
-message and renders attributed from the id grammar; nothing is synthesized before it arrives,
-and the daemon's permissions outcomes (passed on, declined) render in the daemon's own words,
-verbatim.
+a duo as "{owner}'s duo" from the user-id grammar — and a surviving pick rides the wire in the
+spec's full shape (v1.15 §32): `m.mentions.user_ids` on `m.room.message`, the structured half
+the homeserver's push rules read, sent on every message — empty included, as the spec
+recommends, so the legacy display-name rules stay quiet — and beside it the pill half,
+matrix.to anchors in `formatted_body` around exactly the words the pick left in the body (the
+body carries "@label" for humans; a pick deleted from the text rides nothing). The duo's
+answer — a question asked while its owner's Mac slept is answered on wake (core #186,
+held-not-lost) — arrives through the room like any duo message and renders attributed from the
+id grammar; nothing is synthesized before it arrives, and the daemon's permissions outcomes
+(passed on, declined) render in the daemon's own words, verbatim.
+
+The receiving half completes the gesture: the seam reads a message's anchors back and projects
+the body into parts — plain-text runs and mention parts, all-or-nothing, so a body that no
+longer matches its anchors renders as the plain words rather than half a pill — with a person's
+part-label preferring the room's own record of their name, else the anchor's text. Each mention
+part renders as a pill, a duo's label re-derived from the id grammar at the render site (the
+same structural rule holding at the last inch, so no display name a sender claimed can misname
+somebody's duo), and the list's unread counts arrive homeserver-composed with their mention
+half already in them — the "@ 2" badge is that count, not something the client tallies.
 
 ## 3.3 Offline
 
