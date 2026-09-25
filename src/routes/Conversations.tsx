@@ -1,14 +1,42 @@
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
+import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { RouteLoading } from "../components/RouteLoading.js";
-import type { WorkspaceConnection } from "../workspace/matrix.js";
+import { Timestamp } from "../components/Timestamp.js";
+import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
+import { type RoomSummary, type WorkspaceConnection } from "../workspace/matrix.js";
 
 /**
- * #62: the conversations list — the member's default space (§1.5: people,
- * groups, and colleagues' duos, all entries in one list). Rooms arrive over
- * the held workspace connection; live activity (a message landing in any
- * room the subscription reports) refreshes the list with the rest, because
- * a room that just spoke is the room you'd open.
+ * The title a room reads under: its name when it has one, its members when
+ * it doesn't (a direct conversation IS its members), its id as the last
+ * resort. Pure presentation over the projection — the Room route renders
+ * the same title the list does, so both read from here.
+ */
+export function roomTitle(room: RoomSummary): string {
+  if (room.name !== null) {
+    return room.name;
+  }
+  const names = room.members.map((member) => member.name ?? localpartOf(member.userId));
+  return names.length > 0 ? names.join(", ") : room.roomId;
+}
+
+/**
+ * #62 + #63: the conversations list — the member's default space (§1.5:
+ * people, groups, and colleagues' duos, all entries in one list), and the
+ * place that answers "where am I needed?" without opening anything. Each
+ * entry reads with its name or its members, the latest word and its age,
+ * the unread badge — and, when the conversation mentioned the member, the
+ * mention badge beside it (a mention is a demand; unread is only an
+ * absence). A room carrying a colleague's duo says so on the entry, by the
+ * `@duo-` grammar of the member id rather than any name the duo chose.
+ *
+ * The member's verbs live here too (#63): starting a conversation (the
+ * workspace directory, searched), leaving one (asked, then done), and
+ * muting one. All three are homeserver operations on the member's own
+ * account — which is why they hold on every device, and why the list's
+ * reflection after any of them is the server's next answer, never a flag
+ * this device keeps for itself.
  *
  * The workspace target label matters (#58): a workspace query failing at
  * the network level reads as THE WORKSPACE being unreachable, never as the
@@ -75,12 +103,25 @@ export function Conversations({
 }
 
 function RoomList({ connection }: { connection: WorkspaceConnection }) {
+  const queryClient = useQueryClient();
   const rooms = useQuery({
     queryKey: ["workspace", "rooms"],
     queryFn: () => connection.rooms(),
     enabled: true,
     meta: { target: "workspace" },
   });
+  // #63's verbs and their failure lane: every entry shares one line of
+  // "the workspace didn't take that", because the failure is the
+  // workspace's, not the entry's.
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busyRoomId, setBusyRoomId] = useState<string | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+  const [leaveTarget, setLeaveTarget] = useState<RoomSummary | null>(null);
+  const [leaving, setLeaving] = useState(false);
+
+  const refresh = (): void => {
+    void queryClient.invalidateQueries({ queryKey: ["workspace", "rooms"] });
+  };
 
   if (rooms.isLoading) {
     return (
@@ -105,28 +146,213 @@ function RoomList({ connection }: { connection: WorkspaceConnection }) {
     );
   }
 
+  const toggleMute = (room: RoomSummary): void => {
+    if (busyRoomId !== null) {
+      return;
+    }
+    setBusyRoomId(room.roomId);
+    setActionError(null);
+    connection
+      .setMuted(room.roomId, !room.muted)
+      .then(() => setActionError(null))
+      .catch(() => setActionError("The workspace didn't take that — try again."))
+      .finally(() => {
+        setBusyRoomId(null);
+        refresh();
+      });
+  };
+
+  const confirmLeave = (): void => {
+    if (!leaveTarget || leaving) {
+      return;
+    }
+    setLeaving(true);
+    setActionError(null);
+    connection
+      .leave(leaveTarget.roomId)
+      .then(() => setLeaveTarget(null))
+      .catch(() => setActionError("The workspace didn't take that — try again."))
+      .finally(() => {
+        setLeaving(false);
+        refresh();
+      });
+  };
+
   return (
     <div className="flex h-full flex-col">
       <h1 className="type-heading sr-only">Conversations</h1>
       <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex items-center justify-between gap-2">
+          <p className="type-provenance uppercase text-[var(--faint)]">Newest first</p>
+          <button
+            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 type-body text-[var(--bg)]"
+            data-testid="conversations-new"
+            onClick={() => setNewOpen(true)}
+          >
+            New conversation
+          </button>
+        </div>
+        {actionError && (
+          <p className="mt-2 type-body text-[var(--refused)]" data-testid="room-action-error" role="alert">
+            {actionError}
+          </p>
+        )}
         {rooms.data.length === 0 ? (
           <p className="p-6 text-[var(--muted)]" data-testid="conversations-empty">
             No conversations yet. When someone messages you, it appears here.
           </p>
         ) : (
-          <nav aria-label="Conversations" className="flex flex-col gap-2" data-testid="conversations-list">
+          <nav aria-label="Conversations" className="mt-2 flex flex-col gap-2" data-testid="conversations-list">
             {rooms.data.map((room) => (
-              <a
-                className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 text-left type-body text-[var(--text)]"
-                data-testid="conversations-room"
-                href={`#room/${encodeURIComponent(room.roomId)}`}
+              <ConversationEntry
+                busy={busyRoomId === room.roomId}
                 key={room.roomId}
-              >
-                {room.name}
-              </a>
+                onLeave={() => setLeaveTarget(room)}
+                onToggleMute={() => toggleMute(room)}
+                room={room}
+              />
             ))}
           </nav>
         )}
+      </div>
+      {newOpen && (
+        <NewConversationDialog
+          connection={connection}
+          onOpenChange={setNewOpen}
+          onStarted={(roomId) => {
+            setNewOpen(false);
+            refresh();
+            window.location.hash = `#room/${encodeURIComponent(roomId)}`;
+          }}
+        />
+      )}
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setLeaveTarget(null);
+          }
+        }}
+        open={leaveTarget !== null}
+      >
+        {leaveTarget && (
+          <DialogContent data-testid="leave-conversation-dialog">
+            <DialogTitle>Leave {roomTitle(leaveTarget)}?</DialogTitle>
+            <DialogDescription>
+              You&apos;ll stop getting its messages. Whoever remains keeps the conversation, and you can be invited back.
+            </DialogDescription>
+            <div className="flex justify-end gap-2">
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body"
+                data-testid="leave-conversation-cancel"
+                onClick={() => setLeaveTarget(null)}
+                type="button"
+              >
+                Stay
+              </button>
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--escalate)] px-3 type-body text-[var(--bg)] disabled:opacity-40"
+                data-testid="leave-conversation-confirm"
+                disabled={leaving}
+                onClick={confirmLeave}
+                type="button"
+              >
+                {leaving ? "Leaving…" : "Leave"}
+              </button>
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
+    </div>
+  );
+}
+
+/** One conversation as a row: the link, what it says about itself, and the member's verbs beside it. */
+function ConversationEntry({
+  room,
+  busy,
+  onToggleMute,
+  onLeave,
+}: {
+  room: RoomSummary;
+  busy: boolean;
+  onToggleMute: () => void;
+  onLeave: () => void;
+}) {
+  const title = roomTitle(room);
+  // Whose duos ride in this room — read from member ids, never from names.
+  const duoLabels = room.members
+    .filter((member) => isDuoUserId(member.userId))
+    .map((member) => `${duoOwnerLabel(member.userId) ?? localpartOf(member.userId)}'s duo`);
+
+  return (
+    <div className="flex items-stretch gap-2" data-testid="conversations-entry">
+      <a
+        className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 text-left"
+        data-testid="conversations-room"
+        href={`#room/${encodeURIComponent(room.roomId)}`}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="type-body text-[var(--text)]" data-testid="room-title">
+            {title}
+          </span>
+          {room.muted && (
+            <span className="type-provenance uppercase text-[var(--faint)]" data-testid="room-muted">
+              Muted
+            </span>
+          )}
+          {duoLabels.map((label) => (
+            <span className="type-provenance text-[var(--muted)]" data-testid="room-duo" key={label}>
+              {label}
+            </span>
+          ))}
+        </div>
+        <div className="mt-1 flex items-baseline justify-between gap-2">
+          <span className="truncate type-body text-[var(--muted)]" data-testid="room-preview">
+            {room.latest ? room.latest.body : "No messages yet."}
+          </span>
+          {room.latest && <Timestamp iso={new Date(room.latest.at).toISOString()} />}
+        </div>
+        {(room.unread.notifications > 0 || room.unread.mentions > 0) && (
+          <div className="mt-1 flex items-center gap-2">
+            {room.unread.notifications > 0 && (
+              <span
+                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance text-[var(--text)]"
+                data-testid="room-unread"
+              >
+                {room.unread.notifications} unread
+              </span>
+            )}
+            {room.unread.mentions > 0 && (
+              <span
+                className="rounded-[var(--r-sm)] bg-[var(--accent)] px-2 type-provenance text-[var(--bg)]"
+                data-testid="room-mentions"
+              >
+                @ {room.unread.mentions}
+              </span>
+            )}
+          </div>
+        )}
+      </a>
+      <div className="flex flex-col justify-center gap-1">
+        <button
+          aria-label={`${room.muted ? "Unmute" : "Mute"} ${title}`}
+          className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance text-[var(--muted)] disabled:opacity-40"
+          data-testid="room-mute"
+          disabled={busy}
+          onClick={onToggleMute}
+          type="button"
+        >
+          {room.muted ? "Unmute" : "Mute"}
+        </button>
+        <button
+          aria-label={`Leave ${title}`}
+          className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance text-[var(--muted)] disabled:opacity-40"
+          data-testid="room-leave"
+          onClick={onLeave}
+          type="button"
+        >
+          Leave
+        </button>
       </div>
     </div>
   );

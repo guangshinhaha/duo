@@ -23,12 +23,15 @@ vi.mock("matrix-js-sdk", () => ({
   RoomEvent: { Timeline: "timeline" },
   SyncState: { Prepared: "PREPARED" },
   MsgType: { Text: "m.text" },
+  ReceiptType: { Read: "m.read", FullyRead: "m.fully_read", ReadPrivate: "m.read.private" },
+  NotificationCountType: { Highlight: "highlight", Total: "total" },
+  PushRuleKind: { Override: "override", ContentSpecific: "content", RoomSpecific: "room", SenderSpecific: "sender", Underride: "underride" },
   MatrixError: class MatrixError extends Error {
     errcode?: string;
   },
 }));
 
-import { ClientEvent, createClient, MsgType, RoomEvent } from "matrix-js-sdk";
+import { ClientEvent, createClient, MsgType, ReceiptType, RoomEvent } from "matrix-js-sdk";
 import { connect, signIn } from "../src/workspace/matrix.js";
 import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
 
@@ -80,21 +83,80 @@ type FakeClient = MatrixClient & {
   getRoom: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   login: ReturnType<typeof vi.fn>;
+  getAccountData: ReturnType<typeof vi.fn>;
+  getPushRules: ReturnType<typeof vi.fn>;
+  createRoom: ReturnType<typeof vi.fn>;
+  leave: ReturnType<typeof vi.fn>;
+  addPushRule: ReturnType<typeof vi.fn>;
+  deletePushRule: ReturnType<typeof vi.fn>;
+  searchUserDirectory: ReturnType<typeof vi.fn>;
+  sendReadReceipt: ReturnType<typeof vi.fn>;
 };
 
-/** A client whose first sync is fired by the test, the way a homeserver's PREPARED state would. */
-function fakeClient(): FakeClient {
+/**
+ * A client whose first sync is fired by the test, the way a homeserver's
+ * PREPARED state would. The #63 overridables carry the list projection's
+ * inputs: which rooms exist, which of them the m.direct account data marks
+ * direct, and which the server's push rules hold muted.
+ */
+function fakeClient(
+  over: { rooms?: Room[]; directRoomIds?: string[]; mutedRoomIds?: string[] } = {},
+): FakeClient {
   const client = {
     on: vi.fn(),
     off: vi.fn(),
     startClient: vi.fn(),
     stopClient: vi.fn(() => Promise.resolve()),
-    getRooms: vi.fn(() => [fakeRoom()]),
-    getRoom: vi.fn(() => fakeRoom()),
+    getRooms: vi.fn(() => over.rooms ?? [fakeRoom()]),
+    getRoom: vi.fn(() => over.rooms?.[0] ?? fakeRoom()),
     sendMessage: vi.fn(() => Promise.resolve()),
     login: vi.fn(() => Promise.resolve({ access_token: "syt_workspace_token", user_id: "@ana:workspace.example", device_id: "YGBNAUIOMK" })),
+    getAccountData: vi.fn((eventType: string) =>
+      eventType === "m.direct"
+        ? { getContent: () => ({ "@bose:workspace.example": over.directRoomIds ?? [] }) }
+        : undefined,
+    ),
+    getPushRules: vi.fn(async () => ({
+      global: { room: (over.mutedRoomIds ?? []).map((roomId) => ({ rule_id: roomId, enabled: true, actions: [] })) },
+    })),
+    createRoom: vi.fn(async () => ({ room_id: "!fresh:workspace.example" })),
+    leave: vi.fn(async () => ({})),
+    addPushRule: vi.fn(async () => ({})),
+    deletePushRule: vi.fn(async () => ({})),
+    searchUserDirectory: vi.fn(async () => ({
+      results: [
+        { user_id: "@carol:workspace.example", display_name: "Carol" },
+        { user_id: "@duo-carol:workspace.example", display_name: undefined },
+      ],
+    })),
+    sendReadReceipt: vi.fn(async () => ({})),
   };
   return client as unknown as FakeClient;
+}
+
+/**
+ * A room shaped for the conversation list's projection (#63): membership,
+ * unread accounting, join rule, and the timeline the latest word and the
+ * read position come from.
+ */
+function summaryRoom(shape: {
+  roomId: string;
+  name: string | null;
+  joinRule: string;
+  members: Array<{ userId: string; name: string | null }>;
+  notificationCount: number;
+  highlightCount: number;
+  events: MatrixEvent[];
+}): Room {
+  return {
+    roomId: shape.roomId,
+    name: shape.name,
+    getJoinRule: () => shape.joinRule,
+    getMembers: () => shape.members.map((member) => ({ userId: member.userId, name: member.name, membership: "join" })),
+    getUnreadNotificationCount: (type?: string) => (type === "highlight" ? shape.highlightCount : shape.notificationCount),
+    getLiveTimeline: () => ({ getEvents: () => shape.events }),
+    getMember: () => null,
+  } as unknown as Room;
 }
 
 /** connect() resolves only once the SDK reports PREPARED — fire the captured sync handler like the SDK would. */
@@ -220,6 +282,152 @@ describe("the projection from Matrix events to room messages", () => {
     timelineHandler?.(fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "np", ts: 1 }), client.getRoom("!x")!);
 
     expect(arrivals).toEqual(["!project-x:workspace.example"]);
+  });
+});
+
+describe("the rooms projection the conversation list reads (#63)", () => {
+  it("carries members, the latest word, unread and mentions, kind, and mute — ordered by latest activity", async () => {
+    const client = fakeClient({
+      // Written out of recency order on purpose: ordering is the seam's
+      // projection, and the shuffled input proves it.
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@bose:workspace.example", name: "Bose" },
+            { userId: "@duo-carol:workspace.example", name: "duo-carol" },
+          ],
+          notificationCount: 3,
+          highlightCount: 0,
+          events: [
+            // Matrix timelines read oldest first — the last event is the latest word.
+            fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "earlier", ts: 1_000 }),
+            fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "ship it", ts: 2_000 }),
+          ],
+        }),
+        summaryRoom({
+          roomId: "!direct:workspace.example",
+          name: null,
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@bose:workspace.example", name: "Bose" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "lunch?", ts: 3_000 })],
+        }),
+        summaryRoom({
+          roomId: "!announce:workspace.example",
+          name: "announce",
+          joinRule: "public",
+          members: [
+            { userId: "@dee:workspace.example", name: "Dee" },
+            { userId: "@eeyore:workspace.example", name: null },
+          ],
+          notificationCount: 9,
+          highlightCount: 9,
+          events: [fakeEvent({ type: "m.room.message", sender: "@dee:workspace.example", msgtype: "m.text", body: "all-hands friday", ts: 1_500 })],
+        }),
+      ],
+      directRoomIds: ["!direct:workspace.example"],
+      mutedRoomIds: ["!announce:workspace.example"],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.rooms()).toEqual([
+      {
+        roomId: "!direct:workspace.example",
+        kind: "direct", // the m.direct account data says so, not the member count
+        name: null,
+        members: [{ userId: "@bose:workspace.example", name: "Bose" }], // this member's own id never lists
+        latest: { at: 3_000, body: "lunch?" },
+        unread: { notifications: 0, mentions: 0 },
+        muted: false,
+      },
+      {
+        roomId: "!project-x:workspace.example",
+        kind: "group", // named, joined by invitation
+        name: "project-x",
+        members: [
+          { userId: "@bose:workspace.example", name: "Bose" },
+          { userId: "@duo-carol:workspace.example", name: "duo-carol" },
+        ],
+        latest: { at: 2_000, body: "ship it" },
+        unread: { notifications: 3, mentions: 0 },
+        muted: false,
+      },
+      {
+        roomId: "!announce:workspace.example",
+        kind: "channel", // named, public join rule
+        name: "announce",
+        members: [
+          { userId: "@dee:workspace.example", name: "Dee" },
+          { userId: "@eeyore:workspace.example", name: "eeyore" }, // no name on record: the localpart, never a blank
+        ],
+        latest: { at: 1_500, body: "all-hands friday" },
+        unread: { notifications: 9, mentions: 9 },
+        muted: true, // the server's own push rule — true on every device
+      },
+    ]);
+  });
+
+  it("markRead receipts the room's latest event — the durable read position", async () => {
+    const events = [
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "one", ts: 1 }),
+      fakeEvent({ type: "m.room.topic", sender: "@bose:workspace.example", body: "topic", ts: 2 }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "r",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 1,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.markRead("!r:workspace.example");
+
+    // The receipt points at the last event the room has — even a non-text
+    // one: the read position is where the eye stopped, not what was said.
+    expect(client.sendReadReceipt).toHaveBeenCalledWith(events[1], ReceiptType.Read, true);
+  });
+
+  it("start, leave, mute, and people-search map to the homeserver's verbs", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.startDirect("@carol:workspace.example")).resolves.toBe("!fresh:workspace.example");
+    expect(client.createRoom).toHaveBeenCalledWith({ is_direct: true, invite: ["@carol:workspace.example"] });
+
+    await connection.leave("!r:workspace.example");
+    expect(client.leave).toHaveBeenCalledWith("!r:workspace.example");
+
+    // Muting is the account's push rule, server-side — the state every
+    // device of this member reads the same way.
+    await connection.setMuted("!r:workspace.example", true);
+    expect(client.addPushRule).toHaveBeenCalledWith("global", "room", "!r:workspace.example", { actions: [], conditions: [] });
+    await connection.setMuted("!r:workspace.example", false);
+    expect(client.deletePushRule).toHaveBeenCalledWith("global", "room", "!r:workspace.example");
+
+    const people = await connection.searchPeople("carol");
+    expect(client.searchUserDirectory).toHaveBeenCalledWith({ term: "carol", limit: expect.any(Number) });
+    expect(people).toEqual([
+      { userId: "@carol:workspace.example", name: "Carol" },
+      { userId: "@duo-carol:workspace.example", name: "duo-carol" }, // display name absent: the localpart, never a blank
+    ]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
 import type { RoomMessage, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
@@ -25,9 +25,53 @@ const SESSION: WorkspaceSession = {
   deviceId: "YGBNAUIOMK",
 };
 
-const ROOMS: RoomSummary[] = [
-  { roomId: "!project-x:workspace.example", name: "project-x" },
-  { roomId: "!direct:workspace.example", name: "Bose" },
+/**
+ * #63: the list's raw material — one direct (members, no name), one group
+ * (named, carrying a colleague's duo), one channel (named, public). The
+ * seam orders by latest activity; the fixture is written in that order so
+ * a shuffle inside a test would still be caught by the order assertions.
+ */
+function roomsFixture(): RoomSummary[] {
+  const now = Date.now();
+  const hour = 3_600_000;
+  return [
+    {
+      roomId: "!direct:workspace.example",
+      kind: "direct",
+      name: null,
+      members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+      latest: { at: now - hour, body: "lunch?" },
+      unread: { notifications: 0, mentions: 0 },
+      muted: false,
+    },
+    {
+      roomId: "!project-x:workspace.example",
+      kind: "group",
+      name: "project-x",
+      members: [
+        { userId: "@bose:workspace.example", name: "Bose" },
+        { userId: "@duo-carol:workspace.example", name: "duo-carol" },
+      ],
+      latest: { at: now - 2 * hour, body: "ship it" },
+      unread: { notifications: 3, mentions: 0 },
+      muted: false,
+    },
+    {
+      roomId: "!announce:workspace.example",
+      kind: "channel",
+      name: "announce",
+      members: [{ userId: "@dee:workspace.example", name: "Dee" }],
+      latest: { at: now - 3 * hour, body: "all-hands friday" },
+      unread: { notifications: 0, mentions: 0 },
+      muted: false,
+    },
+  ];
+}
+
+/** The directory the new-conversation search reads (#63 AC3): one person, one duo. */
+const PEOPLE = [
+  { userId: "@carol:workspace.example", name: "Carol" },
+  { userId: "@duo-carol:workspace.example", name: "duo-carol" },
 ];
 
 function messageFor(over: Partial<RoomMessage> & Pick<RoomMessage, "eventId" | "senderId" | "body">): RoomMessage {
@@ -39,14 +83,27 @@ const PROJECT_TIMELINE: RoomMessage[] = [
   messageFor({ eventId: "$2", senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: "Refunds within 30 days, full amount." }),
 ];
 
-/** A fake connection the ACs drive: rooms and timelines resolve from `state`, `deliver` plays a live arrival into the open subscription. */
-function fakeConnection(state: { rooms: RoomSummary[]; timelines: Record<string, RoomMessage[]> }) {
+/**
+ * A fake connection the ACs drive: rooms and timelines resolve from
+ * `state`, `deliver` plays a live arrival into the open subscription, and
+ * the #63 verbs mutate `state` the way the homeserver's own state would
+ * move under the same op — the list's reflection after a mutation is the
+ * server's answer, not a local flag.
+ */
+function fakeConnection(state: {
+  rooms: RoomSummary[];
+  timelines: Record<string, RoomMessage[]>;
+  people?: Array<{ userId: string; name: string }>;
+}) {
   let listener: ((roomId: string) => void) | null = null;
+  const roomAt = (roomId: string): number => state.rooms.findIndex((room) => room.roomId === roomId);
   const connection: WorkspaceConnection = {
-    rooms: vi.fn(async () => state.rooms),
-    // A fresh array per call, like the real seam's projection: TanStack's
-    // structural sharing would otherwise see the same instance and skip
-    // the re-render an invalidation asked for.
+    rooms: vi.fn(async () =>
+      // A fresh array of fresh objects per call, like the real seam's
+      // projection: TanStack's structural sharing would otherwise see the
+      // same instance and skip the re-render an invalidation asked for.
+      state.rooms.map((room) => ({ ...room, members: [...room.members] })),
+    ),
     timeline: vi.fn(async (roomId: string) => [...(state.timelines[roomId] ?? [])]),
     send: vi.fn(async () => {}),
     subscribe: vi.fn((handler: (roomId: string) => void) => {
@@ -56,6 +113,42 @@ function fakeConnection(state: { rooms: RoomSummary[]; timelines: Record<string,
       };
     }),
     stop: vi.fn(async () => {}),
+    // The homeserver's own read accounting moves — what another device
+    // would also see on its next sync.
+    markRead: vi.fn(async (roomId: string) => {
+      const at = roomAt(roomId);
+      if (at >= 0) {
+        state.rooms[at] = { ...state.rooms[at]!, unread: { notifications: 0, mentions: 0 } };
+      }
+    }),
+    startDirect: vi.fn(async (userId: string) => {
+      const roomId = `!fresh-${userId.slice(1).replace(/[^a-z0-9-]/gi, "")}:workspace.example`;
+      state.rooms.push({
+        roomId,
+        kind: "direct",
+        name: null,
+        members: [{ userId, name: null }],
+        latest: null,
+        unread: { notifications: 0, mentions: 0 },
+        muted: false,
+      });
+      return roomId;
+    }),
+    leave: vi.fn(async (roomId: string) => {
+      const at = state.rooms.findIndex((room) => room.roomId === roomId);
+      if (at >= 0) {
+        state.rooms.splice(at, 1);
+      }
+    }),
+    setMuted: vi.fn(async (roomId: string, muted: boolean) => {
+      const at = roomAt(roomId);
+      if (at >= 0) {
+        state.rooms[at] = { ...state.rooms[at]!, muted };
+      }
+    }),
+    searchPeople: vi.fn(async (query: string) =>
+      (state.people ?? []).filter((person) => person.name.toLowerCase().includes(query.toLowerCase())),
+    ),
   };
   return {
     connection,
@@ -64,6 +157,15 @@ function fakeConnection(state: { rooms: RoomSummary[]; timelines: Record<string,
       listener?.(message.roomId);
     },
   };
+}
+
+/** The list entry for a room, by the title it renders under. */
+function entryFor(title: string): HTMLElement {
+  const entry = screen
+    .getAllByTestId("conversations-entry")
+    .find((candidate) => within(candidate).getByTestId("room-title").textContent === title);
+  expect(entry, `no conversations entry titled ${JSON.stringify(title)}`).toBeDefined();
+  return entry!;
 }
 
 /** Fresh module registry per render: the app's module-level QueryClient must not carry cache across tests. */
@@ -114,7 +216,7 @@ describe("#62 AC1 — signing in to the workspace works", () => {
 
   it("signing in reaches conversations, with no duo pairing having happened", async () => {
     vi.mocked(signIn).mockResolvedValue(SESSION);
-    const fake = fakeConnection({ rooms: ROOMS, timelines: {} });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
@@ -151,7 +253,7 @@ describe("#62 AC1 — signing in to the workspace works", () => {
 describe("#62 AC2 — pairing a duo is a separate, later step", () => {
   it("an unpaired member lands on Conversations, reads a room, and a colleague's duo is labelled structurally", async () => {
     seedSession();
-    const fake = fakeConnection({ rooms: ROOMS, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
@@ -162,7 +264,9 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     // The entry is a real link to the room's own address; happy-dom's click
     // doesn't follow hashes, so the test drives the same navigation the
     // browser would.
-    expect(screen.getByText("project-x")).toHaveAttribute("href", "#room/!project-x%3Aworkspace.example");
+    // #63's entry markup puts the title in its own element inside the link;
+    // the destination is the link's, resolved by role.
+    expect(screen.getByRole("link", { name: /project-x/ })).toHaveAttribute("href", "#room/!project-x%3Aworkspace.example");
     window.location.hash = "#room/!project-x%3Aworkspace.example";
     window.dispatchEvent(new Event("hashchange"));
 
@@ -175,7 +279,7 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
 
   it("messaging works fully: sending posts through the connection, and a live arrival renders", async () => {
     seedSession();
-    const state = { rooms: ROOMS, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } };
+    const state = { rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } };
     const fake = fakeConnection(state);
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
@@ -201,7 +305,7 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
 
   it("duo surfaces explain that no duo is connected, and pairing is offered rather than demanded", async () => {
     seedSession();
-    const fake = fakeConnection({ rooms: ROOMS, timelines: {} });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
@@ -219,7 +323,7 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
 
   it("pairing from the offer pairs the duo, and the member shell gains its duo surfaces", async () => {
     seedSession();
-    const fake = fakeConnection({ rooms: ROOMS, timelines: {} });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
     stubDaemonFetch();
 
@@ -246,7 +350,7 @@ describe("#62 AC3 — both credentials are managed", () => {
     seedSession();
     seedPairing();
     stubDaemonFetch();
-    const fake = fakeConnection({ rooms: ROOMS, timelines: {} });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
@@ -273,7 +377,7 @@ describe("#62 AC3 — both credentials are managed", () => {
     seedSession();
     seedPairing();
     stubDaemonFetch();
-    const fake = fakeConnection({ rooms: ROOMS, timelines: {} });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
@@ -300,7 +404,7 @@ describe("#62 AC4 — signing out leaves nothing behind", () => {
     seedSession();
     seedPairing();
     stubDaemonFetch();
-    const fake = fakeConnection({ rooms: ROOMS, timelines: {} });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
     // A persisted cache blob from before: what signing out must not leave readable.
     localStorage.setItem("duo-cache", JSON.stringify({ clientState: {}, buster: "delivery" }));
@@ -324,7 +428,7 @@ describe("#62 — the both-credentials shell and the failing-connection edge", (
     seedSession();
     seedPairing();
     stubDaemonFetch();
-    const fake = fakeConnection({ rooms: ROOMS, timelines: {} });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
@@ -347,5 +451,169 @@ describe("#62 — the both-credentials shell and the failing-connection edge", (
     expect(failure).toHaveTextContent("The workspace didn't answer.");
     fireEvent.click(screen.getByTestId("workspace-error-sign-out"));
     await waitFor(() => expect(localStorage.getItem("duo.workspace-session")).toBeNull());
+  });
+});
+
+describe("#63 AC1 — the list triages without opening anything", () => {
+  it("shows each conversation's name or members, the latest word, and unread — newest first", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    // Recency order: the room that spoke last leads, whatever kind it is.
+    expect(screen.getAllByTestId("room-title").map((title) => title.textContent)).toEqual(["Bose", "project-x", "announce"]);
+
+    // A direct conversation has no name to show: its members are the title.
+    const direct = entryFor("Bose");
+    expect(within(direct).getByTestId("room-preview")).toHaveTextContent("lunch?");
+    expect(within(direct).getByTestId("timestamp")).toBeInTheDocument();
+    expect(within(direct).queryByTestId("room-unread")).toBeNull();
+
+    // A named room shows the name, the latest word, its age, and the badge.
+    const group = entryFor("project-x");
+    expect(within(group).getByTestId("room-preview")).toHaveTextContent("ship it");
+    expect(within(group).getByTestId("timestamp")).toBeInTheDocument();
+    expect(within(group).getByTestId("room-unread")).toHaveTextContent("3 unread");
+
+    // A channel reads by its name too — one list, three kinds, no opening.
+    const channel = entryFor("announce");
+    expect(within(channel).getByTestId("room-preview")).toHaveTextContent("all-hands friday");
+    expect(within(channel).queryByTestId("room-unread")).toBeNull();
+  });
+});
+
+describe("#63 AC2 — mentions outrank unread", () => {
+  it("a conversation that mentioned the member is distinguishable from merely unread", async () => {
+    seedSession();
+    const rooms = roomsFixture();
+    // project-x mentioned the member twice among five unread; Bose is
+    // merely unread — same list, different demands.
+    rooms[1] = { ...rooms[1]!, unread: { notifications: 5, mentions: 2 } };
+    rooms[0] = { ...rooms[0]!, unread: { notifications: 3, mentions: 0 } };
+    const fake = fakeConnection({ rooms, timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    const mentioned = entryFor("project-x");
+    expect(within(mentioned).getByTestId("room-mentions")).toHaveTextContent("2");
+    expect(within(mentioned).getByTestId("room-unread")).toHaveTextContent("5 unread");
+
+    const merelyUnread = entryFor("Bose");
+    expect(within(merelyUnread).queryByTestId("room-mentions")).toBeNull();
+    expect(within(merelyUnread).getByTestId("room-unread")).toHaveTextContent("3 unread");
+  });
+});
+
+describe("#63 AC3 — conversations can be started, left and muted", () => {
+  it("starting a conversation searches the workspace's people and opens the room it creates", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new"));
+
+    fireEvent.change(await screen.findByLabelText("Search people"), { target: { value: "carol" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    // The directory answers people AND duos; a duo is addressed by what its
+    // id says it is, structurally — never by the display name it chose.
+    const results = await screen.findAllByTestId("new-conversation-person");
+    expect(results.map((result) => result.textContent)).toEqual(["Carol", "carol's duo"]);
+    fireEvent.click(screen.getByRole("button", { name: /^Carol/ }));
+
+    await waitFor(() => expect(fake.connection.startDirect).toHaveBeenCalledWith("@carol:workspace.example"));
+    // The conversation opens: the new room is the surface, not a closed dialog.
+    expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-conversation-dialog")).toBeNull();
+  });
+
+  it("muting is the server's fact — the badge changes shape on the list, both directions", async () => {
+    seedSession();
+    const rooms = roomsFixture();
+    const fake = fakeConnection({ rooms, timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    const beforeKeys = JSON.stringify(Object.keys(localStorage).sort());
+
+    fireEvent.click(screen.getByRole("button", { name: "Mute project-x" }));
+
+    await waitFor(() => expect(fake.connection.setMuted).toHaveBeenCalledWith("!project-x:workspace.example", true));
+    // The reflection is the connection's next answer — what any of the
+    // member's devices would render from the same server-side rule.
+    await waitFor(() => expect(within(entryFor("project-x")).getByTestId("room-muted")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Unmute project-x" })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Unmute project-x" }));
+
+    await waitFor(() => expect(fake.connection.setMuted).toHaveBeenCalledWith("!project-x:workspace.example", false));
+    await waitFor(() => expect(within(entryFor("project-x")).queryByTestId("room-muted")).toBeNull());
+    // Cross-device is server-side by construction: no local store appeared.
+    expect(JSON.stringify(Object.keys(localStorage).sort())).toBe(beforeKeys);
+  });
+
+  it("leaving a conversation asks first, then removes it from the list", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    fireEvent.click(screen.getByRole("button", { name: "Leave announce" }));
+    fireEvent.click(await screen.findByTestId("leave-conversation-confirm"));
+
+    await waitFor(() => expect(fake.connection.leave).toHaveBeenCalledWith("!announce:workspace.example"));
+    await waitFor(() => expect(screen.queryByText("announce")).toBeNull());
+    // The others stand: leaving one conversation leaves the rest of the list.
+    expect(screen.getAllByTestId("room-title").map((title) => title.textContent)).toEqual(["Bose", "project-x"]);
+  });
+});
+
+describe("#63 AC4 — a duo in a conversation is visible from the list", () => {
+  it("a conversation carrying a colleague's duo says so before it's opened", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    // Whose duo it is comes from the member id's grammar, not a name.
+    expect(within(entryFor("project-x")).getAllByTestId("room-duo").map((chip) => chip.textContent)).toEqual(["carol's duo"]);
+    expect(within(entryFor("Bose")).queryByTestId("room-duo")).toBeNull();
+  });
+});
+
+describe("#63 — read state is durable, not local", () => {
+  it("opening a conversation marks it read over the connection, and the badge clears on return", async () => {
+    seedSession();
+    const rooms = roomsFixture();
+    rooms[1] = { ...rooms[1]!, unread: { notifications: 3, mentions: 0 } };
+    const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    expect(within(entryFor("project-x")).getByTestId("room-unread")).toHaveTextContent("3 unread");
+
+    window.location.hash = "#room/!project-x%3Aworkspace.example";
+    window.dispatchEvent(new Event("hashchange"));
+    await screen.findByTestId("room-timeline");
+
+    // The read marker went to the server — the receipt is the record, so
+    // every other device reads the conversation as read too.
+    await waitFor(() => expect(fake.connection.markRead).toHaveBeenCalledWith("!project-x:workspace.example"));
+
+    window.location.hash = "#conversations";
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => expect(within(entryFor("project-x")).queryByTestId("room-unread")).toBeNull());
   });
 });

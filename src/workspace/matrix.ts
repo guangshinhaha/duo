@@ -3,6 +3,9 @@ import {
   createClient,
   MatrixError,
   MsgType,
+  NotificationCountType,
+  PushRuleKind,
+  ReceiptType,
   RoomEvent,
   SyncState,
   type MatrixClient,
@@ -42,10 +45,35 @@ export interface WorkspaceSession {
   readonly deviceId: string;
 }
 
-/** One room of the workspace, as the conversations list reads it. */
+/** What a room IS to the member reading the list — the shape drives how the entry reads, not just how it looks. */
+export type RoomKind = "direct" | "group" | "channel";
+
+/** One member of a room besides the member themselves — the id is the fact, the name the room's claim. */
+export interface RoomMemberRef {
+  readonly userId: string;
+  readonly name: string | null;
+}
+
+/**
+ * One room of the workspace, as the conversations list reads it (#63):
+ * who's in it, what was last said and when, what's unread (and how much of
+ * it mentions the member), and whether the member muted it. Every field is
+ * the homeserver's own state — the list renders the server's answer, which
+ * is why it reads the same on every device.
+ */
 export interface RoomSummary {
   readonly roomId: string;
-  readonly name: string;
+  readonly kind: RoomKind;
+  /** The room's own name — null when it has none (a direct conversation shows its members instead). */
+  readonly name: string | null;
+  /** The other joined members; the member's own id never lists. */
+  readonly members: readonly RoomMemberRef[];
+  /** The latest text message, by homeserver time — null when the room has never said anything. */
+  readonly latest: { readonly at: number; readonly body: string } | null;
+  /** The server's unread accounting: total notifications, and how many of them mention the member. */
+  readonly unread: { readonly notifications: number; readonly mentions: number };
+  /** The member's own mute rule for this room, held by the account — not a preference of this device. */
+  readonly muted: boolean;
 }
 
 /**
@@ -67,9 +95,23 @@ export interface RoomMessage {
 
 /** The held workspace connection: rooms, timelines, sends, and live arrivals. */
 export interface WorkspaceConnection {
+  /** The member's conversations, ordered by latest activity — the server's answer, not this device's cache of it. */
   rooms(): Promise<readonly RoomSummary[]>;
   timeline(roomId: string): Promise<readonly RoomMessage[]>;
   send(roomId: string, body: string): Promise<void>;
+  /**
+   * Receipts the room's latest event — the member's read position, held by
+   * the account, so every device reads the conversation as read (#63).
+   */
+  markRead(roomId: string): Promise<void>;
+  /** Creates a direct conversation with a workspace user (a person or a colleague's duo) and answers its room id. */
+  startDirect(userId: string): Promise<string>;
+  /** Leaves a conversation — the homeserver drops the membership, for every device at once. */
+  leave(roomId: string): Promise<void>;
+  /** Sets or clears the account's mute rule for a room — server-side state, the same on every device. */
+  setMuted(roomId: string, muted: boolean): Promise<void>;
+  /** Searches the workspace's people directory: the way to address someone no shared room has introduced yet. */
+  searchPeople(query: string): Promise<readonly { userId: string; name: string }[]>;
   /** One subscription for the app's lifetime; the return value unsubscribes. */
   subscribe(handler: (roomId: string) => void): () => void;
   /** Stops the connection. Idempotent. */
@@ -174,6 +216,55 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
     });
 }
 
+/**
+ * The room ids the account's own `m.direct` data marks direct — DM-ness is
+ * the account's record of the conversation, not a guess from member counts
+ * (a two-person group and a DM are different rooms to the member, and the
+ * account knows which is which).
+ */
+function directRoomIdsOf(client: MatrixClient): Set<string> {
+  const content = client.getAccountData("m.direct")?.getContent() as Record<string, readonly string[]> | undefined;
+  const ids = new Set<string>();
+  for (const roomIds of Object.values(content ?? {})) {
+    for (const roomId of roomIds) {
+      ids.add(roomId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * One room as the conversations list reads it (#63). Every field is the
+ * homeserver's own state: membership, notification accounting (and its
+ * highlight half — mentions), the join rule behind group-vs-channel, the
+ * account's mute rule. Nothing here is invented client-side, which is the
+ * whole of "reflected across their devices" — the list renders the same
+ * server answer everywhere.
+ */
+function projectRoom(room: MatrixRoom, selfId: string, direct: boolean, muted: boolean): RoomSummary {
+  const latestText = [...room.getLiveTimeline().getEvents()]
+    .reverse()
+    .find((event) => event.getType() === "m.room.message" && event.getContent()?.msgtype === MsgType.Text);
+  return {
+    roomId: room.roomId,
+    kind: direct ? "direct" : room.getJoinRule() === "public" ? "channel" : "group",
+    name: room.name || null,
+    members: room
+      .getMembers()
+      .filter((member) => member.membership === "join" && member.userId !== selfId)
+      .map((member) => ({ userId: member.userId, name: member.name || localpartOf(member.userId) })),
+    latest: latestText ? { at: latestText.getTs(), body: String(latestText.getContent()?.body ?? "") } : null,
+    unread: {
+      notifications: room.getUnreadNotificationCount(NotificationCountType.Total),
+      mentions: room.getUnreadNotificationCount(NotificationCountType.Highlight),
+    },
+    muted,
+  };
+}
+
+/** How many people a directory search answers with — enough to pick a colleague out, small enough to read. */
+const PEOPLE_SEARCH_LIMIT = 10;
+
 /** Hold the workspace connection for a stored session — resolves at the first completed sync, then serves rooms and timelines from it. */
 export async function connect(session: WorkspaceSession): Promise<WorkspaceConnection> {
   const client = createClient({
@@ -183,10 +274,52 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
   });
   await firstPreparedSync(client);
   return {
-    rooms: async () => client.getRooms().map((room) => ({ roomId: room.roomId, name: room.name || room.roomId })),
+    rooms: async () => {
+      // The mute half of the projection lives in the account's push rules —
+      // one read for the whole list, and a failed read means "unmuted we
+      // don't know", never a list that won't render.
+      const pushRules = await client.getPushRules().catch(() => undefined);
+      const mutedIds = new Set(
+        (pushRules?.global.room ?? [])
+          .filter((rule) => rule.enabled && rule.actions.length === 0)
+          .map((rule) => rule.rule_id),
+      );
+      const directIds = directRoomIdsOf(client);
+      return client
+        .getRooms()
+        .map((room) => projectRoom(room, session.userId, directIds.has(room.roomId), mutedIds.has(room.roomId)))
+        .sort((a, b) => (b.latest?.at ?? Number.MIN_SAFE_INTEGER) - (a.latest?.at ?? Number.MIN_SAFE_INTEGER));
+    },
     timeline: async (roomId) => timelineOf(client, roomId),
     send: async (roomId, body) => {
       await client.sendMessage(roomId, { msgtype: MsgType.Text, body });
+    },
+    markRead: async (roomId) => {
+      const events = client.getRoom(roomId)?.getLiveTimeline().getEvents() ?? [];
+      const last = events[events.length - 1];
+      if (last) {
+        await client.sendReadReceipt(last, ReceiptType.Read, true);
+      }
+    },
+    startDirect: async (userId) => {
+      const { room_id } = await client.createRoom({ is_direct: true, invite: [userId] });
+      return room_id;
+    },
+    leave: async (roomId) => {
+      await client.leave(roomId);
+    },
+    setMuted: async (roomId, muted) => {
+      if (muted) {
+        await client.addPushRule("global", PushRuleKind.RoomSpecific, roomId, { actions: [], conditions: [] });
+      } else {
+        await client.deletePushRule("global", PushRuleKind.RoomSpecific, roomId);
+      }
+    },
+    searchPeople: async (query) => {
+      const { results } = await client.searchUserDirectory({ term: query.trim(), limit: PEOPLE_SEARCH_LIMIT });
+      return results
+        .filter((result) => result.user_id !== session.userId)
+        .map((result) => ({ userId: result.user_id, name: result.display_name || localpartOf(result.user_id) }));
     },
     subscribe: (handler) => {
       const listener = (event: MatrixEvent, room: MatrixRoom | undefined): void => {
