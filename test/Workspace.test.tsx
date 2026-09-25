@@ -44,7 +44,10 @@ function fakeConnection(state: { rooms: RoomSummary[]; timelines: Record<string,
   let listener: ((roomId: string) => void) | null = null;
   const connection: WorkspaceConnection = {
     rooms: vi.fn(async () => state.rooms),
-    timeline: vi.fn(async (roomId: string) => state.timelines[roomId] ?? []),
+    // A fresh array per call, like the real seam's projection: TanStack's
+    // structural sharing would otherwise see the same instance and skip
+    // the re-render an invalidation asked for.
+    timeline: vi.fn(async (roomId: string) => [...(state.timelines[roomId] ?? [])]),
     send: vi.fn(async () => {}),
     subscribe: vi.fn((handler: (roomId: string) => void) => {
       listener = handler;
@@ -115,7 +118,9 @@ describe("#62 AC1 — signing in to the workspace works", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    fireEvent.change(screen.getByLabelText("Homeserver"), { target: { value: "https://workspace.example/" } });
+    // URL normalization (https, trailing slash) is the seam's rule and the
+    // seam suite pins it; here the form hands the address through as typed.
+    fireEvent.change(screen.getByLabelText("Homeserver"), { target: { value: "https://workspace.example" } });
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "ana" } });
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "correct horse" } });
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -154,7 +159,12 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     // The empty hash is Conversations for a signed-in member — the default
     // space, not a duo surface demanding pairing.
     expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("project-x"));
+    // The entry is a real link to the room's own address; happy-dom's click
+    // doesn't follow hashes, so the test drives the same navigation the
+    // browser would.
+    expect(screen.getByText("project-x")).toHaveAttribute("href", "#room/!project-x%3Aworkspace.example");
+    window.location.hash = "#room/!project-x%3Aworkspace.example";
+    window.dispatchEvent(new Event("hashchange"));
 
     expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
     expect(screen.getByTestId("room-person-message-author")).toHaveTextContent("Bose");
@@ -170,7 +180,9 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    fireEvent.click(await screen.findByText("project-x"));
+    await screen.findByTestId("conversations-list");
+    window.location.hash = "#room/!project-x%3Aworkspace.example";
+    window.dispatchEvent(new Event("hashchange"));
     await screen.findByTestId("room-timeline");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
@@ -273,7 +285,12 @@ describe("#62 AC3 — both credentials are managed", () => {
 
     await waitFor(() => expect(localStorage.getItem("duo.api-config")).toBeNull());
     expect(JSON.parse(localStorage.getItem("duo.workspace-session") ?? "null")).toEqual(SESSION);
-    // Conversations is still the member's default space.
+    // Conversations is still the member's default space — the unpaired
+    // member's shell stands on the workspace alone. (#settings stays
+    // mounted — the member's own navigation keeps standing — so walk to
+    // Conversations the way the sidebar's link would.)
+    window.location.hash = "#conversations";
+    window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByTestId("conversations-list")).toBeInTheDocument());
   });
 });
@@ -315,7 +332,7 @@ describe("#62 — the both-credentials shell and the failing-connection edge", (
     // Conversations is the default space; Review — the thing the app exists
     // to open — keeps its place above it in the sidebar.
     expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
-    const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
+    const entries = [...screen.getByRole("navigation", { name: "Surfaces" }).querySelectorAll("a")].map((a) => a.textContent);
     expect(entries.indexOf("Conversations")).toBeGreaterThan(-1);
     expect(entries.indexOf("Review")).toBeLessThan(entries.indexOf("Conversations"));
   });

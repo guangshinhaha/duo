@@ -7,7 +7,16 @@ const FULL_TOKEN = "c6jzoxVdOelvnJnGZRkFSnny_kxYcQ4wsERakvyXiXk";
 const api: DuoApiConfig = { baseUrl: "http://100.64.1.5:7717", token: FULL_TOKEN };
 
 function renderSettings(onConfigChange = vi.fn()) {
-  render(<Settings api={api} onConfigChange={onConfigChange} />);
+  render(
+    <Settings
+      api={api}
+      session={null}
+      onConfigChange={onConfigChange}
+      onSignOut={vi.fn()}
+      onPairDuo={vi.fn()}
+      onWorkspaceSignIn={vi.fn()}
+    />,
+  );
   return onConfigChange;
 }
 

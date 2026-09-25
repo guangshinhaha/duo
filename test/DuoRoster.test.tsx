@@ -71,8 +71,15 @@ beforeEach(() => {
   window.location.hash = "";
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // The persisted half of renderApp's fresh-import note above: the
+  // persister throttles its writes (1s by default), so this test's pending
+  // write must LAND (and then be wiped) before the next test mounts — or
+  // it rehydrates into the next render as stale roster data. Flushing the
+  // throttle at the test boundary keeps each render's cache its own.
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  localStorage.removeItem("duo-cache");
   vi.unstubAllGlobals();
 });
 

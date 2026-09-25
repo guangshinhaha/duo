@@ -90,6 +90,27 @@ as a control in this cut: the surface stays read-only until the core exposes
 the shared module path (that writes are exposeable in principle is the
 ratified decision, recorded in the core repo's `trust-surface.md`, #179).
 
+### workspace
+
+The org's messaging layer — a Matrix homeserver members sign in to and the
+duo's daemon dials out to. Two credentials with separate lifetimes: the
+workspace session (who you are, in the org) and the duo pairing (which only
+you reach). A member signed in with no duo paired is a normal state, and the
+surfaces say so rather than demanding pairing.
+
+### conversation
+
+A room in the workspace — people, groups, and colleagues' duos, all entries
+in one list. Conversations are the default space once you're signed in; your
+own duo's loop keeps its home in Review.
+
+### member
+
+A person signed in to the workspace. "Member" never describes a duo: a
+colleague's duo appears in a conversation as "{owner}'s duo", attributed
+structurally from its user id (`@duo-<owner>`) — never as a colleague, never
+by a display name it could set to anything.
+
 ## The verbs
 
 One action, one name, everywhere it appears. If a control and a sentence
@@ -133,6 +154,21 @@ sidebar, the folded navigation, and Settings (whose confirmation spells out
 what it does — the address and token are removed here, on this device only;
 the daemon keeps its own record). Never "Disconnect" (nothing is
 disconnected server-side), "log out", or "unpair" in visible strings.
+
+### sign in / sign out
+
+The workspace connection's begin and end, under exactly these names. Signing
+in takes the homeserver's address and the member's username and password;
+signing out clears what this device cached — messages and duo data both —
+and never unpairs the duo: the two connections end independently ("forget
+this device" ends the other).
+
+### pair
+
+Connecting this device to a duo daemon — "Pair your duo" where it's offered
+(the front door's second card, the member shell's offer, Settings' empty
+state). Pairing is offered, never demanded: a member without one messages
+fully and sees the explanation wherever a duo surface would be.
 
 ## The daemon-owned strings — contract, not suggestions
 

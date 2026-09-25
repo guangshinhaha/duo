@@ -1,5 +1,8 @@
+// @ts-expect-error no node types by design
 import { readdirSync, readFileSync } from "node:fs";
+// @ts-expect-error no node types by design
 import { join, dirname } from "node:path";
+// @ts-expect-error no node types by design
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +21,7 @@ vi.mock("matrix-js-sdk", () => ({
   createClient: vi.fn(),
   ClientEvent: { Sync: "sync" },
   RoomEvent: { Timeline: "timeline" },
+  SyncState: { Prepared: "PREPARED" },
   MsgType: { Text: "m.text" },
   MatrixError: class MatrixError extends Error {
     errcode?: string;
@@ -40,6 +44,7 @@ const PERSISTENCE_KEYS = /store|storage|indexeddb|idb|localstorage|websql/i;
 
 function fakeEvent(shape: { type: string; sender: string; msgtype?: string; body?: string; ts: number }): MatrixEvent {
   return {
+    getId: () => `$${shape.ts}`,
     getType: () => shape.type,
     getSender: () => shape.sender,
     getContent: () => ({ msgtype: shape.msgtype, body: shape.body }),
@@ -65,8 +70,20 @@ function fakeRoom(): Room {
   } as unknown as Room;
 }
 
+/** The mock surface the seam drives, kept as a type so the fakes carry their .mock through every helper. */
+type FakeClient = MatrixClient & {
+  on: ReturnType<typeof vi.fn>;
+  off: ReturnType<typeof vi.fn>;
+  startClient: ReturnType<typeof vi.fn>;
+  stopClient: ReturnType<typeof vi.fn>;
+  getRooms: ReturnType<typeof vi.fn>;
+  getRoom: ReturnType<typeof vi.fn>;
+  sendMessage: ReturnType<typeof vi.fn>;
+  login: ReturnType<typeof vi.fn>;
+};
+
 /** A client whose first sync is fired by the test, the way a homeserver's PREPARED state would. */
-function fakeClient() {
+function fakeClient(): FakeClient {
   const client = {
     on: vi.fn(),
     off: vi.fn(),
@@ -77,11 +94,11 @@ function fakeClient() {
     sendMessage: vi.fn(() => Promise.resolve()),
     login: vi.fn(() => Promise.resolve({ access_token: "syt_workspace_token", user_id: "@ana:workspace.example", device_id: "YGBNAUIOMK" })),
   };
-  return client as unknown as MatrixClient & typeof client;
+  return client as unknown as FakeClient;
 }
 
 /** connect() resolves only once the SDK reports PREPARED — fire the captured sync handler like the SDK would. */
-async function connectPrepared(client: MatrixClient) {
+async function connectPrepared(client: FakeClient) {
   const pending = connect(SESSION);
   const syncHandler = client.on.mock.calls.find(([event]) => event === ClientEvent.Sync)?.[1] as (state: string) => void;
   syncHandler?.("PREPARED");
@@ -174,6 +191,7 @@ describe("the projection from Matrix events to room messages", () => {
       },
       {
         eventId: expect.any(String),
+        roomId: "!project-x:workspace.example",
         senderId: "@duo-carol:workspace.example",
         senderName: "duo-carol", // no membership record: the localpart, never a blank
         body: "Refunds within 30 days, full amount.",
@@ -216,7 +234,9 @@ describe("the seam stays the SDK's only door", () => {
           walk(path);
         } else if (/\.(ts|tsx)$/.test(entry.name) && !path.endsWith(join("src", "workspace", "matrix.ts"))) {
           const text = readFileSync(path, "utf8");
-          if (text.includes("matrix-js-sdk")) {
+          // Importers only — a comment SAYING "matrix-js-sdk" is documentation;
+          // a module importing it is the leak the tripwire exists for.
+          if (/from\s+["']matrix-js-sdk["']|import\(\s*["']matrix-js-sdk["']/.test(text)) {
             offenders.push(path);
           }
         }

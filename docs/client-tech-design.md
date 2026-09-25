@@ -267,6 +267,25 @@ is one writer (the daemon) and the cache is the model.
 one action writes the draft row and queues a correction candidate. Missing the second is the
 easiest bug to ship here and the hardest to notice.
 
+#62 adds the workspace's own keys, labelled with the `#58` target so a workspace fetch failing at
+the network level reads as the workspace going quiet, never as the daemon's:
+
+```ts
+["workspace", "rooms"]                // the conversations list
+["workspace", "timeline", roomId]     // one conversation, invalidated by the live subscription
+```
+
+The workspace half keeps the same discipline with its own seam: `src/workspace/matrix.ts` is the
+one module that imports matrix-js-sdk (dynamically, so an owner who never signs in never loads
+it), the way `tray.ts` and `dockBadge.ts` are the one modules that speak Tauri. Its clients are
+built with **nothing persistent** — no store, no session store, no web storage — so a workspace
+session exists in exactly one place, the app's own credential store (`duo.workspace-session`,
+beside and independent of `duo.api-config`), and signing out has no warm SDK state to leave
+behind. Attribution is structural end to end: a duo-shaped sender (`@duo-<owner>:<server>`, the
+grammar mirrored from the core's identity work, digital-duo #187) renders as the multi-party
+`RoomDuoMessage` with the possessive attribution derived from the id; a display name can claim
+anything, the id grammar cannot.
+
 ## 3.3 Offline
 
 The query cache persists to storage and rehydrates at launch. Two connections fail for

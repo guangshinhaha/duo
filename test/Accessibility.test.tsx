@@ -206,7 +206,7 @@ describe("#39 AC1 — the page has structure", () => {
           "/mirror/rules": { awaitingApproval: [rule], weakSignals: [], inconsistent: [], approved: [], rejected: [] },
         },
       },
-      { name: "Settings", ui: <Settings api={api} onConfigChange={() => {}} />, routes: {} },
+      { name: "Settings", ui: <Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />, routes: {} },
     ];
 
     for (const { ui, routes } of cases) {
@@ -344,7 +344,7 @@ describe("#39 AC3 — controls are named", () => {
     await screen.findAllByTestId("draft-card");
 
     vi.stubGlobal("fetch", stubFetch({}));
-    const settings = renderWithClient(<Settings api={api} onConfigChange={() => {}} />);
+    const settings = renderWithClient(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
 
     for (const root of [container, settings.container]) {
       const controls = [...root.querySelectorAll("button, input, select, textarea")];
