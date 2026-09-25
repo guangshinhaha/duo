@@ -87,10 +87,11 @@ export async function wireDraftNotificationClicks(): Promise<(() => void) | null
         // centre), and the shell's close button hides rather than quits —
         // so the window may be hidden. Bring it up before navigating, or
         // the navigation lands where nobody sees it. getCurrentWindow
-        // throws synchronously outside the shell; a failed reveal is not a
-        // failed click, so the navigation below still runs.
+        // throws synchronously outside the shell, and show() itself can
+        // reject; a failed reveal is not a failed click, so both are
+        // swallowed and the navigation below still runs.
         try {
-          void getCurrentWindow().show();
+          void getCurrentWindow().show().catch(() => {});
         } catch {
           // Plain browser tab: there is no window to reveal.
         }
