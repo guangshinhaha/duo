@@ -50,7 +50,10 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
   const [error, setError] = useState<string | null>(null);
 
   return (
-    <div className="flex h-screen items-center justify-center bg-[var(--bg)] px-4">
+    // #38: dvh, not vh — this is the FIRST screen a phone reaches over
+    // Tailscale (G4), and mobile Safari's collapsing URL bar would push
+    // the Connect button under it with a fixed 100vh.
+    <div className="flex h-dvh items-center justify-center bg-[var(--bg)] px-4">
       <form
         className="shape-entry flex w-full max-w-sm flex-col gap-3 p-6"
         onSubmit={(e) => {
@@ -93,7 +96,7 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
         <label className="flex flex-col gap-1 type-body">
           Daemon address
           <input
-            className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2 py-1"
+            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2"
             placeholder="100.64.1.5:7717"
             value={baseUrlInput}
             onChange={(e) => {
@@ -105,7 +108,7 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
         <label className="flex flex-col gap-1 type-body">
           Token
           <input
-            className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2 py-1"
+            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2"
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
@@ -115,7 +118,11 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
             {error}
           </p>
         )}
-        <button className="mt-2 rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-2 text-[var(--bg)] disabled:opacity-40" type="submit" disabled={!token.trim() || !baseUrlInput}>
+        <button
+          className="mt-2 inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
+          type="submit"
+          disabled={!token.trim() || !baseUrlInput}
+        >
           Connect
         </button>
       </form>

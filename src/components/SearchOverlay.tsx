@@ -86,15 +86,15 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
           <input
             aria-label="Search what your duo knows"
             autoFocus
-            className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-[var(--text)]"
+            className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 text-[var(--text)]"
             placeholder="Search what your duo knows"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <button type="submit" className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-2 text-[var(--bg)]">
+          <button type="submit" className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)]">
             Search
           </button>
-          <button type="button" className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2" onClick={onClose}>
+          <button type="button" className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3" onClick={onClose}>
             Close
           </button>
         </form>
@@ -138,7 +138,7 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
             ))}
             {search.hasNextPage && (
               <button
-                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-provenance text-[var(--muted)] disabled:opacity-40"
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
                 disabled={search.isFetchingNextPage}
                 onClick={() => void search.fetchNextPage()}
                 data-testid="search-load-more"

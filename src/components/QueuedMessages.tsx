@@ -37,7 +37,7 @@ export function QueuedMessages() {
               </p>
               <button
                 data-testid="queued-retry"
-                className="mt-1 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-provenance"
+                className="mt-1 inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance"
                 onClick={() => retry(message.id)}
               >
                 Retry

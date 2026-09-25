@@ -62,12 +62,16 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
           </label>
           <div className="flex gap-2">
             <input
-              className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+              className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
               id="settings-address-input"
               onChange={(e) => setAddressInput(e.target.value)}
               value={addressInput}
             />
-            <button className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40" disabled={!addressInput.trim()} type="submit">
+            <button
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
+              disabled={!addressInput.trim()}
+              type="submit"
+            >
               Save
             </button>
           </div>
@@ -90,7 +94,7 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
         </label>
         <select
           aria-label="Theme"
-          className="self-start rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+          className="min-h-11 self-start rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
           data-testid="settings-theme"
           id="settings-theme-input"
           value={theme}
@@ -139,7 +143,7 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
             the two buttons are exactly what the inline version had. */}
         <AlertDialog>
           <AlertDialogTrigger
-            className="self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)]"
+            className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
             data-testid="settings-unpair"
           >
             Forget this device…
@@ -151,14 +155,14 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
             </AlertDialogDescription>
             <div className="flex gap-2">
               <AlertDialogAction
-                className="rounded-[var(--r-sm)] bg-[var(--refused)] px-3 py-1 text-white"
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--refused)] px-3 text-white"
                 data-testid="settings-unpair-confirm"
                 onClick={() => onConfigChange(null)}
               >
                 Forget this device
               </AlertDialogAction>
               <AlertDialogCancel
-                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1"
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
                 data-testid="settings-unpair-cancel"
               >
                 Cancel
