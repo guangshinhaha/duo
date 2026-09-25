@@ -288,7 +288,7 @@ function MobileNav({
               onDisconnect();
             }}
           >
-            Disconnect
+            Forget this device
           </button>
         </nav>
       </DialogContent>
@@ -497,7 +497,7 @@ function AppShell() {
             className="mt-auto inline-flex min-h-11 items-center px-2 text-left type-provenance text-[var(--faint)]"
             onClick={() => setApi(null)}
           >
-            Disconnect
+            Forget this device
           </button>
         </nav>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

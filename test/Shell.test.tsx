@@ -167,7 +167,7 @@ describe("#42 AC3 — the menu bar answers the standing question", () => {
     mountApp(() => 2, "#duo");
     await waitFor(() => expect(shell.invoke).toHaveBeenCalledWith("set_pending_count", { count: 2 }));
 
-    fireEvent.click(screen.getByText("Disconnect"));
+    fireEvent.click(screen.getByText("Forget this device"));
     await waitFor(() => expect(shell.invoke).toHaveBeenLastCalledWith("set_pending_count", { count: 0 }));
     expect(JSON.parse(localStorage.getItem("duo.api-config") ?? "null")).toBeNull();
   });

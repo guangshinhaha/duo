@@ -148,7 +148,7 @@ describe("#22 — pending count in the sidebar and the dock", () => {
     mountApp(() => 2, "#duo");
     await waitFor(() => expect(dock.setBadgeCount).toHaveBeenLastCalledWith(2));
 
-    fireEvent.click(screen.getByText("Disconnect"));
+    fireEvent.click(screen.getByText("Forget this device"));
     // The unmount cleanup runs the seam, which renders zero as `undefined`.
     await waitFor(() => expect(dock.setBadgeCount).toHaveBeenLastCalledWith(undefined));
     expect(JSON.parse(localStorage.getItem("duo.api-config") ?? "null")).toBeNull();

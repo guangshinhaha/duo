@@ -94,7 +94,7 @@ describe("App — the query cache never leaks across a reconnect to a different 
 
     await waitFor(() => expect(screen.getByText("question from A's daemon")).toBeInTheDocument());
 
-    fireEvent.click(screen.getByText("Disconnect"));
+    fireEvent.click(screen.getByText("Forget this device"));
     fireEvent.change(screen.getByPlaceholderText("100.64.1.5:7717"), { target: { value: "daemon-b:7717" } });
     fireEvent.change(screen.getByRole("textbox", { name: /token/i }), { target: { value: "tok-b" } });
     fireEvent.click(screen.getByText("Connect"));

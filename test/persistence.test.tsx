@@ -52,7 +52,7 @@ describe("Cache persistence (§3.3) — cached views render at relaunch", () => 
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("synced-value"));
   });
 
-  it("an emptied cache (Disconnect clears it) shows nothing stale at relaunch", async () => {
+  it("an emptied cache (Forget this device clears it) shows nothing stale at relaunch", async () => {
     const session1 = mount(async () => "synced-value");
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("synced-value"));
     session1.unmount();
