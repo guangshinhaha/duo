@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 
 /**
@@ -82,6 +83,17 @@ export async function wireDraftNotificationClicks(): Promise<(() => void) | null
     const listener = await onAction((notification) => {
       const draftId = notification.id !== undefined ? draftIdByNotificationId.get(notification.id) : undefined;
       if (draftId !== undefined) {
+        // #42: the click arrived from outside the app (the notification
+        // centre), and the shell's close button hides rather than quits —
+        // so the window may be hidden. Bring it up before navigating, or
+        // the navigation lands where nobody sees it. getCurrentWindow
+        // throws synchronously outside the shell; a failed reveal is not a
+        // failed click, so the navigation below still runs.
+        try {
+          void getCurrentWindow().show();
+        } catch {
+          // Plain browser tab: there is no window to reveal.
+        }
         window.location.hash = `#draft/${draftId}`;
       }
     });

@@ -117,8 +117,11 @@ The Mac shell needs a Rust toolchain (≥1.89 in practice — the current tauri 
 
 ```
 npm run tauri -- dev            # web dev server inside the native shell
-npm run tauri -- build --no-bundle   # compile src-tauri to a release binary, no .app/.dmg step
+npm run tauri -- build          # the .app and .dmg in src-tauri/target/release/bundle/
 ```
+
+The build is unsigned — the signing decision and its consequences are recorded in
+[`docs/shell-release.md`](docs/shell-release.md).
 
 ## Deliberately not here yet
 
