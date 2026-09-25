@@ -96,7 +96,9 @@ government corpus must not be one absent flag away from listening on every inter
 ## 1.4 Route contracts
 
 Responses return the **domain types verbatim**. No DTO layer: a second set of shapes is a second
-thing to drift, and the only client is the owner, so there is nothing to redact.
+thing to drift. These routes' only bearers are the owner's devices; the one asker-reachable
+route, `POST /ask`, already returns its own asker-facing projection (#159) rather than the
+domain types.
 
 | Method | Path | Returns | Module |
 |---|---|---|---|
@@ -402,7 +404,9 @@ Matching the repo's existing vitest setup:
 | Client | Testing Library on the reducers and the draft/escalation switch. |
 | Labelling | The AR-13 test in 3.4. It gates the build. |
 
-No end-to-end browser suite for the pilot. The audience is one person and the cost is not repaid.
+No end-to-end browser suite for the pilot. The owner surfaces' audience is one person, the
+workspace surfaces are held by the seam and component tests above (3.2, 3.4), and the cost is
+not repaid.
 
 ---
 
