@@ -742,11 +742,7 @@ describe("#64 AC1 — messages send and arrive", () => {
     await screen.findByTestId("room-timeline");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
-    // The async act lets the cache's microtask-batched notification flush —
-    // the row renders from the click alone, before anything arrives.
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     // Immediately — nothing has arrived from anywhere yet; the row is this
     // device's own optimistic copy, marked as on its way. The waitFor only
@@ -900,6 +896,179 @@ describe("#64 AC4 — read state is maintained", () => {
     navigate("#thread/!project-x%3Aworkspace.example/%241");
     expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
     await waitFor(() => expect(fake.connection.markRead).toHaveBeenCalledWith("!project-x:workspace.example"));
+  });
+});
+
+/*
+ * #65: mentioning — the product's central gesture, done the Matrix way: the
+ * composer offers the room's members (people and the duos present, told
+ * apart by the user-id grammar, never by a chosen name), the pick rides the
+ * wire as `m.mentions.user_ids` (what the homeserver's push rules read —
+ * AC4's "notified according to their settings" is server state, and the
+ * client's whole duty is the correct wire shape), and the duo's answer —
+ * arrived through its owner's daemon, late if the Mac was asleep — renders
+ * in the conversation like any duo message, with its permissions outcome in
+ * the daemon's own words, verbatim.
+ */
+
+describe("#65 AC1 — people and duos are both mentionable", () => {
+  it("typing @ offers the people and the duos present, clearly distinguished", async () => {
+    seedSession();
+    // project-x's members are one person (Bose) and one duo (duo-carol) —
+    // the fixture's order is the offer's order.
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const composer = screen.getByLabelText("Message project-x");
+    fireEvent.change(composer, { target: { value: "@" } });
+
+    const offer = await screen.findByTestId("mention-offer");
+    const options = within(offer).getAllByTestId("mention-option");
+    expect(options).toHaveLength(2);
+    // The person is offered by their name; the duo by whose it is — the
+    // same structural grammar every attribution uses.
+    expect(within(options[0]!).getByTestId("mention-kind").textContent).toBe("person");
+    expect(options[0]).toHaveTextContent("Bose");
+    expect(within(options[1]!).getByTestId("mention-kind").textContent).toBe("duo");
+    expect(options[1]).toHaveTextContent("carol's duo");
+
+    // The typed fragment narrows the offer, the way an address bar does.
+    fireEvent.change(composer, { target: { value: "@bo" } });
+    await waitFor(() =>
+      expect(within(screen.getByTestId("mention-offer")).getAllByTestId("mention-option")).toHaveLength(1),
+    );
+    expect(within(screen.getByTestId("mention-offer")).getAllByTestId("mention-option")[0]).toHaveTextContent("Bose");
+  });
+
+  it("a mention deleted from the text doesn't ride the wire", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const composer = screen.getByLabelText("Message project-x");
+    fireEvent.change(composer, { target: { value: "@ca" } });
+    fireEvent.click((await screen.findByTestId("mention-offer")).querySelector('[data-testid="mention-option"]')!);
+
+    // The pick landed in the text — then the sender thought better of it
+    // and wrote something else. What the message doesn't say, the wire
+    // doesn't claim: no m.mentions for a mention no longer in the body.
+    fireEvent.change(composer, { target: { value: "never mind" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "never mind");
+  });
+});
+
+describe("#65 AC2 — mentioning a duo asks it", () => {
+  it("a mention of a duo rides the wire to it, and its answer renders in the conversation", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const composer = screen.getByLabelText("Message project-x");
+    fireEvent.change(composer, { target: { value: "@ca" } });
+    // "@ca" narrows the offer to the duo alone — the person's label doesn't
+    // begin with it.
+    const offerEl = await screen.findByTestId("mention-offer");
+    const duoOption = [...offerEl.querySelectorAll('[data-testid="mention-option"]')].find((option) =>
+      option.textContent?.includes("carol's duo"),
+    )!;
+    fireEvent.click(duoOption);
+    // Picking closes the offer and leaves the addressed words in the text.
+    await waitFor(() => expect(screen.queryByTestId("mention-offer")).toBeNull());
+    expect(composer).toHaveValue("@carol's duo ");
+
+    fireEvent.change(composer, { target: { value: "@carol's duo what's our refund policy?" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    // The mention rode the wire: the body says it in words people read,
+    // m.mentions says it in ids the homeserver's push rules read.
+    expect(fake.connection.send).toHaveBeenCalledWith(
+      "!project-x:workspace.example",
+      "@carol's duo what's our refund policy?",
+      ["@duo-carol:workspace.example"],
+    );
+
+    // The answer arrives — here, one that was held while its owner's Mac
+    // was asleep (#186's held-not-lost) and landed when it woke. The client
+    // renders it when it arrives and synthesizes nothing before: no local
+    // "the duo is thinking", no invented "will answer later".
+    const LATE_ANSWER = "Refunds within 30 days, full amount. (I was asleep — this was waiting for me.)";
+    act(() =>
+      fake.deliver(
+        messageFor({ eventId: "$9", senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: LATE_ANSWER }),
+      ),
+    );
+    const row = await waitFor(() => messageRow(LATE_ANSWER));
+    expect(within(row).getByTestId("room-duo-message-attribution")).toHaveTextContent("carol's duo");
+  });
+});
+
+describe("#65 AC3 — a duo that may not answer says so", () => {
+  it("the permissions outcome renders verbatim — passed on or declined, in the daemon's own words", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    // The daemon's own composed outcomes (digital-duo public-answer.ts:
+    // withPublicAttribution wraps PUBLIC_PASSED_ON_MESSAGE /
+    // PUBLIC_REFUSAL_MESSAGE with the identity line) — the exact bytes the
+    // client must show as-is. The comparison is on textContent directly:
+    // no matcher's whitespace normalization may stand in for "verbatim".
+    const attribution = "— carol's duo speaking here, not carol directly.";
+    const passedOn = `I can't answer that one for you directly — I've passed it on to the owner, and they'll follow up.\n\n${attribution}`;
+    const declined = `That's not something I speak for the owner on. I've passed it on to them, without saying anything more about it here.\n\n${attribution}`;
+
+    act(() =>
+      fake.deliver(messageFor({ eventId: "$p", senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: passedOn })),
+    );
+    // Multi-line bodies never match queryByText (its matcher normalizes the
+    // node's text but not the expected string), so the row is found by a
+    // raw-substring probe and "verbatim" is pinned on raw textContent —
+    // byte-exact by construction, no normalization standing in for it.
+    const passedRow = await waitFor(() => {
+      const row = screen
+        .getAllByTestId("room-message")
+        .find((candidate) => candidate.textContent?.includes("passed it on to the owner, and they'll follow up."));
+      expect(row).toBeDefined();
+      return row!;
+    });
+    expect(passedRow.textContent).toContain(passedOn);
+    expect(within(passedRow).getByTestId("room-duo-message-attribution")).toHaveTextContent("carol's duo");
+
+    act(() =>
+      fake.deliver(messageFor({ eventId: "$d", senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: declined })),
+    );
+    const declinedRow = await waitFor(() => {
+      const row = screen
+        .getAllByTestId("room-message")
+        .find((candidate) => candidate.textContent?.includes("not something I speak for the owner on"));
+      expect(row).toBeDefined();
+      return row!;
+    });
+    expect(declinedRow.textContent).toContain(declined);
   });
 });
 

@@ -113,10 +113,21 @@ by a display name it could set to anything.
 
 ### mention
 
-A conversation naming the member specifically. On the list, a mention reads
+Addressing a person or somebody's duo — the product's central gesture, and
+one word for both halves of it. Composing one: an "@" in the composer offers
+the room's members, clearly distinguished — a person by their name, a duo as
+"{owner}'s duo" from the user-id grammar, never from a name a sender chose;
+the pick lands in the text as words people read and rides the wire as ids
+(`m.mentions`) the homeserver's notification settings read, and a mention
+deleted from the text doesn't ride the wire — what the message doesn't say,
+the wire doesn't claim. Receiving one: on the list, a mention reads
 differently from mere unread — "@ 2" beside the unread count — because it
 is a different demand: unread says you haven't looked, a mention says
-someone is waiting on you.
+someone is waiting on you. A mentioned duo's answer arrives in the
+conversation as its own message, attributed structurally like any duo
+message — including its permissions outcomes (passed on, declined), which
+render in the daemon's own words, verbatim, never paraphrased into
+something friendlier.
 
 ## The verbs
 

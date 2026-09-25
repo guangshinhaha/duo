@@ -328,6 +328,28 @@ describe("the projection from Matrix events to room messages", () => {
 
     expect(arrivals).toEqual(["!project-x:workspace.example"]);
   });
+
+  it("a mention rides the wire as m.mentions.user_ids — the half the homeserver's push rules read (#65 AC4)", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    // The body says the mention in words people read; the structured half
+    // says it in ids — which is what drives the receiving member's
+    // settings-governed notification (the server's conditional push rule).
+    await connection.send("!project-x:workspace.example", "@carol's duo what's our refund policy?", [
+      "@duo-carol:workspace.example",
+    ]);
+
+    expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
+      msgtype: MsgType.Text,
+      body: "@carol's duo what's our refund policy?",
+      "m.mentions": { user_ids: ["@duo-carol:workspace.example"] },
+    });
+    // The no-mentions payload carries no m.mentions at all — an empty
+    // mentions object is wire noise, and the send above it already pins
+    // that shape without the key.
+  });
 });
 
 describe("the rooms projection the conversation list reads (#63)", () => {

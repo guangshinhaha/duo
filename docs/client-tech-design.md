@@ -309,6 +309,17 @@ local half is the optimistic send: the sender's words render immediately, marked
 in the query cache alone — the subscription's refetch lands the homeserver's record in place of
 the copy, and nothing else ever renders it.
 
+#65 adds mentioning, on the same principle: the surface adds no behaviour, it addresses. The
+composer offers the room's own members (the member themself excepted) — a person by their name,
+a duo as "{owner}'s duo" from the user-id grammar — and a surviving pick rides the wire as
+`m.mentions.user_ids` on `m.room.message`, the structured half the homeserver's push rules read
+(the body carries "@label" for humans; a pick deleted from the text rides nothing — the key is
+omitted entirely, not sent empty). The duo's answer — a question asked while its owner's Mac
+slept is answered on wake (core #186, held-not-lost) — arrives through the room like any duo
+message and renders attributed from the id grammar; nothing is synthesized before it arrives,
+and the daemon's permissions outcomes (passed on, declined) render in the daemon's own words,
+verbatim.
+
 ## 3.3 Offline
 
 The query cache persists to storage and rehydrates at launch. Two connections fail for

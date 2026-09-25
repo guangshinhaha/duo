@@ -5,7 +5,7 @@ import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { roomTitle } from "./Conversations.js";
-import type { RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
+import type { RoomMemberRef, RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 
@@ -174,7 +174,7 @@ export function Room({ connection, roomId }: { connection: WorkspaceConnection |
           )}
         </section>
       </div>
-      <RoomComposer connection={connection} roomId={roomId} roomName={roomName} />
+      <RoomComposer connection={connection} roomId={roomId} roomName={roomName} members={room?.members ?? []} />
       {/* A delete asks first: the words go for everyone, and the surface
           says so in the same words it will show afterwards. */}
       <Dialog
@@ -475,6 +475,41 @@ function RoomEntry({
   );
 }
 
+/** One member the composer can offer as a mention — a person by their name, a duo by whose it is. */
+interface MentionCandidate {
+  readonly userId: string;
+  readonly label: string;
+  readonly kind: "person" | "duo";
+}
+
+/**
+ * Who a mention can address (#65): the room's own members, the member
+ * themself excepted. The label is structural the way every attribution is —
+ * a duo offers as "{owner}'s duo" from the @duo- grammar, never from a
+ * display name a sender chose, and the kind marker says what each offer IS
+ * before the picker commits to it.
+ */
+function mentionCandidatesOf(members: readonly RoomMemberRef[], selfId: string): readonly MentionCandidate[] {
+  return members
+    .filter((member) => member.userId !== selfId)
+    .map((member) =>
+      isDuoUserId(member.userId)
+        ? { userId: member.userId, label: `${duoOwnerLabel(member.userId) ?? localpartOf(member.userId)}'s duo`, kind: "duo" }
+        : { userId: member.userId, label: member.name ?? localpartOf(member.userId), kind: "person" },
+    );
+}
+
+/**
+ * The mention being typed, read from the text's end: the run after the last
+ * whitespace, when it starts with "@". The composer works at the caret
+ * people actually type at — the end — and keeps no caret state of its own.
+ */
+function mentionTokenAtEnd(text: string): string | null {
+  const start = Math.max(text.lastIndexOf(" "), text.lastIndexOf("\n")) + 1;
+  const token = text.slice(start);
+  return token.startsWith("@") ? token : null;
+}
+
 /** Distinguishes one optimistic copy from the next — the homeserver's event ids replace these. */
 let echoSequence = 0;
 
@@ -483,15 +518,46 @@ let echoSequence = 0;
  * idiom this client already uses for asking (#27 — Enter is a newline,
  * Cmd/Ctrl-Enter submits). #64 AC1: the words render immediately as the
  * sender's own marked copy, and the homeserver's echo replaces them; a
- * failed send takes the copy back and keeps the text.
+ * failed send takes the copy back and keeps the text. #65: an "@" the
+ * member types offers the room's members — people and the duos present,
+ * clearly distinguished — and the picks ride the wire as m.mentions.
  */
-function RoomComposer({ connection, roomId, roomName }: { connection: WorkspaceConnection; roomId: string; roomName: string }) {
+function RoomComposer({
+  connection,
+  roomId,
+  roomName,
+  members,
+}: {
+  connection: WorkspaceConnection;
+  roomId: string;
+  roomName: string;
+  members: readonly RoomMemberRef[];
+}) {
   const queryClient = useQueryClient();
   const [text, setText] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The picks made from the offer; only those whose label still stands in
+  // the text at send time ride the wire — what the message doesn't say, the
+  // wire doesn't claim.
+  const [picks, setPicks] = useState<{ userId: string; label: string }[]>([]);
   const trimmed = text.trim();
   const disabled = trimmed.length === 0 || pending;
+
+  const token = mentionTokenAtEnd(text);
+  const offer =
+    token === null
+      ? null
+      : mentionCandidatesOf(members, connection.userId).filter((candidate) => {
+          const fragment = token.slice(1).toLowerCase();
+          return candidate.label.toLowerCase().startsWith(fragment) || localpartOf(candidate.userId).toLowerCase().startsWith(fragment);
+        });
+  const pickMention = (candidate: MentionCandidate): void => {
+    // The half-typed token goes, the chosen label lands with its trailing
+    // space — the text now says the mention in words people read.
+    setText(text.replace(/@[^@\s]*$/, `@${candidate.label} `));
+    setPicks((current) => [...current.filter((pick) => pick.userId !== candidate.userId), { userId: candidate.userId, label: candidate.label }]);
+  };
 
   return (
     <form
@@ -503,6 +569,7 @@ function RoomComposer({ connection, roomId, roomName }: { connection: WorkspaceC
           return;
         }
         const body = trimmed;
+        const mentionIds = [...new Set(picks.filter((pick) => text.includes(`@${pick.label}`)).map((pick) => pick.userId))];
         const echoId = `pending-${(echoSequence += 1)}`;
         setPending(true);
         setError(null);
@@ -526,9 +593,12 @@ function RoomComposer({ connection, roomId, roomName }: { connection: WorkspaceC
             pending: true,
           },
         ]);
-        connection
-          .send(roomId, body)
-          .then(() => setText(""))
+        const sending = mentionIds.length > 0 ? connection.send(roomId, body, mentionIds) : connection.send(roomId, body);
+        sending
+          .then(() => {
+            setText("");
+            setPicks([]);
+          })
           .catch(() => {
             setError("Couldn't send — try again.");
             queryClient.setQueryData<readonly RoomMessage[]>(["workspace", "timeline", roomId], (current) =>
@@ -564,6 +634,28 @@ function RoomComposer({ connection, roomId, roomName }: { connection: WorkspaceC
           {pending ? "Sending…" : "Send"}
         </button>
       </div>
+      {offer !== null && offer.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1" data-testid="mention-offer">
+          {offer.map((candidate) => (
+            <button
+              key={candidate.userId}
+              className="inline-flex min-h-11 items-center gap-2 self-start rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2 type-body"
+              data-testid="mention-option"
+              type="button"
+              onClick={() => pickMention(candidate)}
+            >
+              <span
+                aria-hidden="true"
+                className="rounded-full border border-[var(--edge)] px-2 type-provenance text-[var(--muted)]"
+                data-testid="mention-kind"
+              >
+                {candidate.kind}
+              </span>
+              {candidate.label}
+            </button>
+          ))}
+        </div>
+      )}
       {error && (
         <p className="mt-2 type-body text-[var(--refused)]" data-testid="room-composer-error">
           {error}
