@@ -100,29 +100,53 @@ thing to drift, and the only client is the owner, so there is nothing to redact.
 
 | Method | Path | Returns | Module |
 |---|---|---|---|
+| `GET` | `/health` | `{ ok: true }` | inline |
 | `GET` | `/duos` | `DuoSummary[]` *(new, 1.6)* | `duo/registry` |
-| `POST` | `/drafts` | `DraftPipelineResult` | `drafting/pipeline` |
-| `GET` | `/drafts?outcome=pending` | `DraftRecord[]` | `drafting/draft-log` |
+| `GET` | `/channels` | `ChannelSummary[]` — one row per registered adapter, display strings supplied by the adapter (#171) | `drafting/delivery` |
+| `GET` | `/channels/policy` | `ChannelPolicy` — which channels, and which threads in them, produce no proactive offers (#172) | `drafting/channel-mutes` |
+| `POST` | `/channels/policy/mute` | `ChannelPolicy` — the updated policy (channel or thread scope) | `drafting/channel-mutes` |
+| `POST` | `/channels/policy/unmute` | `ChannelPolicy` — the updated policy | `drafting/channel-mutes` |
+| `GET` | `/devices` | `DeviceToken[]` — no token or hash field, so the list structurally cannot leak a credential (#177) | `serve/tokens` |
+| `POST` | `/devices/:id/revoke` | `DeviceToken` — same-tick teardown: cached auth and live socket drop with it | `serve/tokens` |
+| `GET` | `/drafts?outcome=&before=&limit=` | `DraftRecord[]` (G-b's filter/pagination) | `drafting/draft-log` |
 | `GET` | `/drafts/:id` | `DraftRecord` | `drafting/draft-log` |
-| `POST` | `/drafts/:id/outcome` | `ClassifyAndQueueResult \| null` | extracted from `commands/draft` |
+| `POST` | `/drafts` | `DraftPipelineResult` — 201, with a same-tick `draft-ready` push (#162) | `drafting/pipeline` |
+| `POST` | `/ask` | the public-answer envelope — `kind` + asker-visible `text`; a device principal also gets `draftId`/`confidence`/`ownerNotice` (R8's projection, #159). `duo: "shared"` routes to `answerSharedDuo` (KTD4) | `permissions/public-answer` |
+| `POST` | `/drafts/:id/outcome` | `ClassifyAndQueueResult \| {}` — delivery through the draft's origin channel rides the same seam (#170) | `drafting/delivery` |
 | `POST` | `/drafts/:id/answer` | `{ candidateId: string }` | `drafting/standing-order-candidates` |
-| `GET` | `/review` | `CorrectionCandidate[]` | `corrections/queue` |
+| `GET` | `/review?status=` | the merged queue's rows — draft edits *and* standing-order candidates, each tagged `source` (#166) | `corrections/review` |
+| `POST` | `/review/:id/approve` | `{ candidate, result }` (#173) | `corrections/review` |
+| `POST` | `/review/:id/reject` | `{ candidate }` (#173) | `corrections/review` |
 | `GET` | `/mirror/portrait` | `InterruptionPortrait` | `derivation/portrait` |
+| `GET` | `/knowledge` | `DuoKnowledge` — what this duo knows and which providers it was wired with (#175) | `duo/knowledge-summary` |
 | `GET` | `/mirror/rules` | `RuleReviewListing` | `derivation/rule-review` |
-| `POST` | `/mirror/rules/:id/:action` | `Rule` | `derivation/rule-review` |
 | `GET` | `/mirror/rules/:id` | `RuleWithEvidence` — the rule with the supporting evidence exchanges behind it | `derivation/rule-review` |
-| `GET` | `/mirror/refusals` | `{ decided: boolean, refusals: Refusal[] }` — the same shape `duo mirror refusals list` prints (`commands/mirror`'s `RefusalsListing`) | `trust/refusals` |
+| `POST` | `/mirror/rules/:id/:action` | `Rule` | `derivation/rule-review` |
+| `GET` | `/mirror/refusals` | `{ decided: boolean, refusals: Refusal[] }` — pure `duo/refusals.md` file state; `decided: false` is a 200 (#182). add/confirm-none stay terminal-only (AR-18) | `trust/refusals` |
 | `GET` | `/trust/grid` | `GridRow[]` | `trust/grid` |
+| `GET` | `/actions/t4/pending` | `PendingT4RequestForJudgement[]` — the staged irreversible steps (#180) | `actions/t4-guard` |
+| `POST` | `/actions/t4/:id/confirm` | `PendingT4Request` — confirming is this route and only this route; the confirming device's id rides the attempt (#180) | `actions/t4-guard` |
+| `GET` | `/actions/attempts` | `ActionAttemptEntry[]` — every attempt, refused or resolved (#180) | `actions/attempt-log` |
+| `GET` | `/lifecycle` | `{ lifecycle, transfers }` — the lifecycle record plus every transfer's state (#181) | `continuity/lifecycle`, `continuity/transfer` |
+| `POST` | `/lifecycle/end` | `EndDuoResult` — describes what would go until `confirmed: true` (#181) | `continuity/lifecycle` |
+| `POST` | `/corpus/import-paste` | `PasteImportSummary` — the transcript text in the body, down `duo import paste`'s own path (#176) | `ingest/paste-import` |
+| `POST` | `/corpus/embed` | `EmbedJobStatus` — 202 (starts the one job); 409 `embed_already_running` (#176) | `serve/embed-job` |
+| `GET` | `/corpus/embed` | `EmbedJobStatus` — the running job's progress (#176) | `serve/embed-job` |
+| `GET` | `/search?q=&limit=&cursor=` | `HybridSearchOutcome` — `duo search`'s own hybrid read (#174) | `ingest/embeddings` |
+| `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178) | `escalation/digest` |
+| `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) | `escalation/digest` |
+| `GET` | `/escalations/rate` | `EscalationUrgencyRate` (#178) | `escalation/digest` |
 | `GET` | `/audit` | `AuditEntry[]` | `permissions/audit` |
+| `GET` | `/ws` | the one push channel — `draft-ready`; auth by first message (#162) | `serve/ws` |
 
 There is deliberately no `/duos/:id/ask` route. Asking the **personal** duo something *is*
 drafting — there is no separate "ask" action for it, the same way `duo ask`/`duo draft` never
-took a duo id — so that's `POST /drafts`. Asking the **shared** duo (`answerForAsker`,
-`permissions/answer.ts`) is real but out of scope for this pass: it needs an `askerRef` resolved
-against `duo/directory.json`, which is a permissions question this document hasn't worked through
-yet, not a hard blocker. `runAsk` (`commands/ask.ts`) is a raw, ungrounded provider passthrough
-used only to verify provider configuration (R4/R5) — it is never a route backing anything a client
-shows the owner.
+took a duo id — so that's `POST /drafts`. The **asker's** one-question surface is `POST /ask`
+(#159): an ask token authorizes exactly that route, and the same route serves the shared duo
+when the body says `duo: "shared"` (#159/KTD4) — the `askerRef` resolution against
+`duo/directory.json` happens inside the route, never in a client. `runAsk` (`commands/ask.ts`)
+is a raw, ungrounded provider passthrough used only to verify provider configuration (R4/R5) —
+it is never a route backing anything a client shows the owner.
 
 `POST /drafts` returns the full `DraftPipelineResult` **synchronously** in v1 — 201, not 202. Self-
 consistency sampling without a configured inference provider falls back to the fast, deterministic
