@@ -956,7 +956,7 @@ describe("#65 AC1 — people and duos are both mentionable", () => {
 
     const composer = screen.getByLabelText("Message project-x");
     fireEvent.change(composer, { target: { value: "@ca" } });
-    fireEvent.click((await screen.findByTestId("mention-offer")).querySelector('[data-testid="mention-option"]'));
+    fireEvent.click((await screen.findByTestId("mention-offer")).querySelector('[data-testid="mention-option"]')!);
 
     // The pick landed in the text — then the sender thought better of it
     // and wrote something else. What the message doesn't say, the wire
@@ -982,7 +982,12 @@ describe("#65 AC2 — mentioning a duo asks it", () => {
 
     const composer = screen.getByLabelText("Message project-x");
     fireEvent.change(composer, { target: { value: "@ca" } });
-    const duoOption = (await screen.findByTestId("mention-offer")).querySelectorAll('[data-testid="mention-option"]')[1]!;
+    // "@ca" narrows the offer to the duo alone — the person's label doesn't
+    // begin with it.
+    const offerEl = await screen.findByTestId("mention-offer");
+    const duoOption = [...offerEl.querySelectorAll('[data-testid="mention-option"]')].find((option) =>
+      option.textContent?.includes("carol's duo"),
+    )!;
     fireEvent.click(duoOption);
     // Picking closes the offer and leaves the addressed words in the text.
     await waitFor(() => expect(screen.queryByTestId("mention-offer")).toBeNull());

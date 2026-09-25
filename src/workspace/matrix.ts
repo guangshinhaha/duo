@@ -133,7 +133,13 @@ export interface WorkspaceConnection {
   /** The member's conversations, ordered by latest activity — the server's answer, not this device's cache of it. */
   rooms(): Promise<readonly RoomSummary[]>;
   timeline(roomId: string): Promise<readonly RoomMessage[]>;
-  send(roomId: string, body: string): Promise<void>;
+  /**
+   * Sends a text message (#65): the body says what people read; when the
+   * message addresses members, their user ids ride `m.mentions.user_ids` —
+   * the structured half the homeserver's push rules read, which is the
+   * whole of "notified according to their settings" from the sender's side.
+   */
+  send(roomId: string, body: string, mentions?: readonly string[]): Promise<void>;
   /**
    * Amends this member's own message (#64): a replacement event — the new
    * words ride `m.new_content`, the relation points back at the base, and
@@ -486,8 +492,15 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
         .sort((a, b) => (b.latest?.at ?? Number.MIN_SAFE_INTEGER) - (a.latest?.at ?? Number.MIN_SAFE_INTEGER));
     },
     timeline: async (roomId) => timelineOf(client, roomId),
-    send: async (roomId, body) => {
-      await client.sendMessage(roomId, { msgtype: MsgType.Text, body });
+    send: async (roomId, body, mentions) => {
+      // An empty mentions list is no mention: the key rides the wire only
+      // when there is somebody addressed.
+      await client.sendMessage(
+        roomId,
+        mentions && mentions.length > 0
+          ? { msgtype: MsgType.Text, body, "m.mentions": { user_ids: [...mentions] } }
+          : { msgtype: MsgType.Text, body },
+      );
     },
     // The verbs are all homeserver operations on the room — the surface adds
     // no behaviour, it asks the server to move its own state and renders the
