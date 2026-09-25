@@ -70,7 +70,7 @@ describe("#35 AC1 — the theme can be chosen, applied now, and remembered", () 
   });
 
   it("picking light or dark stamps it immediately; picking system unstamps; each choice is remembered", () => {
-    render(<Settings api={api} onConfigChange={onConfigChange} />);
+    render(<Settings api={api} session={null} onConfigChange={onConfigChange} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
     const control = screen.getByLabelText("Theme");
 
     fireEvent.change(control, { target: { value: "light" } });

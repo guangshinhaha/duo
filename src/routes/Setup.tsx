@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { PairDuoForm } from "../components/PairDuoForm.js";
+import { WorkspaceSignInForm } from "../components/WorkspaceSignInForm.js";
 import type { DuoApiConfig } from "../api/client.js";
+import type { WorkspaceSession } from "../workspace/matrix.js";
 
 /**
  * Normalizes and validates a daemon address. A pasted tailnet address
@@ -37,50 +39,31 @@ export function normalizeBaseUrl(raw: string): string | null {
 }
 
 /**
- * First-run screen: paste the daemon's address and the token `duo pair new
- * <name>` printed. No auth flow beyond this — a bearer token is the whole
- * scheme (client-tech-design.md Part 2). `notice` is App's one non-first-run
- * reason for being here: a revoked token (#41) unpairs from any surface and
- * lands here saying so, so the owner is never left guessing why the app
- * signed them out.
+ * First-run screen, now with two doors (#62): the workspace sign-in (who
+ * you are, in an org — the front door a workspace with members needs) and
+ * the duo pairing (paste the daemon's address and the token `duo pair new`
+ * printed — still the right door for one person pairing their own phone).
+ * Two credentials with separate lifetimes, so two forms, one screen; the
+ * app opens as soon as EITHER succeeds. `notice` is App's one non-first-run
+ * reason for being here: a revoked token (#41) unpairs from any surface
+ * and lands here saying so, so the owner is never left guessing why the
+ * app signed them out.
  */
-export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig) => void; notice?: string }) {
-  const [baseUrlInput, setBaseUrlInput] = useState("");
-  const [token, setToken] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
+export function Setup({
+  onConnect,
+  onWorkspaceSession,
+  notice,
+}: {
+  onConnect: (config: DuoApiConfig) => void;
+  onWorkspaceSession: (session: WorkspaceSession) => void;
+  notice?: string;
+}) {
   return (
     // #38: dvh, not vh — this is the FIRST screen a phone reaches over
-    // Tailscale (G4), and mobile Safari's collapsing URL bar would push
-    // the Connect button under it with a fixed 100vh.
+    // Tailscale (G4), and mobile Safari's collapsing URL bar would push the
+    // submit buttons under it with a fixed 100vh.
     <div className="flex h-dvh items-center justify-center bg-[var(--bg)] px-4">
-      <form
-        className="shape-entry flex w-full max-w-sm flex-col gap-3 p-6"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const normalized = normalizeBaseUrl(baseUrlInput);
-          if (!normalized) {
-            setError(`"${baseUrlInput}" doesn't look like a valid address — try something like 100.64.1.5:7717`);
-            return;
-          }
-          // Trimmed, unlike baseUrl was before this line existed to fix
-          // exactly this: a token copy-pasted from a terminal commonly
-          // picks up a trailing newline or space, which then silently
-          // fails every request's Authorization header with no indication
-          // whitespace was the cause. Checked here too, not just in the
-          // button's `disabled` below — a whitespace-only paste makes
-          // `token` a non-empty string, so `disabled={!token}` alone
-          // would let the form submit with an empty trimmed token.
-          const trimmedToken = token.trim();
-          if (!trimmedToken) {
-            setError("Paste the token `duo pair new` printed — it looks empty.");
-            return;
-          }
-          setError(null);
-          onConnect({ baseUrl: normalized, token: trimmedToken });
-        }}
-      >
-        <h1 className="type-heading">Connect to your duo</h1>
+      <div className="shape-entry flex w-full max-w-sm flex-col gap-6 p-6">
         {notice && (
           <p
             className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-3 py-2 type-body text-[var(--escalate)]"
@@ -90,42 +73,20 @@ export function Setup({ onConnect, notice }: { onConnect: (config: DuoApiConfig)
             {notice}
           </p>
         )}
-        <p className="type-body text-[var(--muted)]">
-          Run <code>duo pair new &quot;this device&apos;s name&quot;</code> on your Mac, then paste its address and token here.
-        </p>
-        <label className="flex flex-col gap-1 type-body">
-          Daemon address
-          <input
-            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2"
-            placeholder="100.64.1.5:7717"
-            value={baseUrlInput}
-            onChange={(e) => {
-              setBaseUrlInput(e.target.value);
-              setError(null);
-            }}
-          />
-        </label>
-        <label className="flex flex-col gap-1 type-body">
-          Token
-          <input
-            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-          />
-        </label>
-        {error && (
-          <p className="type-body text-[var(--refused)]" data-testid="setup-error">
-            {error}
+        <section className="flex flex-col gap-3">
+          <h1 className="type-heading">Sign in to your workspace</h1>
+          <p className="type-body text-[var(--muted)]">Who you are, in your org — separate from your duo, which only you reach.</p>
+          <WorkspaceSignInForm onSession={onWorkspaceSession} />
+        </section>
+        <div className="border-t border-[var(--edge)]" />
+        <section className="flex flex-col gap-3">
+          <h2 className="type-heading">Pair a duo instead</h2>
+          <p className="type-body text-[var(--muted)]">
+            Run <code>duo pair new &quot;this device&apos;s name&quot;</code> on your Mac, then paste its address and token here.
           </p>
-        )}
-        <button
-          className="mt-2 inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
-          type="submit"
-          disabled={!token.trim() || !baseUrlInput}
-        >
-          Connect
-        </button>
-      </form>
+          <PairDuoForm onConnect={onConnect} />
+        </section>
+      </div>
     </div>
   );
 }

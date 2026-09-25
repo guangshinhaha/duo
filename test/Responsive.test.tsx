@@ -287,13 +287,13 @@ describe("#38 AC4 — touch targets are real", () => {
 
     // Settings — the pairing's maintenance surface.
     vi.stubGlobal("fetch", stubFetch({}));
-    const settings = renderWithClient(<Settings api={api} onConfigChange={() => {}} />);
+    const settings = renderWithClient(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
     await screen.findByTestId("settings");
     expectTouchTargets(settings.container);
     cleanup();
 
     // Setup — the FIRST screen a phone reaches, over Tailscale (G4).
-    const setup = render(<Setup onConnect={() => {}} />);
+    const setup = render(<Setup onConnect={() => {}} onWorkspaceSession={() => {}} />);
     expectTouchTargets(setup.container);
     cleanup();
 

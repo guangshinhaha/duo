@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
+import type { WorkspaceSession } from "../workspace/matrix.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,16 +19,33 @@ function maskedToken(token: string): string {
 }
 
 /**
- * §3.1's `/settings` (daemon address, device name, unpair), scoped to what
- * the client actually owns: this device's stored connection. The address is
+ * §3.1's `/settings`, widened to #62's two credentials: the workspace
+ * sign-in (who you are, in an org) and this device's duo pairing (which
+ * only you reach). Each is shown, startable, and endable INDEPENDENTLY —
+ * signing out never unpairs, unpairing never signs out — and each empty
+ * state offers its own door rather than apologizing. The address stays
  * editable with Setup's own validator and wording; unpair is a local
  * forget — the daemon has no revocation route, so the copy never claims
  * one. Device name is absent for the same reason (issue #11's open
  * question): the daemon records it at pairing but serves no way to read it
  * back, and the client never sees it.
  */
-export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigChange: (config: DuoApiConfig | null) => void }) {
-  const [addressInput, setAddressInput] = useState(api.baseUrl);
+export function Settings({
+  api,
+  session,
+  onConfigChange,
+  onSignOut,
+  onPairDuo,
+  onWorkspaceSignIn,
+}: {
+  api: DuoApiConfig | null;
+  session: WorkspaceSession | null;
+  onConfigChange: (config: DuoApiConfig | null) => void;
+  onSignOut: () => void;
+  onPairDuo: () => void;
+  onWorkspaceSignIn: () => void;
+}) {
+  const [addressInput, setAddressInput] = useState(api?.baseUrl ?? "");
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
 
@@ -36,52 +54,97 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
       {/* #39: the page's h1 above its sections' h2s — the sections name
           themselves; the page did not. */}
       <h1 className="type-heading sr-only">Settings</h1>
-      <section className="shape-container flex flex-col gap-3 p-4">
-        <h2 className="type-heading">Connection</h2>
-        <div className="flex flex-col gap-1 type-provenance text-[var(--muted)]">
-          <div data-testid="settings-address">{api.baseUrl}</div>
-          <div data-testid="settings-token">{maskedToken(api.token)}</div>
-        </div>
-        <form
-          className="flex flex-col gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const normalized = normalizeBaseUrl(addressInput);
-            if (!normalized) {
-              setError(`"${addressInput}" doesn't look like a valid address — try something like 100.64.1.5:7717`);
-              return;
-            }
-            setError(null);
-            // Token unchanged: a moved daemon keeps its paired devices;
-            // re-pairing is the flow when the token itself is wrong.
-            onConfigChange({ baseUrl: normalized, token: api.token });
-          }}
-        >
-          <label className="type-provenance text-[var(--muted)]" htmlFor="settings-address-input">
-            Daemon address
-          </label>
-          <div className="flex gap-2">
-            <input
-              className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
-              id="settings-address-input"
-              onChange={(e) => setAddressInput(e.target.value)}
-              value={addressInput}
-            />
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-workspace">
+        <h2 className="type-heading">Workspace</h2>
+        {session ? (
+          <>
+            <div className="flex flex-col gap-1 type-provenance text-[var(--muted)]">
+              {/* The user id verbatim — the protocol's own spelling and the
+                  one stable identity; a display name is a claim, not a key. */}
+              <div data-testid="settings-workspace-user">{session.userId}</div>
+              <div data-testid="settings-workspace-homeserver">{session.homeserverUrl}</div>
+            </div>
             <button
-              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
-              disabled={!addressInput.trim()}
-              type="submit"
+              className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
+              data-testid="settings-sign-out"
+              onClick={onSignOut}
             >
-              Save
+              Sign out
             </button>
-          </div>
-          {error && (
-            <p className="type-provenance text-[var(--refused)]" data-testid="settings-error">
-              {error}
-            </p>
-          )}
-        </form>
+          </>
+        ) : (
+          <>
+            <p className="type-provenance text-[var(--muted)]">No workspace signed in on this device.</p>
+            <button
+              className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+              data-testid="settings-workspace-signin"
+              onClick={onWorkspaceSignIn}
+            >
+              Sign in to a workspace
+            </button>
+          </>
+        )}
       </section>
+      {api ? (
+        <section className="shape-container flex flex-col gap-3 p-4">
+          <h2 className="type-heading">Connection</h2>
+          <div className="flex flex-col gap-1 type-provenance text-[var(--muted)]">
+            <div data-testid="settings-address">{api.baseUrl}</div>
+            <div data-testid="settings-token">{maskedToken(api.token)}</div>
+          </div>
+          <form
+            className="flex flex-col gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const normalized = normalizeBaseUrl(addressInput);
+              if (!normalized) {
+                setError(`"${addressInput}" doesn't look like a valid address — try something like 100.64.1.5:7717`);
+                return;
+              }
+              setError(null);
+              // Token unchanged: a moved daemon keeps its paired devices;
+              // re-pairing is the flow when the token itself is wrong.
+              onConfigChange({ baseUrl: normalized, token: api.token });
+            }}
+          >
+            <label className="type-provenance text-[var(--muted)]" htmlFor="settings-address-input">
+              Daemon address
+            </label>
+            <div className="flex gap-2">
+              <input
+                className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
+                id="settings-address-input"
+                onChange={(e) => setAddressInput(e.target.value)}
+                value={addressInput}
+              />
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
+                disabled={!addressInput.trim()}
+                type="submit"
+              >
+                Save
+              </button>
+            </div>
+            {error && (
+              <p className="type-provenance text-[var(--refused)]" data-testid="settings-error">
+                {error}
+              </p>
+            )}
+          </form>
+        </section>
+      ) : (
+        <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-no-duo">
+          <h2 className="type-heading">Connection</h2>
+          <p className="type-provenance text-[var(--muted)]">No duo is connected on this device.</p>
+          <button
+            className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+            data-testid="settings-pair"
+            onClick={onPairDuo}
+          >
+            Pair your duo
+          </button>
+        </section>
+      )}
 
       <section className="shape-container flex flex-col gap-3 p-4">
         <h2 className="type-heading">Appearance</h2>
@@ -135,42 +198,44 @@ export function Settings({ api, onConfigChange }: { api: DuoApiConfig; onConfigC
         </dl>
       </section>
 
-      <section className="shape-container flex flex-col gap-3 p-4">
-        <h2 className="type-heading">This device</h2>
-        {/* #34: the destructive confirmation is the alert-dialog primitive
-            — focus trap, Escape-equals-Cancel and the alertdialog role come
-            with it; a stray click outside is not an answer. The copy and
-            the two buttons are exactly what the inline version had. */}
-        <AlertDialog>
-          <AlertDialogTrigger
-            className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
-            data-testid="settings-unpair"
-          >
-            Forget this device…
-          </AlertDialogTrigger>
-          <AlertDialogContent className="w-[calc(100vw-3rem)] max-w-md" data-testid="settings-unpair-confirmation">
-            <AlertDialogTitle className="type-heading">Forget this device?</AlertDialogTitle>
-            <AlertDialogDescription className="type-provenance text-[var(--muted)]">
-              Forget this device's stored connection? The daemon keeps its own record — this removes the address and token here, on this device only.
-            </AlertDialogDescription>
-            <div className="flex gap-2">
-              <AlertDialogAction
-                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--refused)] px-3 text-white"
-                data-testid="settings-unpair-confirm"
-                onClick={() => onConfigChange(null)}
-              >
-                Forget this device
-              </AlertDialogAction>
-              <AlertDialogCancel
-                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
-                data-testid="settings-unpair-cancel"
-              >
-                Cancel
-              </AlertDialogCancel>
-            </div>
-          </AlertDialogContent>
-        </AlertDialog>
-      </section>
+      {api && (
+        <section className="shape-container flex flex-col gap-3 p-4">
+          <h2 className="type-heading">This device</h2>
+          {/* #34: the destructive confirmation is the alert-dialog primitive
+              — focus trap, Escape-equals-Cancel and the alertdialog role come
+              with it; a stray click outside is not an answer. The copy and
+              the two buttons are exactly what the inline version had. */}
+          <AlertDialog>
+            <AlertDialogTrigger
+              className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
+              data-testid="settings-unpair"
+            >
+              Forget this device…
+            </AlertDialogTrigger>
+            <AlertDialogContent className="w-[calc(100vw-3rem)] max-w-md" data-testid="settings-unpair-confirmation">
+              <AlertDialogTitle className="type-heading">Forget this device?</AlertDialogTitle>
+              <AlertDialogDescription className="type-provenance text-[var(--muted)]">
+                Forget this device's stored connection? The daemon keeps its own record — this removes the address and token here, on this device only.
+              </AlertDialogDescription>
+              <div className="flex gap-2">
+                <AlertDialogAction
+                  className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--refused)] px-3 text-white"
+                  data-testid="settings-unpair-confirm"
+                  onClick={() => onConfigChange(null)}
+                >
+                  Forget this device
+                </AlertDialogAction>
+                <AlertDialogCancel
+                  className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
+                  data-testid="settings-unpair-cancel"
+                >
+                  Cancel
+                </AlertDialogCancel>
+              </div>
+            </AlertDialogContent>
+          </AlertDialog>
+        </section>
+      )}
     </div>
   );
 }

@@ -144,7 +144,7 @@ describe("#36 AC2 — Escape leaves, discarding nothing that was not already dis
   });
 
   it("Escape closes the unpair dialog and returns focus to its trigger", async () => {
-    render(<Settings api={api} onConfigChange={() => {}} />);
+    render(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
     const trigger = screen.getByTestId("settings-unpair");
     trigger.focus();
     fireEvent.click(trigger);
@@ -220,7 +220,7 @@ describe("#36 AC3 — every interactive element shows focus, at contrast, in bot
 
 describe("#36 AC4 — shortcuts are discoverable in one place", () => {
   it("Settings lists every shortcut that exists and what it does", () => {
-    render(<Settings api={api} onConfigChange={() => {}} />);
+    render(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
     const section = screen.getByText("Keyboard", { selector: "h2" }).closest("section");
     expect(section).not.toBeNull();
 

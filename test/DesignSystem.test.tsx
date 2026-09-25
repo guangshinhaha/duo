@@ -192,7 +192,7 @@ describe("#33 — the type scale is set once", () => {
     expect(offenders).toEqual([]);
 
     // And as rendered, not just as written:
-    render(<Setup onConnect={() => {}} />);
+    render(<Setup onConnect={() => {}} onWorkspaceSession={() => {}} />);
     expect(document.querySelector("h1")!.className).toContain("type-heading");
   });
 });

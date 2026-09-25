@@ -128,7 +128,7 @@ function renderWithClient(ui: React.ReactElement): ReturnType<typeof render> {
 
 describe("#31 — every primary button renders the accessible foreground", () => {
   it("Setup's Connect", () => {
-    render(<Setup onConnect={() => {}} />);
+    render(<Setup onConnect={() => {}} onWorkspaceSession={() => {}} />);
     primaryButton("Connect");
   });
 
@@ -162,12 +162,12 @@ describe("#31 — every primary button renders the accessible foreground", () =>
   });
 
   it("Settings' Save", () => {
-    render(<Settings api={api} onConfigChange={() => {}} />);
+    render(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
     primaryButton("Save");
   });
 
   it("a disabled primary button keeps its shape and label at 40% opacity", () => {
-    render(<Setup onConnect={() => {}} />);
+    render(<Setup onConnect={() => {}} onWorkspaceSession={() => {}} />);
     // Connect starts disabled (empty address/token). Distinguishable-as-a-
     // control is the accent background and the label, kept by the opacity
     // utility that was already there — not a contrast ratio (WCAG exempts

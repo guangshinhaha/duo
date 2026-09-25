@@ -5,7 +5,7 @@ import { Setup } from "../src/routes/Setup.js";
 describe("Setup — daemon address validation", () => {
   it("normalizes a bare host:port (no scheme) rather than treating it as a relative path", () => {
     const onConnect = vi.fn();
-    render(<Setup onConnect={onConnect} />);
+    render(<Setup onConnect={onConnect} onWorkspaceSession={vi.fn()} />);
     fireEvent.change(screen.getByPlaceholderText("100.64.1.5:7717"), { target: { value: "100.64.1.5:7717" } });
     fireEvent.change(screen.getByRole("textbox", { name: /token/i }), { target: { value: "tok" } });
     fireEvent.click(screen.getByText("Connect"));
@@ -15,7 +15,7 @@ describe("Setup — daemon address validation", () => {
 
   it("accepts an address with an explicit scheme unchanged", () => {
     const onConnect = vi.fn();
-    render(<Setup onConnect={onConnect} />);
+    render(<Setup onConnect={onConnect} onWorkspaceSession={vi.fn()} />);
     fireEvent.change(screen.getByPlaceholderText("100.64.1.5:7717"), { target: { value: "https://100.64.1.5:7717/" } });
     fireEvent.change(screen.getByRole("textbox", { name: /token/i }), { target: { value: "tok" } });
     fireEvent.click(screen.getByText("Connect"));
@@ -25,7 +25,7 @@ describe("Setup — daemon address validation", () => {
 
   it("shows an inline error for a structurally invalid address instead of silently connecting to nothing", () => {
     const onConnect = vi.fn();
-    render(<Setup onConnect={onConnect} />);
+    render(<Setup onConnect={onConnect} onWorkspaceSession={vi.fn()} />);
     fireEvent.change(screen.getByPlaceholderText("100.64.1.5:7717"), { target: { value: "http://" } });
     fireEvent.change(screen.getByRole("textbox", { name: /token/i }), { target: { value: "tok" } });
     fireEvent.click(screen.getByText("Connect"));
@@ -36,7 +36,7 @@ describe("Setup — daemon address validation", () => {
 
   it("trims the token, and never connects with an empty (or whitespace-only) one", () => {
     const onConnect = vi.fn();
-    render(<Setup onConnect={onConnect} />);
+    render(<Setup onConnect={onConnect} onWorkspaceSession={vi.fn()} />);
     fireEvent.change(screen.getByPlaceholderText("100.64.1.5:7717"), { target: { value: "100.64.1.5:7717" } });
     fireEvent.change(screen.getByRole("textbox", { name: /token/i }), { target: { value: "tok\n" } });
     fireEvent.click(screen.getByText("Connect"));
@@ -46,7 +46,7 @@ describe("Setup — daemon address validation", () => {
 
   it("a whitespace-only token keeps Connect disabled, and never calls onConnect if submitted anyway", () => {
     const onConnect = vi.fn();
-    render(<Setup onConnect={onConnect} />);
+    render(<Setup onConnect={onConnect} onWorkspaceSession={vi.fn()} />);
     fireEvent.change(screen.getByPlaceholderText("100.64.1.5:7717"), { target: { value: "100.64.1.5:7717" } });
     fireEvent.change(screen.getByRole("textbox", { name: /token/i }), { target: { value: "   " } });
 
