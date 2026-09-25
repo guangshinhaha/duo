@@ -75,12 +75,43 @@ const PEOPLE = [
 ];
 
 function messageFor(over: Partial<RoomMessage> & Pick<RoomMessage, "eventId" | "senderId" | "body">): RoomMessage {
-  return { roomId: "!project-x:workspace.example", senderName: "", originServerTs: 1_700_000_000_000, ...over };
+  return {
+    roomId: "!project-x:workspace.example",
+    senderName: "",
+    originServerTs: 1_700_000_000_000,
+    edited: false,
+    redacted: false,
+    reactions: [],
+    thread: null,
+    threadRootEventId: null,
+    ...over,
+  };
 }
 
 const PROJECT_TIMELINE: RoomMessage[] = [
   messageFor({ eventId: "$1", senderId: "@bose:workspace.example", senderName: "Bose", body: "what's our refund policy?" }),
   messageFor({ eventId: "$2", senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: "Refunds within 30 days, full amount." }),
+];
+
+/**
+ * #64's raw material: a root message with a colleague's-duo reply in its
+ * thread (the reply itself carries `threadRootEventId`, so the main flow
+ * filters it out and the preview carries it instead), beside a plain
+ * unthreaded message.
+ */
+const THREADED_TIMELINE: RoomMessage[] = [
+  messageFor({
+    eventId: "$1",
+    senderId: "@bose:workspace.example",
+    senderName: "Bose",
+    body: "what's our refund policy?",
+    thread: {
+      replyCount: 1,
+      latestReply: { senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: "np, 30 days" },
+    },
+  }),
+  messageFor({ eventId: "$2", senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: "Refunds within 30 days, full amount." }),
+  messageFor({ eventId: "$r1", senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: "np, 30 days", threadRootEventId: "$1" }),
 ];
 
 /**
@@ -97,7 +128,10 @@ function fakeConnection(state: {
 }) {
   let listener: ((roomId: string) => void) | null = null;
   const roomAt = (roomId: string): number => state.rooms.findIndex((room) => room.roomId === roomId);
+  const timelineOf = (roomId: string): RoomMessage[] => (state.timelines[roomId] ??= []);
+  const messageAt = (roomId: string, eventId: string): number => timelineOf(roomId).findIndex((message) => message.eventId === eventId);
   const connection: WorkspaceConnection = {
+    userId: SESSION.userId,
     rooms: vi.fn(async () =>
       // A fresh array of fresh objects per call, like the real seam's
       // projection: TanStack's structural sharing would otherwise see the
@@ -149,11 +183,77 @@ function fakeConnection(state: {
     searchPeople: vi.fn(async (query: string) =>
       (state.people ?? []).filter((person) => person.name.toLowerCase().includes(query.toLowerCase())),
     ),
+    // #64's message verbs — each one moves the timeline the way the
+    // homeserver's own state would move under the same op, so the
+    // surface's reflection is always the server's next answer.
+    edit: vi.fn(async (roomId: string, eventId: string, body: string) => {
+      const at = messageAt(roomId, eventId);
+      if (at >= 0) {
+        timelineOf(roomId)[at] = { ...timelineOf(roomId)[at]!, body, edited: true };
+      }
+    }),
+    delete: vi.fn(async (roomId: string, eventId: string) => {
+      const at = messageAt(roomId, eventId);
+      if (at >= 0) {
+        timelineOf(roomId)[at] = { ...timelineOf(roomId)[at]!, body: "", redacted: true };
+      }
+    }),
+    react: vi.fn(async (roomId: string, eventId: string, key: string) => {
+      const at = messageAt(roomId, eventId);
+      if (at < 0) {
+        return;
+      }
+      const message = timelineOf(roomId)[at]!;
+      const existing = message.reactions.find((reaction) => reaction.key === key);
+      timelineOf(roomId)[at] = {
+        ...message,
+        reactions: existing
+          ? message.reactions.map((reaction) => (reaction.key === key ? { ...reaction, count: reaction.count + 1, mine: true } : reaction))
+          : [...message.reactions, { key, count: 1, mine: true }],
+      };
+    }),
+    unreact: vi.fn(async (roomId: string, eventId: string, key: string) => {
+      const at = messageAt(roomId, eventId);
+      if (at < 0) {
+        return;
+      }
+      const message = timelineOf(roomId)[at]!;
+      timelineOf(roomId)[at] = {
+        ...message,
+        reactions: message.reactions
+          .map((reaction) => (reaction.key === key ? { ...reaction, count: reaction.count - 1, mine: false } : reaction))
+          .filter((reaction) => reaction.count > 0),
+      };
+    }),
+    replyInThread: vi.fn(async (roomId: string, rootEventId: string, body: string) => {
+      const list = timelineOf(roomId);
+      const at = messageAt(roomId, rootEventId);
+      const reply = messageFor({ eventId: `$t${list.length + 1}`, senderId: SESSION.userId, senderName: "ana", body, threadRootEventId: rootEventId });
+      list.push(reply);
+      if (at >= 0) {
+        const root = list[at]!;
+        list[at] = {
+          ...root,
+          thread: {
+            replyCount: (root.thread?.replyCount ?? 0) + 1,
+            latestReply: { senderId: SESSION.userId, senderName: "ana", body },
+          },
+        };
+      }
+    }),
   };
   return {
     connection,
+    // A live arrival: an unseen event id appends, a seen one replaces —
+    // exactly what a homeserver sync does with an edit or a redaction.
     deliver: (message: RoomMessage) => {
-      (state.timelines[message.roomId] ??= []).push(message);
+      const list = timelineOf(message.roomId);
+      const at = list.findIndex((existing) => existing.eventId === message.eventId);
+      if (at >= 0) {
+        list[at] = message;
+      } else {
+        list.push(message);
+      }
       listener?.(message.roomId);
     },
   };
@@ -166,6 +266,19 @@ function entryFor(title: string): HTMLElement {
     .find((candidate) => within(candidate).getByTestId("room-title").textContent === title);
   expect(entry, `no conversations entry titled ${JSON.stringify(title)}`).toBeDefined();
   return entry!;
+}
+
+/** The rendered message row containing a body — the timeline's and the thread view's rows share the testid. */
+function messageRow(body: string): HTMLElement {
+  const row = screen.getAllByTestId("room-message").find((candidate) => within(candidate).queryByText(body) !== null);
+  expect(row, `no message row containing ${JSON.stringify(body)}`).toBeDefined();
+  return row!;
+}
+
+/** Navigate the way the browser would follow an in-app hash link (happy-dom doesn't follow anchors). */
+function navigate(hash: string): void {
+  window.location.hash = hash;
+  window.dispatchEvent(new Event("hashchange"));
 }
 
 /** Fresh module registry per render: the app's module-level QueryClient must not carry cache across tests. */
@@ -615,5 +728,168 @@ describe("#63 — read state is durable, not local", () => {
     window.location.hash = "#conversations";
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(within(entryFor("project-x")).queryByTestId("room-unread")).toBeNull());
+  });
+});
+
+describe("#64 AC1 — messages send and arrive", () => {
+  it("a sent message renders immediately for its sender, and the homeserver's echo confirms it", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // Immediately — nothing has arrived from anywhere yet; the row is this
+    // device's own optimistic copy, marked as on its way.
+    const optimistic = await messageRow("thanks all");
+    expect(within(optimistic).getByTestId("room-message-pending")).toBeInTheDocument();
+    expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "thanks all");
+
+    // The homeserver's echo — a real event id — replaces the optimistic
+    // copy; the words stand without the marker.
+    act(() => fake.deliver(messageFor({ eventId: "$echo", senderId: SESSION.userId, senderName: "ana", body: "thanks all" })));
+    await waitFor(() => expect(screen.queryByTestId("room-message-pending")).toBeNull());
+    expect(screen.getByText("thanks all")).toBeInTheDocument();
+  });
+});
+
+describe("#64 AC2 — editing and deleting are honest", () => {
+  it("an edit replaces the words and is marked as an edit; a delete strikes the message, behind a confirm", async () => {
+    seedSession();
+    const own = messageFor({ eventId: "$mine", senderId: SESSION.userId, senderName: "ana", body: "the policy doc says 30 days" });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE, own] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("the policy doc says 30 days")).getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Edit message"), { target: { value: "the policy doc says 30 days, no exceptions" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(fake.connection.edit).toHaveBeenCalledWith("!project-x:workspace.example", "$mine", "the policy doc says 30 days, no exceptions"));
+    // The homeserver's next answer carries the new words and the mark.
+    await waitFor(() => expect(within(messageRow("the policy doc says 30 days, no exceptions")).getByTestId("room-message-edited")).toBeInTheDocument());
+
+    fireEvent.click(within(messageRow("the policy doc says 30 days, no exceptions")).getByRole("button", { name: "Delete" }));
+    fireEvent.click(await screen.findByTestId("delete-message-confirm"));
+
+    await waitFor(() => expect(fake.connection.delete).toHaveBeenCalledWith("!project-x:workspace.example", "$mine"));
+    // The words go; the place stays honest — a struck message says so, it
+    // doesn't silently vanish and reshuffle the room.
+    await waitFor(() => expect(screen.getByTestId("room-message-deleted")).toHaveTextContent("Message deleted"));
+  });
+
+  it("another member's edit arrives without a refresh, marked as an edit", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    // Bose amends their own message: the same event id comes back with new
+    // words and the edit mark — a sync, not a refresh.
+    act(() =>
+      fake.deliver(messageFor({ eventId: "$1", senderId: "@bose:workspace.example", senderName: "Bose", body: "what IS our refund policy?", edited: true })),
+    );
+
+    const row = await messageRow("what IS our refund policy?");
+    expect(within(row).getByTestId("room-message-edited")).toBeInTheDocument();
+    expect(within(row).queryByText("what's our refund policy?")).toBeNull();
+  });
+});
+
+describe("#64 AC3 — threads and reactions work", () => {
+  it("a reaction renders under its message — in the conversation and inside the thread view — and the chip is a toggle", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...THREADED_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "React" }));
+    fireEvent.click(within(await screen.findByTestId("reaction-picker")).getByRole("button", { name: "React 👍" }));
+
+    await waitFor(() => expect(fake.connection.react).toHaveBeenCalledWith("!project-x:workspace.example", "$1", "👍"));
+    await waitFor(() => expect(within(messageRow("what's our refund policy?")).getByTestId("room-reaction")).toHaveTextContent("👍 1"));
+
+    // The reaction follows the message into its thread view.
+    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
+    expect(within(messageRow("what's our refund policy?")).getByTestId("room-reaction")).toHaveTextContent("👍 1");
+
+    // Back in the conversation, the chip takes the reaction back.
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    fireEvent.click(within(messageRow("what's our refund policy?")).getByTestId("room-reaction"));
+    await waitFor(() => expect(fake.connection.unreact).toHaveBeenCalledWith("!project-x:workspace.example", "$1", "👍"));
+    await waitFor(() => expect(within(messageRow("what's our refund policy?")).queryByTestId("room-reaction")).toBeNull());
+  });
+
+  it("a thread renders in the conversation as a preview and in the thread view as replies; posting into it works", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...THREADED_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    // In the conversation: the thread's existence, its count, and its
+    // latest word — attributed to whose it IS (the id grammar, not a name).
+    const preview = within(messageRow("what's our refund policy?")).getByTestId("room-thread-preview");
+    expect(preview).toHaveTextContent("carol's duo");
+    expect(preview).toHaveTextContent("np, 30 days");
+    expect(preview).toHaveTextContent("1 reply");
+    expect(screen.getByTestId("open-thread")).toHaveAttribute("href", "#thread/!project-x%3Aworkspace.example/%241");
+    // The reply itself is not a row of the main flow — it lives behind the preview.
+    expect(screen.queryByText("np, 30 days")).toBeNull();
+
+    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
+    // The thread view: the root, and the reply — a duo's, labelled structurally (#60's rule).
+    expect(screen.getByTestId("room-duo-message-attribution")).toHaveTextContent("carol's duo");
+    expect(screen.getByText("np, 30 days")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Reply in thread"), { target: { value: "thanks!" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(fake.connection.replyInThread).toHaveBeenCalledWith("!project-x:workspace.example", "$1", "thanks!"));
+    await waitFor(() => expect(screen.getByText("thanks!")).toBeInTheDocument());
+
+    // Back in the conversation, the preview carries the new latest word and count.
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    const updated = within(messageRow("what's our refund policy?")).getByTestId("room-thread-preview");
+    await waitFor(() => expect(updated).toHaveTextContent("2 replies"));
+    expect(updated).toHaveTextContent("thanks!");
+  });
+});
+
+describe("#64 AC4 — read state is maintained", () => {
+  it("opening a thread directly receipts the room — the read position holds on the thread route too", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...THREADED_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    // The member lands on the list — no room was opened — and jumps
+    // straight into a thread by its address.
+    await screen.findByTestId("conversations-list");
+    expect(fake.connection.markRead).not.toHaveBeenCalled();
+
+    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
+    await waitFor(() => expect(fake.connection.markRead).toHaveBeenCalledWith("!project-x:workspace.example"));
   });
 });
