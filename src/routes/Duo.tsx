@@ -182,7 +182,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
         ) : openGroup ? (
           <div className="flex flex-col gap-4">
             <button
-              className="self-start rounded-[var(--r-sm)] px-2 py-1 type-provenance uppercase text-[var(--muted)]"
+              className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
               data-testid="back-to-conversations"
               onClick={() => setOpen(null)}
             >
@@ -204,7 +204,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
           <nav aria-label="Conversations" className="flex flex-col gap-2" data-testid="conversation-list">
             {groups.map((group) => (
               <button
-                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 text-left type-body text-[var(--text)]"
+                className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 text-left type-body text-[var(--text)]"
                 data-testid="conversation-entry"
                 key={group.key ?? "__general__"}
                 onClick={() => setOpen({ key: group.key })}
@@ -220,7 +220,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
             at the end of history (a short page means nothing older exists). */}
         {feed.hasNextPage ? (
           <button
-            className="mx-auto mt-4 block rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-provenance text-[var(--muted)] disabled:opacity-50"
+            className="mx-auto mt-4 inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-50"
             data-testid="load-older"
             disabled={feed.isFetchingNextPage}
             onClick={() => void feed.fetchNextPage()}

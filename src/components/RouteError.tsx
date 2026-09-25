@@ -49,7 +49,7 @@ export function RouteError({ api, error, onRetry }: { api: DuoApiConfig; error: 
           </p>
         )}
         <button
-          className="self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1"
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
           data-testid="route-error-retry"
           onClick={onRetry}
         >

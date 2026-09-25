@@ -173,7 +173,9 @@ export function Ask() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col gap-4 p-6" data-testid="ask">
+    // #38: dvh for the same reason as the shell — this page is asked at
+    // from phones (a room participant's one surface).
+    <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-4 p-6" data-testid="ask">
       <header className="flex flex-col gap-1">
         <h1 className="type-heading">Ask the duo</h1>
         <p className="type-provenance text-[var(--muted)]">
@@ -184,7 +186,7 @@ export function Ask() {
       <form className="flex flex-col gap-2" onSubmit={onSubmit}>
         <textarea
           data-testid="ask-question"
-          className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-[var(--text)]"
+          className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 py-2 text-[var(--text)]"
           rows={3}
           placeholder="What do you want to ask?"
           value={question}
@@ -193,7 +195,7 @@ export function Ask() {
         <button
           type="submit"
           data-testid="ask-submit"
-          className="self-end rounded-[var(--r-sm)] bg-[var(--accent)] px-4 py-1 text-[var(--bg)] disabled:opacity-50"
+          className="inline-flex min-h-11 items-center justify-center self-end rounded-[var(--r-sm)] bg-[var(--accent)] px-4 text-[var(--bg)] disabled:opacity-50"
           disabled={pending || question.trim() === ""}
         >
           {pending ? "Asking…" : "Ask"}

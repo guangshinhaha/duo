@@ -157,7 +157,7 @@ export function Review({ api }: { api: DuoApiConfig }) {
             State
             <select
               aria-label="State"
-              className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+              className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
               value={stateFilter}
               onChange={(e) => setStateFilter(e.target.value as StateFilter)}
             >
@@ -171,7 +171,7 @@ export function Review({ api }: { api: DuoApiConfig }) {
             Channel
             <select
               aria-label="Channel"
-              className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+              className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
               value={channelFilter}
               onChange={(e) => setChannelFilter(e.target.value)}
             >
@@ -187,7 +187,7 @@ export function Review({ api }: { api: DuoApiConfig }) {
             Asker
             <select
               aria-label="Asker"
-              className="rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+              className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
               value={askerFilter}
               onChange={(e) => setAskerFilter(e.target.value)}
             >
@@ -204,7 +204,11 @@ export function Review({ api }: { api: DuoApiConfig }) {
               <span className="text-[var(--faint)]" data-testid="filter-status">
                 Filtered — {hidden} hidden
               </span>
-              <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-2 py-1" data-testid="filter-clear" onClick={clearFilters}>
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2"
+                data-testid="filter-clear"
+                onClick={clearFilters}
+              >
                 Clear
               </button>
             </span>

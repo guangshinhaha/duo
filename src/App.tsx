@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Menu, X } from "lucide-react";
 import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
@@ -22,6 +23,7 @@ import { Audit } from "./routes/Audit.js";
 import { Mirror } from "./routes/Mirror.js";
 import { Knowledge } from "./routes/Knowledge.js";
 import { SearchOverlay } from "./components/SearchOverlay.js";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./components/primitives/Dialog.js";
 
 // §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
 // is stretched to match maxAge — the 5-minute default would garbage-collect
@@ -123,20 +125,25 @@ function NavLink({
   active,
   href,
   count,
+  onClick,
   children,
 }: {
   active: boolean;
   href: string;
   /** #22: a live count, shown only when non-zero — absent for entries that carry none. */
   count?: number;
+  /** #38: the folded navigation passes this so following a link also
+   * dismisses it — an overlay must never outstay the route it chose. */
+  onClick?: () => void;
   children: ReactNode;
 }) {
   return (
     <a
-      className={`flex items-center gap-2 rounded-[var(--r-sm)] px-2 py-1 type-body ${
+      className={`flex min-h-11 items-center gap-2 rounded-[var(--r-sm)] px-2 type-body ${
         active ? "bg-[var(--surface)]" : "text-[var(--muted)]"
       }`}
       href={href}
+      onClick={onClick}
     >
       {children}
       {count !== undefined && count > 0 && (
@@ -160,7 +167,7 @@ function NavLink({
  * exists — and its cleanup clears the dock on unpair, so a stale count
  * never outlives its pairing.
  */
-function ReviewLink({ api, active }: { api: DuoApiConfig; active: boolean }) {
+function ReviewLink({ api, active, onNavigate }: { api: DuoApiConfig; active: boolean; onNavigate?: () => void }) {
   const { data } = usePendingDrafts(api);
   const count = data?.length ?? 0;
   useEffect(() => {
@@ -168,9 +175,111 @@ function ReviewLink({ api, active }: { api: DuoApiConfig; active: boolean }) {
     return () => void setDockBadgeCount(0);
   }, [count]);
   return (
-    <NavLink active={active} href="#review" count={count}>
+    <NavLink active={active} href="#review" count={count} onClick={onNavigate}>
       Review
     </NavLink>
+  );
+}
+
+/**
+ * #38: the phone's notification surrogate (AR-15 — no push can reach a
+ * browser tab over Tailscale), so Review's count is read without opening
+ * anything. Same query the Review link observes; the badge is the point,
+ * not a second source of truth.
+ */
+function TopBarCount({ api }: { api: DuoApiConfig }) {
+  const { data } = usePendingDrafts(api);
+  const count = data?.length ?? 0;
+  if (count === 0) {
+    return null;
+  }
+  return (
+    <span data-testid="topbar-count" className="rounded-full bg-[var(--accent)] px-2 type-identifier text-[var(--bg)]">
+      {count}
+    </span>
+  );
+}
+
+/**
+ * #38: the folded navigation — §1.5's "phone-width folds the same map, it
+ * does not replace it". No tab bar, no second product: the same surfaces
+ * nav, arranged for the width, with §3.1's one mobile-only rule applied —
+ * Trust and Audit, the rare globals, share one "More" section instead of
+ * two top-level entries. The dialog primitive (#34) supplies the focus
+ * trap, Escape, and the scrim; every entry is still a real anchor, and
+ * following one dismisses the overlay on the way through.
+ */
+function MobileNav({
+  api,
+  route,
+  open,
+  onOpenChange,
+  onDisconnect,
+}: {
+  api: DuoApiConfig;
+  route: Route;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDisconnect: () => void;
+}) {
+  const close = () => onOpenChange(false);
+  // The same actives the sidebar computes — one map, folded differently.
+  const onReview = route === "review" || typeof route === "object";
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm" data-testid="mobile-nav">
+        <div className="flex items-center justify-between gap-2">
+          <DialogTitle className="type-heading">Duo</DialogTitle>
+          {/* The phone's dismissal: Escape is a keyboard's gesture, and a
+              scrim-tap is an invisible one — a labelled control is the
+              honest way out. */}
+          <button
+            aria-label="Close navigation"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2"
+            onClick={close}
+          >
+            <X aria-label="Close navigation" size={20} />
+          </button>
+        </div>
+        <DialogDescription className="sr-only">The surfaces, folded for this width.</DialogDescription>
+        <nav aria-label="Surfaces" className="flex flex-col gap-1">
+          <ReviewLink api={api} active={onReview} onNavigate={close} />
+          <NavLink active={route === "corrections"} href="#corrections" onClick={close}>
+            Corrections
+          </NavLink>
+          <NavLink active={route === "duo"} href="#duo" onClick={close}>
+            Duo
+          </NavLink>
+          <NavLink active={route === "mirror"} href="#mirror" onClick={close}>
+            Mirror
+          </NavLink>
+          <NavLink active={route === "knowledge"} href="#knowledge" onClick={close}>
+            Knowledge
+          </NavLink>
+          <section className="mt-2 flex flex-col gap-1">
+            <div className="px-2 type-provenance uppercase text-[var(--faint)]">More</div>
+            <NavLink active={route === "trust"} href="#trust" onClick={close}>
+              Trust
+            </NavLink>
+            <NavLink active={route === "audit"} href="#audit" onClick={close}>
+              Audit
+            </NavLink>
+          </section>
+          <NavLink active={route === "settings"} href="#settings" onClick={close}>
+            Settings
+          </NavLink>
+          <button
+            className="mt-2 inline-flex min-h-11 items-center border-t border-[var(--edge)] px-2 pt-3 text-left type-provenance text-[var(--faint)]"
+            onClick={() => {
+              close();
+              onDisconnect();
+            }}
+          >
+            Disconnect
+          </button>
+        </nav>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -210,6 +319,10 @@ function AppShell() {
   // renders above whatever surface is on screen, so opening it costs
   // nothing that was there, and closing returns to exactly it.
   const [searchOpen, setSearchOpen] = useState(false);
+  // #38: the folded navigation's open state. Below the desktop width
+  // there is no sidebar to be in — the surfaces live behind this one
+  // control until called for.
+  const [navOpen, setNavOpen] = useState(false);
   // #39: the polite channel for draft arrivals — text set by the
   // draft-ready push below, self-cleared so each arrival announces.
   const [arrivalNotice, setArrivalNotice] = useState("");
@@ -301,8 +414,28 @@ function AppShell() {
 
   return (
     <SyncStatusProvider>
-      <div className="flex h-screen bg-[var(--bg)] text-[var(--text)]">
-        <nav aria-label="Surfaces" className="flex w-56 flex-col gap-1 border-r border-[var(--edge)] p-3">
+      {/* #38: a column on a phone, a row from the desktop breakpoint up —
+          the same shell folding, not a second one. dvh, not vh: mobile
+          Safari's collapsing URL bar would otherwise bury the composer. */}
+      <div className="flex h-dvh flex-col bg-[var(--bg)] text-[var(--text)] md:flex-row">
+        {/* #38: the narrow-width top bar — the sidebar's replacement is a
+            bar and one control, not a shrunken column (§1.5: no tab bar,
+            no second product). Gone entirely at the desktop width. */}
+        <header className="flex items-center justify-between gap-2 border-b border-[var(--edge)] p-3 md:hidden" data-testid="mobile-topbar">
+          <span className="px-1 type-provenance uppercase text-[var(--faint)]">Duo</span>
+          <TopBarCount api={api} />
+          <button
+            aria-label="Open navigation"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2"
+            onClick={() => setNavOpen(true)}
+          >
+            {/* Self-labelled (the #34 icon law): an icon that speaks alone
+                says what it is; the button's name says what it does. */}
+            <Menu aria-label="Open navigation" size={20} />
+          </button>
+        </header>
+        <MobileNav api={api} route={route} open={navOpen} onOpenChange={setNavOpen} onDisconnect={() => setApi(null)} />
+        <nav aria-label="Surfaces" className="hidden w-56 flex-col gap-1 border-r border-[var(--edge)] p-3 md:flex">
           <div className="mb-2 px-2 type-provenance uppercase text-[var(--faint)]">Duo</div>
           {/* A draft page belongs to the review loop — Review stays the lit
               entry while one is open, so the way back is always named. */}
@@ -333,11 +466,14 @@ function AppShell() {
           <NavLink active={route === "settings"} href="#settings">
             Settings
           </NavLink>
-          <button className="mt-auto px-2 py-1 text-left type-provenance text-[var(--faint)]" onClick={() => setApi(null)}>
+          <button
+            className="mt-auto inline-flex min-h-11 items-center px-2 text-left type-provenance text-[var(--faint)]"
+            onClick={() => setApi(null)}
+          >
             Disconnect
           </button>
         </nav>
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* §3.3's bar rides above every surface — it is the one state that
               is true of the whole app, not of whichever route is mounted. */}
           <OfflineBar />

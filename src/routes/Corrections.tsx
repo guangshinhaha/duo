@@ -44,14 +44,14 @@ function CandidateCard({ api, candidate }: { api: DuoApiConfig; candidate: Corre
         </DuoMessage>
         <div className="flex gap-2">
           <button
-            className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
+            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
             disabled={decide.isPending || !reachable}
             onClick={() => decide.mutate({ candidateId: candidate.id, action: "approve" })}
           >
             Approve
           </button>
           <button
-            className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)] disabled:opacity-40"
+            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)] disabled:opacity-40"
             disabled={decide.isPending || !reachable}
             onClick={() => decide.mutate({ candidateId: candidate.id, action: "reject" })}
           >

@@ -169,16 +169,21 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
                 Queued as a standing-order candidate.
               </p>
             ) : (
-              <div className="flex gap-2">
+              // AR-18: answering an escalation is free text that authors a
+              // standing-order — the one affordance this is. Rule writing
+              // stays where the files are: below the desktop width the
+              // affordance is simply not offered, and a phone reads the
+              // escalation, defers to the Mac, or works the queues.
+              <div className="hidden gap-2 md:flex">
                 <input
                   aria-label="Answer it yourself — becomes a standing-order candidate"
-                  className="flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+                  className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
                   placeholder="Answer it yourself — becomes a standing-order candidate"
                   value={answerText}
                   onChange={(e) => setAnswerText(e.target.value)}
                 />
                 <button
-                  className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
+                  className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
                   disabled={!answerText.trim() || answerEscalation.isPending || !reachable}
                   onClick={() => answerEscalation.mutate({ draftId: draft.id, answer: answerText.trim() })}
                 >
@@ -207,7 +212,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
                   textarea that hides what the correction loop feeds on. */}
               <EditDiff original={draft.draftText ?? ""} edited={editedText} />
               <textarea
-                className="w-full rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] p-2 text-[var(--text)]"
+                className="min-h-11 w-full rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] p-2 text-[var(--text)]"
                 value={editedText}
                 onChange={(e) => setEditedText(e.target.value)}
                 onKeyDown={(e) => {
@@ -243,7 +248,10 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
           // that carries the same warning.
           <div className="flex items-center gap-2" data-testid="ignore-window">
             <span className="type-provenance text-[var(--muted)]">{selfAsked ? "Ignoring — not final yet." : "Ignoring — not sent yet."}</span>
-            <button className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={undoIgnore}>
+            <button
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
+              onClick={undoIgnore}
+            >
               Undo
             </button>
           </div>
@@ -252,7 +260,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
           {editing ? (
             <>
               <button
-                className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
                 disabled={!editedText.trim() || recordOutcome.isPending || !reachable}
                 onClick={() =>
                   editChanged
@@ -267,7 +275,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
                 {editChanged ? (selfAsked ? "Keep edited" : "Send edited") : selfAsked ? "Keep" : "Send"}
               </button>
               <button
-                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1"
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
                 onClick={() => {
                   // Discards the edit, not just the editing view — without
                   // resetting editedText, the abandoned text would silently
@@ -282,24 +290,28 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
           ) : (
             <>
               <button
-                className="rounded-[var(--r-sm)] bg-[var(--accent)] px-3 py-1 text-[var(--bg)] disabled:opacity-40"
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
                 disabled={recordOutcome.isPending || !reachable}
                 onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })}
               >
                 {selfAsked ? "Keep" : "Send"}
               </button>
-              <button ref={editButtonRef} className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1" onClick={() => setEditing(true)}>
+              <button
+                ref={editButtonRef}
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
+                onClick={() => setEditing(true)}
+              >
                 Edit
               </button>
               <button
-                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)] disabled:opacity-40"
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)] disabled:opacity-40"
                 disabled={recordOutcome.isPending || !reachable}
                 onClick={ignoreWithWindow}
               >
                 Ignore
               </button>
               <button
-                className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 text-[var(--muted)]"
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
                 data-testid="copy-draft"
                 onClick={() => void copyDraft()}
               >
