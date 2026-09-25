@@ -20,6 +20,7 @@ import { Draft } from "./routes/Draft.js";
 import { Corrections } from "./routes/Corrections.js";
 import { Conversations } from "./routes/Conversations.js";
 import { Room } from "./routes/Room.js";
+import { ThreadView } from "./routes/Thread.js";
 import { Duo } from "./routes/Duo.js";
 import { Trust } from "./routes/Trust.js";
 import { Audit } from "./routes/Audit.js";
@@ -79,7 +80,8 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * app: Review is the thing the app exists to open (client-design.md §1.5).
  * #62 adds the member's half: `#conversations` (the default once a
  * workspace session exists — the member's space) and `#room/:id`, one
- * conversation's own address. The parameterized entries are objects so no
+ * conversation's own address. #64 adds `#thread/:room/:root`, a thread's
+ * own address within it. The parameterized entries are objects so no
  * string compare can ever confuse them with a named route.
  */
 type Route =
@@ -93,7 +95,8 @@ type Route =
   | "mirror"
   | "knowledge"
   | { draft: string }
-  | { room: string };
+  | { room: string }
+  | { thread: { roomId: string; rootEventId: string } };
 
 function routeFromHash(hash: string, fallback: Route = "review"): Route {
   if (hash.startsWith("#draft/")) {
@@ -104,6 +107,20 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
       id = ""; // a malformed escape is no id at all — the fallback is the default
     }
     return id ? { draft: id } : fallback;
+  }
+  if (hash.startsWith("#thread/")) {
+    // Both halves are encoded whole, so the first `/` is the grammar's own
+    // separator — anything after it belongs to the root event's id.
+    const parts = hash.slice("#thread/".length).split("/");
+    let roomId = "";
+    let rootEventId = "";
+    try {
+      roomId = decodeURIComponent(parts[0] ?? "");
+      rootEventId = decodeURIComponent(parts[1] ?? "");
+    } catch {
+      roomId = ""; // a malformed escape is no id at all
+    }
+    return roomId && rootEventId ? { thread: { roomId, rootEventId } } : "conversations";
   }
   if (hash.startsWith("#room/")) {
     let id = "";
@@ -307,7 +324,7 @@ function MobileNav({
           {api && <ReviewLink api={api} active={onReview} onNavigate={close} />}
           {session && (
             <NavLink
-              active={route === "conversations" || (typeof route === "object" && "room" in route)}
+              active={route === "conversations" || (typeof route === "object" && ("room" in route || "thread" in route))}
               href="#conversations"
               onClick={close}
             >
@@ -376,6 +393,11 @@ function routeSurface(route: Route, shell: SurfaceContext) {
   if (typeof route === "object") {
     if ("room" in route) {
       return <Room connection={shell.connection} roomId={route.room} />;
+    }
+    if ("thread" in route) {
+      return (
+        <ThreadView connection={shell.connection} roomId={route.thread.roomId} rootEventId={route.thread.rootEventId} />
+      );
     }
     return shell.api ? <Draft api={shell.api} draftId={route.draft} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
   }
@@ -675,7 +697,7 @@ function AppShell() {
               read. */}
           {session && (
             <NavLink
-              active={route === "conversations" || (typeof route === "object" && "room" in route)}
+              active={route === "conversations" || (typeof route === "object" && ("room" in route || "thread" in route))}
               href="#conversations"
             >
               Conversations

@@ -295,6 +295,18 @@ the join rule, mute from the account's push rules) is composed homeserver-side; 
 read position is account state, so the unread badge clears on every device, and no read or mute
 fact is ever stored locally.
 
+#64 adds the message verbs on the same footing: edit, delete, react, unreact, and reply-in-thread
+are homeserver operations (a replacement, a redaction, an annotation, a thread relation), and the
+timeline projection folds their outcomes the way every reader's homeserver would — a same-sender
+replacement amends the base at the base's place and marks it edited (a foreign replacement is a
+claim, not a change, and changes nothing), a redaction keeps the row and strikes the words,
+reactions aggregate under their key with the member's own marked, and a thread reply carries its
+root's id out of the main flow, leaving the root a summary. Threads are addressable
+(`#thread/<room>/<root>`) and read like the room — the receipt is the room's. The one deliberate
+local half is the optimistic send: the sender's words render immediately, marked as on their way,
+in the query cache alone — the subscription's refetch lands the homeserver's record in place of
+the copy, and nothing else ever renders it.
+
 ## 3.3 Offline
 
 The query cache persists to storage and rehydrates at launch. Two connections fail for

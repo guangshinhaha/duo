@@ -188,6 +188,20 @@ muting silences without leaving. Reading a conversation is the quiet fourth:
 opening it receipts the latest event, and the unread badge clears
 everywhere the member is signed in.
 
+### edit / delete / react / reply in thread
+
+The message verbs, each an operation on the room the homeserver holds — the
+surface adds no behaviour, it moves the server's own state and renders the
+next answer. An edit replaces the words where they stood and marks them
+"(edited)"; a delete asks first, then strikes — "Message deleted" keeps the
+row's place, and the words don't come back. A reaction is one emoji from a
+fixed set, aggregated under its message as a chip the member takes back by
+tapping again. A reply in thread belongs to its thread: the conversation
+carries the thread as a preview — whose it was (by the id grammar, like any
+sender), the latest word, the count — and the thread itself is its own
+address, one link away and back. A sent message renders for its sender at
+once, marked as on its way, until the homeserver's record replaces it.
+
 ## The daemon-owned strings — contract, not suggestions
 
 These arrive fixed from the owner's daemon and render **verbatim**,

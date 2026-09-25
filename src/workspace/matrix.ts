@@ -1,11 +1,13 @@
 import {
   ClientEvent,
   createClient,
+  EventType,
   MatrixError,
   MsgType,
   NotificationCountType,
   PushRuleKind,
   ReceiptType,
+  RelationType,
   RoomEvent,
   SyncState,
   type MatrixClient,
@@ -76,11 +78,30 @@ export interface RoomSummary {
   readonly muted: boolean;
 }
 
+/** One aggregated reaction under a message: the emoji, how many, and whether this member is among them. */
+export interface ReactionSummary {
+  readonly key: string;
+  readonly count: number;
+  /** True when this account's own reaction is one of the count — the chip's toggle half. */
+  readonly mine: boolean;
+}
+
+/** What a message with a thread knows about its replies: how many, and the latest word. */
+export interface ThreadSummary {
+  readonly replyCount: number;
+  readonly latestReply: { readonly senderId: string; readonly senderName: string; readonly body: string } | null;
+}
+
 /**
- * One message of a room timeline, projected: text messages only (`m.text` —
- * files, notices, and topic changes are not conversation turns), with the
- * sender's id carried structurally so the render can tell a duo from a
- * person by the user-id grammar rather than by anything the sender chose.
+ * One message of a room timeline, projected (#64): text messages only
+ * (`m.text` — files, notices, and topic changes are not conversation turns),
+ * with the sender's id carried structurally so the render can tell a duo
+ * from a person by the user-id grammar rather than by anything the sender
+ * chose. The verbs' outcomes arrive folded the way the homeserver folds
+ * them: an edit is the base's new words at the base's place (marked), a
+ * delete keeps the row and strikes the words, reactions aggregate under
+ * their key, and a thread's replies belong to the thread — the main flow
+ * carries the root's summary of them, not the replies themselves.
  */
 export interface RoomMessage {
   readonly eventId: string;
@@ -91,14 +112,45 @@ export interface RoomMessage {
   readonly body: string;
   /** The homeserver's epoch-ms timestamp — server time, not arrival time. */
   readonly originServerTs: number;
+  /** True when a same-sender replacement amended these words — the "(edited)" mark is the honesty. */
+  readonly edited: boolean;
+  /** True when the homeserver struck the event — the row keeps its place, the words go. */
+  readonly redacted: boolean;
+  /** The reactions under this message, aggregated by key. */
+  readonly reactions: readonly ReactionSummary[];
+  /** This message's thread, as the main flow reads it — null when it never got a reply. */
+  readonly thread: ThreadSummary | null;
+  /** The root this message answers inside a thread — null in the main flow. */
+  readonly threadRootEventId: string | null;
+  /** #64 AC1: this device's own optimistic copy — sent, not yet the homeserver's record. */
+  readonly pending?: boolean;
 }
 
-/** The held workspace connection: rooms, timelines, sends, and live arrivals. */
+/** The held workspace connection: rooms, timelines, the message verbs, and live arrivals. */
 export interface WorkspaceConnection {
+  /** Whose connection this is — the member's own user id, the way the surface tells its own messages (editable, deletable) from everyone else's. */
+  readonly userId: string;
   /** The member's conversations, ordered by latest activity — the server's answer, not this device's cache of it. */
   rooms(): Promise<readonly RoomSummary[]>;
   timeline(roomId: string): Promise<readonly RoomMessage[]>;
   send(roomId: string, body: string): Promise<void>;
+  /**
+   * Amends this member's own message (#64): a replacement event — the new
+   * words ride `m.new_content`, the relation points back at the base, and
+   * every reader's homeserver folds them into one message marked as edited.
+   */
+  edit(roomId: string, eventId: string, body: string): Promise<void>;
+  /** Strikes this member's own message: a redaction — the words go for everyone, the row keeps its place. */
+  delete(roomId: string, eventId: string): Promise<void>;
+  /** Adds this member's reaction under a message — an annotation keyed by the emoji. */
+  react(roomId: string, eventId: string, key: string): Promise<void>;
+  /** Takes this member's reaction back: redacts the member's own reaction event, never anyone else's. */
+  unreact(roomId: string, eventId: string, key: string): Promise<void>;
+  /**
+   * Answers inside a message's thread: the reply relates to the root, so
+   * the thread owns it — the main flow never shows it as a row.
+   */
+  replyInThread(roomId: string, rootEventId: string, body: string): Promise<void>;
   /**
    * Receipts the room's latest event — the member's read position, held by
    * the account, so every device reads the conversation as read (#63).
@@ -193,27 +245,162 @@ function firstPreparedSync(client: MatrixClient): Promise<void> {
   });
 }
 
+/**
+ * A relation as the sender wrote it — a claim until the projection checks
+ * it (a foreign "replacement" is not an edit, it's an assertion about
+ * someone else's words).
+ */
+interface Relation {
+  readonly rel_type?: string;
+  readonly event_id?: string;
+  readonly key?: string;
+}
+
+function relationOf(event: MatrixEvent): Relation | undefined {
+  return (event.getContent()?.["m.relates_to"] ?? undefined) as Relation | undefined;
+}
+
+/**
+ * The timeline projection #64's message surface reads: same-sender
+ * replacements fold into the base they amend (a stranger's edit is a claim,
+ * not a change), reactions aggregate under their target and key with the
+ * member's own marked, thread replies carry their root's id out of the main
+ * flow, and a redaction keeps the row while striking the words.
+ */
 function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[] {
   const room = client.getRoom(roomId);
   if (!room) {
     return [];
   }
-  return room
-    .getLiveTimeline()
-    .getEvents()
-    .filter((event) => event.getType() === "m.room.message" && event.getContent()?.msgtype === MsgType.Text)
-    .map((event) => {
-      const senderId = event.getSender() ?? "";
-      const member = room.getMember(senderId);
-      return {
-        eventId: event.getId() ?? "",
-        roomId: room.roomId,
+  const events = room.getLiveTimeline().getEvents();
+  const nameOf = (senderId: string): string => room.getMember(senderId)?.name || localpartOf(senderId);
+
+  // Pass one — the bases: every text message in timeline order, with
+  // same-sender replacements folded into the base they amend.
+  interface Base {
+    senderId: string;
+    senderName: string;
+    body: string;
+    ts: number;
+    edited: boolean;
+    redacted: boolean;
+    threadRootEventId: string | null;
+  }
+  const bases = new Map<string, Base>();
+  for (const event of events) {
+    if (event.getType() !== EventType.RoomMessage) {
+      continue;
+    }
+    const senderId = event.getSender() ?? "";
+    const relation = relationOf(event);
+    if (event.isRedacted()) {
+      // Struck: the words are gone and the relation with them. A struck
+      // amendment is no amendment — and not a row either. Redaction is
+      // judged before the content filter because a redaction prunes the
+      // content (msgtype included) — a tombstone is a row by having been
+      // said, not by still saying anything.
+      if (relation?.rel_type === RelationType.Replace) {
+        continue;
+      }
+      bases.set(event.getId() ?? "", {
         senderId,
-        senderName: member?.name ?? localpartOf(senderId),
-        body: String(event.getContent()?.body ?? ""),
-        originServerTs: event.getTs(),
-      };
+        senderName: nameOf(senderId),
+        body: "",
+        ts: event.getTs(),
+        edited: false,
+        redacted: true,
+        threadRootEventId: null,
+      });
+      continue;
+    }
+    if (event.getContent()?.msgtype !== MsgType.Text) {
+      continue;
+    }
+    if (relation?.rel_type === RelationType.Replace) {
+      // A replacement is not a row: it rewrites the base it points at, in
+      // place — and only when the sender is the base's own author.
+      const targetId = relation.event_id;
+      const base = targetId !== undefined ? bases.get(targetId) : undefined;
+      const newBody = (event.getContent()?.["m.new_content"] as { body?: string } | undefined)?.body;
+      if (base && !base.redacted && targetId !== undefined && newBody !== undefined && senderId === base.senderId) {
+        bases.set(targetId, { ...base, body: String(newBody), edited: true });
+      }
+      continue;
+    }
+    bases.set(event.getId() ?? "", {
+      senderId,
+      senderName: nameOf(senderId),
+      body: String(event.getContent()?.body ?? ""),
+      ts: event.getTs(),
+      edited: false,
+      redacted: false,
+      threadRootEventId: relation?.rel_type === RelationType.Thread && relation.event_id !== undefined ? relation.event_id : null,
     });
+  }
+
+  // Pass two — reactions: annotations aggregate under their target and key.
+  const reactions = new Map<string, Map<string, { count: number; mine: boolean }>>();
+  for (const event of events) {
+    if (event.getType() !== EventType.Reaction || event.isRedacted()) {
+      continue;
+    }
+    const relation = relationOf(event);
+    if (relation?.rel_type !== RelationType.Annotation || relation.event_id === undefined || relation.key === undefined) {
+      continue;
+    }
+    const under = reactions.get(relation.event_id) ?? new Map<string, { count: number; mine: boolean }>();
+    const tally = under.get(relation.key) ?? { count: 0, mine: false };
+    under.set(relation.key, { count: tally.count + 1, mine: tally.mine || event.getSender() === client.getUserId() });
+    reactions.set(relation.event_id, under);
+  }
+
+  // Pass three — threads: each reply counts toward its root and may carry
+  // the thread's latest word.
+  const threads = new Map<string, { replyCount: number; latest: { senderId: string; senderName: string; body: string; ts: number } | null }>();
+  for (const base of bases.values()) {
+    if (base.threadRootEventId === null) {
+      continue;
+    }
+    const bucket = threads.get(base.threadRootEventId) ?? { replyCount: 0, latest: null };
+    threads.set(base.threadRootEventId, {
+      replyCount: bucket.replyCount + 1,
+      latest:
+        bucket.latest === null || base.ts >= bucket.latest.ts
+          ? { senderId: base.senderId, senderName: base.senderName, body: base.body, ts: base.ts }
+          : bucket.latest,
+    });
+  }
+
+  // The rows, in timeline order: each base stands where it was said,
+  // carrying what the passes learned about it.
+  const messages: RoomMessage[] = [];
+  for (const [eventId, base] of bases) {
+    const thread = threads.get(eventId);
+    messages.push({
+      eventId,
+      roomId: room.roomId,
+      senderId: base.senderId,
+      senderName: base.senderName,
+      body: base.body,
+      originServerTs: base.ts,
+      edited: base.edited,
+      redacted: base.redacted,
+      reactions: base.redacted
+        ? []
+        : [...(reactions.get(eventId) ?? new Map())].map(([key, tally]) => ({ key, count: tally.count, mine: tally.mine })),
+      thread: thread
+        ? {
+            replyCount: thread.replyCount,
+            latestReply:
+              thread.latest === null
+                ? null
+                : { senderId: thread.latest.senderId, senderName: thread.latest.senderName, body: thread.latest.body },
+          }
+        : null,
+      threadRootEventId: base.threadRootEventId,
+    });
+  }
+  return messages;
 }
 
 /**
@@ -265,6 +452,13 @@ function projectRoom(room: MatrixRoom, selfId: string, direct: boolean, muted: b
 /** How many people a directory search answers with — enough to pick a colleague out, small enough to read. */
 const PEOPLE_SEARCH_LIMIT = 10;
 
+/**
+ * The event types a live arrival can change a timeline's projection under
+ * (#64): a message, a reaction, or a redaction. Everything else on the
+ * timeline stream leaves what the surface reads where it was.
+ */
+const LIVE_EVENT_TYPES = new Set<string>([EventType.RoomMessage, EventType.Reaction, EventType.RoomRedaction]);
+
 /** Hold the workspace connection for a stored session — resolves at the first completed sync, then serves rooms and timelines from it. */
 export async function connect(session: WorkspaceSession): Promise<WorkspaceConnection> {
   const client = createClient({
@@ -274,6 +468,7 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
   });
   await firstPreparedSync(client);
   return {
+    userId: session.userId,
     rooms: async () => {
       // The mute half of the projection lives in the account's push rules —
       // one read for the whole list, and a failed read means "unmuted we
@@ -293,6 +488,62 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
     timeline: async (roomId) => timelineOf(client, roomId),
     send: async (roomId, body) => {
       await client.sendMessage(roomId, { msgtype: MsgType.Text, body });
+    },
+    // The verbs are all homeserver operations on the room — the surface adds
+    // no behaviour, it asks the server to move its own state and renders the
+    // next answer. Each one maps to the Matrix event the spec prescribes.
+    edit: async (roomId, eventId, body) => {
+      await client.sendMessage(roomId, {
+        msgtype: MsgType.Text,
+        // The fallback body carries the edit convention's asterisk; the real
+        // words ride m.new_content for clients that fold replacements.
+        body: `* ${body}`,
+        "m.new_content": { msgtype: MsgType.Text, body },
+        "m.relates_to": { rel_type: RelationType.Replace, event_id: eventId },
+      });
+    },
+    delete: async (roomId, eventId) => {
+      await client.redactEvent(roomId, eventId);
+    },
+    react: async (roomId, eventId, key) => {
+      await client.sendEvent(roomId, EventType.Reaction, {
+        "m.relates_to": { rel_type: RelationType.Annotation, event_id: eventId, key },
+      });
+    },
+    unreact: async (roomId, eventId, key) => {
+      // Taking a reaction back is redacting MY reaction event — the one this
+      // account sent for this message under this key, never anyone else's.
+      const room = client.getRoom(roomId);
+      const events = room?.getLiveTimeline().getEvents() ?? [];
+      const mine = events.find((event) => {
+        if (event.getType() !== EventType.Reaction || event.isRedacted() || event.getSender() !== session.userId) {
+          return false;
+        }
+        const relation = relationOf(event);
+        return relation?.rel_type === RelationType.Annotation && relation.event_id === eventId && relation.key === key;
+      });
+      const mineId = mine?.getId();
+      if (mineId) {
+        await client.redactEvent(roomId, mineId);
+      }
+    },
+    replyInThread: async (roomId, rootEventId, body) => {
+      // The wire shape is the thread relation plus its fallback reply
+      // (clients that don't thread still see an in-reply-to, instead of
+      // losing the answer's context wholesale). The SDK's m.relates_to
+      // typing models a relation OR a reply, never both — the spec's thread
+      // fallback is exactly both — so the relation is cast to the reply arm
+      // of the type sendMessage takes, and the seam test pins the shape.
+      await client.sendMessage(roomId, {
+        msgtype: MsgType.Text,
+        body,
+        "m.relates_to": {
+          rel_type: RelationType.Thread,
+          event_id: rootEventId,
+          is_falling_back: true,
+          "m.in_reply_to": { event_id: rootEventId },
+        } as unknown as { "m.in_reply_to"?: { event_id: string } },
+      });
     },
     markRead: async (roomId) => {
       const events = client.getRoom(roomId)?.getLiveTimeline().getEvents() ?? [];
@@ -323,7 +574,7 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
     },
     subscribe: (handler) => {
       const listener = (event: MatrixEvent, room: MatrixRoom | undefined): void => {
-        if (room && event.getType() === "m.room.message") {
+        if (room && LIVE_EVENT_TYPES.has(event.getType())) {
           handler(room.roomId);
         }
       };
