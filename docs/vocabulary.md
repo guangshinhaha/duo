@@ -145,7 +145,9 @@ the duo.
 
 The owner releases a draft as the answer ("Send"; "Send edited" when the text
 changed). Sending is disabled offline, never queued — a send firing hours
-later against moved context is worse than no send.
+later against moved context is worse than no send. That is the draft rule
+(AR-15 in `client-design.md`); the member's own ordinary messages are the
+other object and do queue offline, delivering on reconnect (#61).
 
 ### keep
 

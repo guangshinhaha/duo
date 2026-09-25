@@ -111,6 +111,8 @@ export function Room({ connection, roomId }: { connection: WorkspaceConnection |
   };
 
   const [deleteTarget, setDeleteTarget] = useState<RoomMessage | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   if (!connection || timeline.isLoading) {
     return (
@@ -163,7 +165,10 @@ export function Room({ connection, roomId }: { connection: WorkspaceConnection |
                 connection={connection}
                 roomId={roomId}
                 refresh={refresh}
-                onDelete={setDeleteTarget}
+                onDelete={(message) => {
+                  setDeleteError(null);
+                  setDeleteTarget(message);
+                }}
               />
             ))
           )}
@@ -197,19 +202,39 @@ export function Room({ connection, roomId }: { connection: WorkspaceConnection |
               <button
                 className="inline-flex min-h-11 items-center rounded-[var(--r-sm)] bg-[var(--escalate)] px-3 text-[var(--bg)] type-body"
                 data-testid="delete-message-confirm"
+                disabled={deleteBusy}
                 onClick={() => {
                   const target = deleteTarget;
-                  setDeleteTarget(null);
+                  if (!target) {
+                    return;
+                  }
+                  setDeleteBusy(true);
+                  setDeleteError(null);
+                  // A delete the workspace refuses must not close the ask
+                  // behind it: the words still stand on the server, and the
+                  // member deserves to hear the refusal where they acted.
                   void connection
                     .delete(roomId, target.eventId)
-                    .then(() => undefined)
-                    .catch(() => undefined)
-                    .finally(refresh);
+                    .then(() => {
+                      setDeleteTarget(null);
+                    })
+                    .catch(() => {
+                      setDeleteError("The workspace didn't take that — try again.");
+                    })
+                    .finally(() => {
+                      setDeleteBusy(false);
+                      refresh();
+                    });
                 }}
               >
-                Delete
+                {deleteBusy ? "Deleting…" : "Delete"}
               </button>
             </div>
+            {deleteError && (
+              <p className="mt-3 type-body text-[var(--refused)]" data-testid="delete-message-error">
+                {deleteError}
+              </p>
+            )}
           </DialogContent>
         )}
       </Dialog>

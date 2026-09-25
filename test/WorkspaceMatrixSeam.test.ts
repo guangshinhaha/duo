@@ -713,6 +713,77 @@ describe("the timeline projection the message surface reads (#64)", () => {
     expect(connection.userId).toBe("@ana:workspace.example");
   });
 
+  it("a thread reply's fallback points at the latest reply known in the thread — the root only when nothing has answered yet", async () => {
+    // The spec's fallback rule (client-server API §Threads): with
+    // `is_falling_back`, `m.in_reply_to` names "the most recent message
+    // known to the client in the thread" — a client that doesn't thread
+    // renders the reply against the message it actually follows, and the
+    // relation proper still targets the ROOT (the thread's address, never
+    // its latest word).
+    const events = [
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "what's our refund policy?", ts: 1_000 }),
+      fakeEvent({ type: "m.room.message", sender: "@ana:workspace.example", msgtype: "m.text", body: "first answer", ts: 2_000, relatesTo: { rel_type: "m.thread", event_id: "$1000" } }),
+      fakeEvent({ type: "m.room.message", sender: "@duo-carol:workspace.example", msgtype: "m.text", body: "np, 30 days", ts: 2_500, relatesTo: { rel_type: "m.thread", event_id: "$1000" } }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.replyInThread("!project-x:workspace.example", "$1000", "third answer");
+    const content = vi.mocked(client.sendMessage).mock.lastCall?.[1] as Record<string, unknown>;
+    expect(content["m.relates_to"]).toMatchObject({
+      rel_type: "m.thread",
+      event_id: "$1000", // the relation is the root's — always
+      is_falling_back: true,
+      "m.in_reply_to": { event_id: "$2500" }, // the fallback is the latest known reply's
+    });
+  });
+
+  it("identical annotations from one sender count once — a duplicate 👍 is not a louder 👍", async () => {
+    // The spec's counting rule (client-server API §Event annotations):
+    // duplicate annotations of the same (rel_type, key) from one sender
+    // count once — servers SHOULD reject the duplicate, and a client that
+    // sees one anyway (a race, a federated rerun) must not let it inflate
+    // the count. Distinct senders still count distinctly.
+    const events = [
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "ship it", ts: 1_000 }),
+      fakeEvent({ type: "m.reaction", sender: "@ana:workspace.example", ts: 2_000, relatesTo: { rel_type: "m.annotation", event_id: "$1000", key: "👍" } }),
+      // The same member's 👍 again — a duplicate, not a second person.
+      fakeEvent({ type: "m.reaction", sender: "@ana:workspace.example", ts: 2_100, relatesTo: { rel_type: "m.annotation", event_id: "$1000", key: "👍" } }),
+      fakeEvent({ type: "m.reaction", sender: "@bose:workspace.example", ts: 2_200, relatesTo: { rel_type: "m.annotation", event_id: "$1000", key: "👍" } }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timeline("!project-x:workspace.example");
+    expect(messages[0]!.reactions).toEqual([{ key: "👍", count: 2, mine: true }]);
+  });
+
   it("live arrivals report reactions and redactions too, not just messages", async () => {
     const client = fakeClient();
     vi.mocked(createClient).mockReturnValue(client);

@@ -1,7 +1,7 @@
 # Digital Duo — Client Surface Design
 
-> The Mac app, the phone app, and the daemon behind both.
-> Last updated: 2026-09-19 · Extends `v1-tech-design.md`. Gating unknowns and adversarial
+> The Mac app, the phone app, and the daemon and the workspace behind them.
+> Last updated: 2026-09-25 · Extends `v1-tech-design.md`. Gating unknowns and adversarial
 > review continue that document's numbering.
 
 ---
@@ -21,7 +21,7 @@ restrict background LaunchAgents, and VPN-shaped software is a standard blocklis
 |---|---|
 | Daemon + Tailscale both permitted | Best case. Build as designed. |
 | Daemon permitted, Tailscale blocked | Mac app only over `localhost`. Phone waits for a sanctioned transport. The Mac app still closes the loop and is still worth shipping. |
-| Neither permitted | The client is a local web app the CLI opens in a browser — `v1-tech-design.md` 1.2's original "Mirror UI" line, no more. Mobile is dead until v2's hosting question is reopened. |
+| Neither permitted | The client is a local web app the CLI opens in a browser — `v1-tech-design.md` 1.2's original "Mirror UI" line, no more. Mobile's **duo** surface is dead until a sanctioned transport exists; the workspace surface needs only the org's homeserver (digital-duo #185), not the tailnet. |
 
 **Check this before any client code.** It is an MDM policy question, not a sprint.
 
@@ -41,17 +41,37 @@ anything.
 
 # Part 1 — The design
 
-## 1.1 Shape: one daemon, two clients, still no cloud
+## 1.1 Shape: two stores, one daemon, two clients
 
 `v1-tech-design.md` 1.1 committed to a local application: no hosting, no public endpoint, no
-inbound firewall rule, no data at rest on third-party infrastructure. **Nothing here changes
-that.** The phone does not get a copy of the duo; it gets a window onto the one running on the
-Mac.
+inbound firewall rule, no data at rest on third-party infrastructure. **That posture still holds
+— and it is now a claim about exactly one of the product's two stores** (#57; the platform
+decision,
+[`workspace-platform.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace-platform.md),
+#185).
+
+- **The corpus store** is everything 1.1 ever protected: records, imports and embeddings in
+  `data/duo.db`, the passphrase, the derived rules in `duo/rules/`, and every draft's evidence —
+  on the owner's machine, inside the daemon, and nowhere else. No hosting, no public endpoint, no
+  inbound rule, no data at rest on third-party infrastructure. The phone still does not get a
+  copy of the duo; it gets a window onto the one running on the Mac.
+- **The message store** is the org's Matrix homeserver: identity, conversations, messages, read
+  state and files — on org infrastructure **by design**, including what that means for who can
+  read them
+  ([`workspace/org-read.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace/org-read.md),
+  #191). Messages are records on the workspace server; the corpus never crosses to it.
+
+The line between the stores never moves: anything that would put the corpus, the passphrase,
+derived rules or draft evidence onto org infrastructure is a change to epic #184, not a config
+detail. And the client talks to both — the daemon over the tailnet, the workspace by member
+sign-in (#62).
 
 ```
 ┌──────────────────── owner's machine ────────────────────┐
 │                                                          │
-│  duo/  ·  data/duo.db        ← unchanged                │
+│  duo/  ·  data/duo.db          ← the corpus store       │
+│    records · embeddings · derived rules                 │
+│    passphrase · draft evidence — none of it leaves      │
 │                                                          │
 │  duo serve  ────────────────────────────┐               │
 │    holds the passphrase in memory       │               │
@@ -63,11 +83,44 @@ Mac.
                     │                                       │
               Mac app (Tauri)                      Phone (Tauri / web)
               full surface                         read · review · approve
+                    │                                       │
+                    └──────────── member sign-in (#62) ─────┘
+                                          │
+                                          ▼
+        ┌──────────── org homeserver — Matrix (#185) ────────────┐
+        │  the message store: identity · conversations ·         │
+        │  messages · read state · files — org infrastructure,   │
+        │  by design (#191). The daemon dials out to it;         │
+        │  it never dials in.                                    │
+        └────────────────────────────────────────────────────────┘
 ```
 
 The reasoning is the same one that picked Socket Mode for Slack: an **outbound-only or
 private-network** transport means there is no public URL to expose, no inbound rule to request,
-and no security review on the critical path.
+and no security review on the critical path. One layer up, it is why the second store costs the
+first nothing: the daemon **dials out** to the homeserver and holds that connection; the owner's
+machine still opens no inbound port, and `duo serve` still refuses `0.0.0.0`.
+
+The trust presentation states that asymmetry, it does not average it. The member-facing rule,
+written to be quoted
+([`workspace/org-read.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace/org-read.md)
+§6, #191):
+
+> **Treat everything you send as a government record. Nothing you import, ask, or draft reaches
+> the server — even when your duo answers from your documents, only the words sent become
+> workspace data.**
+
+A member's lever is what they send, never what they import. A sent answer carries its text and
+nothing else — provenance, sources and grounding chunks stay local beside the corpus, always
+(org-read §5, #191); the full provenance rail renders for the owner, who is the one whose
+documents it indexes.
+
+**One exception, per duo, by choice.** A duo's daemon may run on org hardware
+([`workspace/org-mode-deployment.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace/org-mode-deployment.md),
+#161) — a deployment mode an owner or org opts into, never a default. Personal hardware is the
+default; a moved daemon makes availability a deployment property, not a platform guarantee
+([`workspace/asleep-duo.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace/asleep-duo.md)
+§8, #188).
 
 ## 1.2 Stack
 
@@ -77,17 +130,26 @@ and no security review on the critical path.
 | UI | React + Tailwind + **shadcn/ui** | The layer every open-source Slack clone is built from, without inheriting their backend. |
 | Daemon | Node + Fastify, in this repo | Same process model as the CLI; imports the existing modules directly rather than shelling out. |
 | Transport | HTTP + WebSocket over Tailscale | No public URL, no inbound firewall rule. |
+| Messaging | **matrix-js-sdk** | The workspace layer (digital-duo #185): sync, rooms, timelines, threads, offline queueing, E2EE and push as library capability — a message layer without maintaining a message store. |
 | Auth | Per-device bearer token | Tailscale gives you a network boundary, not an identity. |
 | Server state | TanStack Query | Cache, refetch, and the offline story of 1.7 for free. |
 
 Hono is equally defensible in place of Fastify and lighter; the HTTP boundary means the choice
 does not lock anything in either way.
 
-**Do not fork a Slack clone.** The live candidates (OpenHive, sralk, the Convex-based ones) are
+**Do not fork a Slack clone — the verdict is about the corpus, and it decided the message layer
+too, one layer down.** The live candidates (OpenHive, sralk, the Convex-based ones) are
 human-to-human messaging products: workspaces, members, presence, WebRTC, backed by
 Supabase/Postgres/Redis/NATS. Adopting one means deleting most of it and then bolting a
-multi-tenant cloud backend onto a single-user encrypted local store — the exact posture 1.1
-exists to avoid. Take the component layer, not the product.
+multi-tenant cloud backend onto a single-user encrypted local store — the exact corpus posture
+1.1 exists to protect. The message layer took the same verdict one layer down
+([`workspace-platform.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace-platform.md),
+#185): **take the component layer, not the product** — `matrix-js-sdk` (Apache-2.0) for sync,
+rooms, timelines, threads, offline queueing and E2EE; Element Web evaluated and not adopted
+(AGPL-3.0-or-commercial, and its design system is the opposite of ours); no hand-written message
+bus. The client itself is the messaging product, by intent — the conversation list, the room,
+the composer are this repo's surface on that SDK. Do not cite this warning against the messaging
+work: it is the reason the messaging work looks like this, not a standing objection to it.
 
 ## 1.3 The API surface
 
@@ -188,9 +250,10 @@ sidebar becomes the conversation list with Review still on top and its count sti
 provenance rail becomes a drawer on the draft — zero clicks stays zero clicks, one swipe on a
 phone. No tab bar, no second product: a different arrangement of the same structure.
 
-The shipped shell — Review, Duo, Trust, Audit, Mirror — is this map's bridge-era cut: the
-conversation list has exactly one entry (your own duo), which is why it still reads as a viewer.
-The map above is where it grows when the workspace layer lands.
+The shipped shell — Review, Duo, Trust, Audit, Mirror — was this map's bridge-era cut: a
+conversation list with exactly one entry (your own duo), which is why it read as a viewer. The
+workspace layer has since landed its first slices — sign-in, conversations, a room (#108, #109)
+— and the map above is where the rest of it grows.
 
 ## 1.6 What "sleek" means here, concretely
 
@@ -211,18 +274,36 @@ A hard requirement stated as an adjective is not testable. Making it so:
 
 ## 1.7 Realtime, notifications, and being offline
 
-The WebSocket carries one thing: *a new draft is waiting*. Everything else is request/response,
-because nothing else in this product is time-critical.
+The daemon's WebSocket carries one thing: *a new draft is waiting*. Everything else on that side
+is request/response, because nothing else in this product is time-critical. The workspace
+connection is separate (#58) and brings its own sync, owned by `matrix-js-sdk` (#185).
 
 Notifications are honest about the architecture. On the Mac, the daemon is local and native
-notifications work. On the phone, a notification can only arrive while the tailnet connection is
-live — **true background push would need a relay with a public endpoint, which 1.1 forbids.** That
-is a real limitation, not an oversight, and it is the same forcing function `AR-10` already named
-for v2's hosting question.
+notifications work. On the phone, a daemon notification can only arrive while the tailnet
+connection is live — **true background push would need a relay with a public endpoint in front of
+the daemon, which 1.1 still forbids**: the corpus and the daemon that holds it get no relay and
+no inbound port. That is a real limitation, not an oversight. The workspace half is a separate
+question with a separate server — the org's homeserver, already operated to be reachable — and
+the duo adds nothing to its delivery path.
 
-So offline is a designed state, not an error: the last synced view stays readable, marked with an
-explicit timestamp, and every action is disabled rather than queued. A queued Send that fires
-hours later against stale context is worse than no Send at all.
+So offline is a designed state, not an error — **two rules for two objects, so nobody applies the
+wrong one to the wrong thing** (AR-15):
+
+- **Ordinary messages queue and deliver on reconnect** (#61). A member's own words — including a
+  question addressed to a duo — are held and delivered when the connection returns. The asker's
+  side of that rule is the duo being offline, and the asker is never misled
+  ([`workspace/asleep-duo.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace/asleep-duo.md)
+  §3, #188): asking stays allowed, the send-time echo says the duo is offline and when it was
+  last seen, the states `held → delivered → answered` stay visible (`delivered → passed to the
+  owner` if the duo escalates), and there is no spinner, no predicted time, no cached answer, no
+  fabricated answer. An answer arriving days late renders with both timestamps — when it was
+  asked and when it was answered.
+- **Drafts and duo actions are disabled, never queued** — Send, Edit, Ignore, a rule disposition,
+  anything irreversible. A queued Send that fires hours later against moved context is worse than
+  no Send at all.
+
+Either way the last synced view stays readable, marked with an explicit timestamp per connection
+(#58).
 
 ---
 
@@ -257,10 +338,17 @@ until it is dispositioned.**
 ### AR-15 · The phone is asleep when the Mac is — MEDIUM
 `AR-10` accepted "the duo is asleep when your laptop is" for v1, reasoning that if you were asleep
 you were not answering either. The thin client makes it sharper: close the lid mid-afternoon and
-the phone app is a spinner during exactly the hours you would use it.
-**→ Offline as a designed state (1.7): last-synced view, explicit timestamp, actions disabled
-rather than queued. Also the honest headline for the pilot: the phone is a review surface, not a
-pager.**
+the phone app is a spinner during exactly the hours you would use it. The workspace product also
+split the object this item was written about: it was written against a *draft* — an action firing
+hours later against moved context is genuinely bad — and must not be applied to ordinary
+messages, where queue-and-deliver-on-reconnect is simply correct (#61). Two rules for two
+objects.
+**→ Offline as a designed state (1.7): the member's own messages queue and deliver on reconnect,
+including questions to an offline duo — held, then delivered, then answered, with the asker told
+at send time and no spinner, no ETA, no fabricated answer
+([`workspace/asleep-duo.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace/asleep-duo.md),
+#188). Drafts and duo actions render disabled, never queued. Also the honest headline for the
+pilot: the phone is a review surface, not a pager.**
 
 ### AR-16 · Tailscale is blocked on the managed endpoint — HIGH
 The entire mobile half assumes a mesh VPN the MDM profile may simply forbid, and finding out after
@@ -309,6 +397,14 @@ of one and say so.**
 | 5 | Passphrase handling gains a serving mode that never reads `.passphrase` from disk |
 | 6 | Two new gating unknowns, **G3** (daemon + Tailscale on a managed Mac) and **G4** (installing your own build on your own phone) |
 
+**Amendment (2026-09-25, #193).** Rows 1 and 4 predate the workspace layer. The posture in row 1
+held for the corpus and the daemon; the product has since gained a second, org-hosted message
+store, and §1.1 above now describes both. Row 4's framing of AR-10 as "the forcing function for
+v2's hosting question" is superseded — AR-10 is now accepted and made honest rather than solved
+([`workspace/asleep-duo.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace/asleep-duo.md)
+§10, #188): a question to an offline duo is an ordinary message, and org-hosted daemons
+(digital-duo #161) are an owner's per-duo option, not the v2 answer.
+
 ---
 
 # Part 4 — Build order
@@ -330,3 +426,10 @@ working.
 
 C1–C6 are a complete, sleek Mac application that needs nobody's permission beyond G3. C7–C8 are
 the phone, and they are the half that can be blocked by someone else — which is why they are last.
+
+**Amendment (2026-09-25, #193).** The workspace layer landed beside this numbering, not outside
+the plan: #57's children against the platform decision
+([`workspace-platform.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace-platform.md),
+#185) — the client's seam, sign-in and conversations (#108, #109), the daemon's outbound
+connection in the core repo. The C-steps above remain the owner-surface and phone plan; the
+message layer's own work is tracked in #184's children.

@@ -744,10 +744,11 @@ describe("#64 AC1 — messages send and arrive", () => {
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    // The row renders from the click alone — nothing has arrived from
-    // anywhere yet. The cache's notification flushes on a microtask, so the
-    // lookup polls briefly; what it finds is still the optimistic copy,
-    // marker and all, because no arrival exists.
+    // Immediately — nothing has arrived from anywhere yet; the row is this
+    // device's own optimistic copy, marked as on its way. The waitFor only
+    // rides out the cache's microtask flush: no arrival is coming (deliver
+    // is the only arrival path, and it hasn't run), so the row can owe to
+    // the click alone.
     const optimistic = await waitFor(() => messageRow("thanks all"));
     expect(within(optimistic).getByTestId("room-message-pending")).toBeInTheDocument();
     expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "thanks all");
@@ -1068,5 +1069,114 @@ describe("#65 AC3 — a duo that may not answer says so", () => {
       return row!;
     });
     expect(declinedRow.textContent).toContain(declined);
+  });
+});
+
+describe("#64 — a refused verb says so, honestly (failed paths)", () => {
+  it("a send the workspace refuses takes the optimistic copy back, keeps the words, and says why", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    vi.mocked(fake.connection.send).mockRejectedValueOnce(new Error("offline"));
+
+    await renderApp();
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+
+    // The optimistic copy is gone — a refused send must not stand in the
+    // room as if it were said. (Scoped to the timeline: the composer's
+    // textarea keeps the words, which is the point below.)
+    await waitFor(() => expect(within(screen.getByTestId("room-timeline")).queryByText("thanks all")).toBeNull());
+    expect(screen.getByTestId("room-composer-error")).toHaveTextContent("Couldn't send — try again.");
+    // The words stay with their author, not lost to the refusal.
+    expect(screen.getByLabelText("Message project-x")).toHaveValue("thanks all");
+  });
+
+  it("an edit the workspace refuses leaves the words standing and says so", async () => {
+    seedSession();
+    const own = messageFor({ eventId: "$mine", senderId: SESSION.userId, senderName: "ana", body: "the policy doc says 30 days" });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE, own] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    vi.mocked(fake.connection.edit).mockRejectedValueOnce(new Error("refused"));
+
+    await renderApp();
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("the policy doc says 30 days")).getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Edit message"), { target: { value: "changed words" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // The refusal is said, and the server's next answer keeps the base's
+    // words — the edit never happened, and the row doesn't pretend it did.
+    await waitFor(() => expect(screen.getByTestId("room-message-error")).toHaveTextContent("The workspace didn't take that — try again."));
+    await waitFor(() => expect(screen.getByText("the policy doc says 30 days")).toBeInTheDocument());
+    expect(screen.queryByText("changed words")).toBeNull();
+  });
+
+  it("a delete the workspace refuses keeps the message, keeps the ask open, and says so", async () => {
+    seedSession();
+    const own = messageFor({ eventId: "$mine", senderId: SESSION.userId, senderName: "ana", body: "the policy doc says 30 days" });
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE, own] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    vi.mocked(fake.connection.delete).mockRejectedValueOnce(new Error("refused"));
+
+    await renderApp();
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("the policy doc says 30 days")).getByRole("button", { name: "Delete" }));
+    fireEvent.click(await screen.findByTestId("delete-message-confirm"));
+
+    // The confirm doesn't close behind a refused delete — the words still
+    // stand, and the ask stays with its answer.
+    await waitFor(() => expect(screen.getByTestId("delete-message-error")).toHaveTextContent("The workspace didn't take that — try again."));
+    expect(screen.getByTestId("delete-message-dialog")).toBeInTheDocument();
+    expect(screen.getByText("the policy doc says 30 days")).toBeInTheDocument();
+    expect(screen.queryByTestId("room-message-deleted")).toBeNull();
+  });
+
+  it("a reaction the workspace refuses says so and never shows the chip", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    vi.mocked(fake.connection.react).mockRejectedValueOnce(new Error("refused"));
+
+    await renderApp();
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "React" }));
+    fireEvent.click(within(await screen.findByTestId("reaction-picker")).getByRole("button", { name: "React 👍" }));
+
+    await waitFor(() => expect(screen.getByTestId("room-message-error")).toHaveTextContent("The workspace didn't take that — try again."));
+    expect(screen.queryByTestId("room-reaction")).toBeNull();
+  });
+
+  it("a thread reply the workspace refuses takes the optimistic copy back and says so", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...THREADED_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    vi.mocked(fake.connection.replyInThread).mockRejectedValueOnce(new Error("refused"));
+
+    await renderApp();
+    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    await screen.findByTestId("thread-timeline");
+
+    fireEvent.change(screen.getByLabelText("Reply in thread"), { target: { value: "thanks!" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+
+    // Scoped to the thread's rows — the composer's textarea keeps the
+    // words for the retry.
+    await waitFor(() => expect(within(screen.getByTestId("thread-timeline")).queryByText("thanks!")).toBeNull());
+    expect(screen.getByTestId("thread-composer-error")).toHaveTextContent("Couldn't send — try again.");
+    expect(screen.getByLabelText("Reply in thread")).toHaveValue("thanks!");
   });
 });
