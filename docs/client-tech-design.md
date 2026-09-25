@@ -350,6 +350,19 @@ draft the push names; a record that won't answer announces as the waiting draft 
 conservatively is. The surface adds no behaviour throughout — every standing is read or written
 through the seam, and the classifications read only what the daemon already serves.
 
+#66 adds the share on the same seam: `uploadFile` (bytes to the homeserver's media store, with
+progress), `sendFile` (the `m.file`/`m.image` message carrying name, declared type, declared
+size, and the `mxc://` reference — the wire shape core #190's association convention reads), and
+`mediaUrl` (the member's own authenticated translation of a reference, MSC3916). The timeline
+projection carries shares as conversation turns with their facts declared, folding a same-kind
+replacement's label while the reference stands. Sharing is not importing, structurally: no
+module in the share path imports the daemon's api, pinned by test the way the seam scan is.
+The client's share limits (8 MiB images, 16 MiB files, 3 per message) are its own door, named
+in their refusals — the duo's 32 KiB grounding cap is a different, smaller door the composer's
+hint describes, never a limit this app enforces. Attach-then-ask rides by construction: each
+attachment sends as its own message, in order, before the question — contiguous, same sender,
+same room, exactly what the backend associates.
+
 ## 3.3 Offline
 
 The query cache persists to storage and rehydrates at launch. Two connections fail for

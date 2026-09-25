@@ -237,6 +237,21 @@ escalation waits like a mention — because holding is not silencing; the
 per-conversation standings are what never apply to the duo's acts, since
 those belong to no conversation.
 
+### share
+
+Sending a file or an image as a message of its own — "Attach" in the
+conversation's composer, the member's own `m.file`/`m.image` message in the
+flow, rendered with its facts (name, size, type) and a download, an image
+inline where it can be previewed. The verb is never "upload" in visible
+strings (the upload is a step, not the act), and above all never "import":
+sharing reaches the people in the conversation and nothing else, while
+importing a document into a duo's corpus is the owner's separate,
+explicitly labelled act elsewhere. A share that immediately precedes the
+member's question makes it available to a duo in the room — text up to the
+duo's own reading cap (32 KiB, the duo's door, not this app's share
+limits), images honestly not readable yet — and the composer says so in
+those words at attach time.
+
 ### edit / delete / react / reply in thread
 
 The message verbs, each an operation on the room the homeserver holds — the

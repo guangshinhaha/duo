@@ -23,6 +23,7 @@ import {
   type MessageMention,
   type MessagePart,
 } from "./mentions.js";
+import { isImageType, type StagedShare } from "./sharing.js";
 
 /**
  * #62: the workspace seam — the one module this app has that speaks
@@ -112,9 +113,25 @@ export interface ThreadSummary {
 }
 
 /**
- * One message of a room timeline, projected (#64): text messages only
- * (`m.text` — files, notices, and topic changes are not conversation turns),
- * with the sender's id carried structurally so the render can tell a duo
+ * A file shared in a conversation (#66): what every `m.file`/`m.image`
+ * message carries on the wire — the name the sender gave it, the type they
+ * claimed, the size they declared, and the homeserver's own stable content
+ * reference (`mxc://…`, core #190's `WorkspaceFileReference`). The `image`
+ * flag is the message's own msgtype (`m.image` shares render inline;
+ * everything else is a file card) — never a guess from a filename.
+ */
+export interface SharedFile {
+  readonly name: string;
+  readonly mimeType: string;
+  readonly size: number;
+  readonly url: string;
+  readonly image: boolean;
+}
+
+/**
+ * One message of a room timeline, projected (#64): conversation turns —
+ * text (`m.text`), and shared files and images (#66: `m.file`/`m.image`)
+ * — with the sender's id carried structurally so the render can tell a duo
  * from a person by the user-id grammar rather than by anything the sender
  * chose. The verbs' outcomes arrive folded the way the homeserver folds
  * them: an edit is the base's new words at the base's place (marked), a
@@ -138,6 +155,8 @@ export interface RoomMessage {
    * edit, and words that moved render honestly as words.
    */
   readonly parts: readonly MessagePart[] | null;
+  /** The share this message IS, when it is one — null/absent for text. Sharing reaches people, never any corpus. */
+  readonly file?: SharedFile;
   /** The homeserver's epoch-ms timestamp — server time, not arrival time. */
   readonly originServerTs: number;
   /** True when a same-sender replacement amended these words — the "(edited)" mark is the honesty. */
@@ -189,6 +208,26 @@ export interface WorkspaceConnection {
    * that merely contains a name.
    */
   send(roomId: string, body: string, mentions?: readonly MessageMention[]): Promise<void>;
+  /**
+   * #66: uploads bytes to the homeserver's media store and answers the
+   * stable reference the file message will carry. The upload is the share's
+   * people half — it stores bytes for the room; nothing about it reaches any
+   * daemon. `onProgress` hears bytes moved, for a visible progress render.
+   */
+  uploadFile(file: StagedShare, onProgress?: (sent: number, total: number) => void): Promise<SharedFile>;
+  /**
+   * Sends the share itself: an `m.file`/`m.image` message carrying the
+   * name, declared type, declared size, and the upload's `mxc://` reference
+   * — the wire shape core #190's association convention reads (the asker's
+   * own contiguous file messages immediately preceding their question).
+   */
+  sendFile(roomId: string, file: SharedFile): Promise<void>;
+  /**
+   * The URL this member's browser can load a shared file from — the
+   * homeserver's authenticated media endpoint (MSC3916), this member's own
+   * token riding the https URL. Null when the reference can't translate.
+   */
+  mediaUrl(url: string): string | null;
   /**
    * Amends this member's own message (#64): a replacement event — the new
    * words ride `m.new_content`, the relation points back at the base, and
@@ -355,13 +394,16 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
     );
   };
 
-  // Pass one — the bases: every text message in timeline order, with
-  // same-sender replacements folded into the base they amend.
+  // Pass one — the bases: every conversation turn (text, and a shared
+  // file or image) in timeline order, with same-sender replacements folded
+  // into the base they amend.
   interface Base {
+    msgtype: string;
     senderId: string;
     senderName: string;
     body: string;
     parts: readonly MessagePart[] | null;
+    file: SharedFile | undefined;
     ts: number;
     edited: boolean;
     redacted: boolean;
@@ -384,10 +426,12 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
         continue;
       }
       bases.set(event.getId() ?? "", {
+        msgtype: MsgType.Text,
         senderId,
         senderName: nameOf(senderId),
         body: "",
         parts: null,
+        file: undefined,
         ts: event.getTs(),
         edited: false,
         redacted: true,
@@ -395,32 +439,67 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
       });
       continue;
     }
-    const content = event.getContent();
-    if (content?.msgtype !== MsgType.Text) {
+    const msgtype = event.getContent()?.msgtype;
+    const isShare = msgtype === MsgType.File || msgtype === MsgType.Image;
+    if (msgtype !== MsgType.Text && !isShare) {
       continue;
     }
     if (relation?.rel_type === RelationType.Replace) {
       // A replacement is not a row: it rewrites the base it points at, in
-      // place — and only when the sender is the base's own author.
+      // place — and only when the sender is the base's own author, and the
+      // new content is the same kind of turn the base was (an edit amends;
+      // it never converts a text into a share or a share into a text). For
+      // a share the amendment moves the label only — the reference and the
+      // facts it declared stand (core #190: an edited file message updates
+      // its body/label, nothing else).
       const targetId = relation.event_id;
       const base = targetId !== undefined ? bases.get(targetId) : undefined;
-      const newBody = (content?.["m.new_content"] as { body?: string } | undefined)?.body;
-      if (base && !base.redacted && targetId !== undefined && newBody !== undefined && senderId === base.senderId) {
-        // The fold keeps the replacement's words and drops the pills: this
-        // client sends no anchors with an edit, and words that moved
-        // render honestly as words.
-        bases.set(targetId, { ...base, body: String(newBody), parts: null, edited: true });
+      const newContent = event.getContent()?.["m.new_content"] as { msgtype?: string; body?: string } | undefined;
+      const newBody = newContent?.body;
+      if (
+        base &&
+        !base.redacted &&
+        targetId !== undefined &&
+        newBody !== undefined &&
+        senderId === base.senderId &&
+        newContent?.msgtype === base.msgtype
+      ) {
+        bases.set(targetId, {
+          ...base,
+          body: String(newBody),
+          // The fold keeps the replacement's words and drops the pills:
+          // this client sends no anchors with an edit, and words that
+          // moved render honestly as words.
+          parts: null,
+          file: base.file === undefined ? undefined : { ...base.file, name: String(newBody) },
+          edited: true,
+        });
       }
       continue;
     }
-    // The body the row renders and the body the pills split are one string,
-    // read once — a parts projection of anything else would half-render.
+    const content = event.getContent() as
+      | { body?: unknown; formatted_body?: unknown; filename?: unknown; url?: unknown; info?: { mimetype?: unknown; size?: unknown } }
+      | undefined;
     const body = String(content?.body ?? "");
     bases.set(event.getId() ?? "", {
+      msgtype: msgtype as string,
       senderId,
       senderName: nameOf(senderId),
       body,
-      parts: partsOfEvent(body, content ?? {}),
+      // #65: a share's label carries no pills — only a text turn has parts.
+      parts: isShare ? null : partsOfEvent(body, content ?? {}),
+      // A share's facts are the sender's own declarations, carried as
+      // declared — the homeserver owns the reference; the client asserts
+      // nothing about either.
+      file: isShare
+        ? {
+            name: typeof content?.filename === "string" && content.filename.length > 0 ? content.filename : body,
+            mimeType: typeof content?.info?.mimetype === "string" ? content.info.mimetype : "",
+            size: typeof content?.info?.size === "number" ? content.info.size : 0,
+            url: typeof content?.url === "string" ? content.url : "",
+            image: msgtype === MsgType.Image,
+          }
+        : undefined,
       ts: event.getTs(),
       edited: false,
       redacted: false,
@@ -478,6 +557,7 @@ function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[
       senderName: base.senderName,
       body: base.body,
       parts: base.parts,
+      file: base.file,
       originServerTs: base.ts,
       edited: base.edited,
       redacted: base.redacted,
@@ -622,6 +702,33 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
         "m.mentions": { user_ids: [...new Set(mentions.map((mention) => mention.userId))] },
       });
     },
+    // The share path (#66): upload bytes, then send the message that
+    // references them. Both are homeserver operations on the member's own
+    // account — the same footing as every other verb here. Sharing is not
+    // importing: no upload path reaches any daemon, and the seam offers no
+    // operation that could.
+    uploadFile: async (staged, onProgress) => {
+      const { content_uri } = await client.uploadContent(new Blob([staged.bytes], { type: staged.mimeType }), {
+        name: staged.name,
+        type: staged.mimeType,
+        ...(onProgress === undefined ? {} : { progressHandler: (progress) => onProgress(progress.loaded, progress.total) }),
+      });
+      return { name: staged.name, mimeType: staged.mimeType, size: staged.size, url: content_uri, image: isImageType(staged.mimeType) };
+    },
+    sendFile: async (roomId, file) => {
+      // The share's wire shape (spec §Send-to-room messaging): the name
+      // rides `body` and `filename`, the upload's reference in `url`, the
+      // declared facts in `info` — the shape core #190's adapter reads
+      // back. The msgtype is spelled in each arm because the SDK types a
+      // message content by its msgtype literal; a union of the two would
+      // not type as either.
+      const facts = { body: file.name, filename: file.name, url: file.url, info: { mimetype: file.mimeType, size: file.size } };
+      await client.sendMessage(
+        roomId,
+        file.image ? { ...facts, msgtype: MsgType.Image } : { ...facts, msgtype: MsgType.File },
+      );
+    },
+    mediaUrl: (url) => client.mxcUrlToHttp(url, undefined, undefined, undefined, undefined, undefined, true),
     // The verbs are all homeserver operations on the room — the surface adds
     // no behaviour, it asks the server to move its own state and renders the
     // next answer. Each one maps to the Matrix event the spec prescribes.

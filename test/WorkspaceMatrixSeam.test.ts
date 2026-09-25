@@ -22,7 +22,7 @@ vi.mock("matrix-js-sdk", () => ({
   ClientEvent: { Sync: "sync" },
   RoomEvent: { Timeline: "timeline" },
   SyncState: { Prepared: "PREPARED" },
-  MsgType: { Text: "m.text" },
+  MsgType: { Text: "m.text", File: "m.file", Image: "m.image" },
   ReceiptType: { Read: "m.read", FullyRead: "m.fully_read", ReadPrivate: "m.read.private" },
   NotificationCountType: { Highlight: "highlight", Total: "total" },
   PushRuleKind: { Override: "override", ContentSpecific: "content", RoomSpecific: "room", SenderSpecific: "sender", Underride: "underride" },
@@ -63,6 +63,10 @@ function fakeEvent(
     relatesTo?: { rel_type: string; event_id: string; key?: string; is_falling_back?: boolean };
     /** A replacement's new body, under m.new_content. */
     newContent?: { msgtype: string; body: string };
+    /** A file message's share: the upload's stable reference and the declared facts. */
+    url?: string;
+    filename?: string;
+    info?: { mimetype?: string; size?: number };
     /** True once the homeserver (or a member) struck the event. */
     redacted?: boolean;
   },
@@ -77,6 +81,9 @@ function fakeEvent(
       format: shape.format,
       formatted_body: shape.formattedBody,
       "m.mentions": shape.mentions === undefined ? undefined : { user_ids: shape.mentions },
+      filename: shape.filename,
+      url: shape.url,
+      info: shape.info,
       "m.new_content": shape.newContent,
       "m.relates_to": shape.relatesTo,
     }),
@@ -96,7 +103,16 @@ function fakeRoom(): Room {
         fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "what's our refund policy?", ts: 1_700_000_000_000 }),
         fakeEvent({ type: "m.room.topic", sender: "@bose:workspace.example", body: "refunds", ts: 1_700_000_000_001 }),
         fakeEvent({ type: "m.room.message", sender: "@duo-carol:workspace.example", msgtype: "m.text", body: "Refunds within 30 days, full amount.", ts: 1_700_000_000_002 }),
-        fakeEvent({ type: "m.room.message", sender: "@nobody:workspace.example", msgtype: "m.file", body: "refund-policy.pdf", ts: 1_700_000_000_003 }),
+        fakeEvent({
+          type: "m.room.message",
+          sender: "@nobody:workspace.example",
+          msgtype: "m.file",
+          body: "refund-policy.pdf",
+          ts: 1_700_000_000_003,
+          url: "mxc://workspace.example/policy1",
+          filename: "refund-policy.pdf",
+          info: { mimetype: "application/pdf", size: 48_000 },
+        }),
       ],
     }),
     getMember: member,
@@ -124,6 +140,8 @@ type FakeClient = MatrixClient & {
   sendReadReceipt: ReturnType<typeof vi.fn>;
   sendEvent: ReturnType<typeof vi.fn>;
   redactEvent: ReturnType<typeof vi.fn>;
+  uploadContent: ReturnType<typeof vi.fn>;
+  mxcUrlToHttp: ReturnType<typeof vi.fn>;
 };
 
 /**
@@ -168,6 +186,8 @@ function fakeClient(
     sendReadReceipt: vi.fn(async () => ({})),
     sendEvent: vi.fn(async () => ({})),
     redactEvent: vi.fn(async () => ({})),
+    uploadContent: vi.fn(async () => ({ content_uri: "mxc://workspace.example/abc123" })),
+    mxcUrlToHttp: vi.fn(() => "https://workspace.example/_matrix/media/v3/download/workspace.example/abc123"),
   };
   return client as unknown as FakeClient;
 }
@@ -284,7 +304,7 @@ describe("sign-in's wire rules", () => {
 });
 
 describe("the projection from Matrix events to room messages", () => {
-  it("keeps text messages only, resolves names from membership, and falls back to the localpart", async () => {
+  it("projects conversation turns — text and shares — resolving names from membership, falling back to the localpart", async () => {
     const client = fakeClient();
     vi.mocked(createClient).mockReturnValue(client);
     const connection = await connectPrepared(client);
@@ -323,9 +343,25 @@ describe("the projection from Matrix events to room messages", () => {
         threadRootEventId: null,
         parts: null,
       },
+      {
+        // #66: a shared file is a conversation turn — its facts are the
+        // sender's declarations beside the homeserver's own reference.
+        eventId: expect.any(String),
+        roomId: "!project-x:workspace.example",
+        senderId: "@nobody:workspace.example",
+        senderName: "nobody",
+        body: "refund-policy.pdf",
+        file: { name: "refund-policy.pdf", mimeType: "application/pdf", size: 48_000, url: "mxc://workspace.example/policy1", image: false },
+        originServerTs: 1_700_000_000_003,
+        edited: false,
+        redacted: false,
+        reactions: [],
+        thread: null,
+        threadRootEventId: null,
+      },
     ]);
-    // The topic event and the file message are not conversation text.
-    expect(messages.map((message) => message.body).join()).not.toContain("refund-policy.pdf");
+    // The topic event is still not a conversation turn.
+    expect(messages.map((message) => message.body)).not.toContain("refunds");
   });
 
   it("sends text, and only text, and reports live timeline arrivals for their room", async () => {
@@ -1115,6 +1151,163 @@ describe("the timeline projection the message surface reads (#64)", () => {
   });
 });
 
+describe("the share wire (#66)", () => {
+  const STAGED = { name: "notes.txt", mimeType: "text/plain", size: 5, bytes: new TextEncoder().encode("hello").buffer as ArrayBuffer };
+
+  it("uploads bytes to the homeserver's media store and answers the stable reference, reporting progress", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const progress: Array<[number, number]> = [];
+    const shared = await connection.uploadFile(STAGED, (sent, total) => progress.push([sent, total]));
+
+    expect(client.uploadContent).toHaveBeenCalledWith(expect.any(Blob), {
+      name: "notes.txt",
+      type: "text/plain",
+      progressHandler: expect.any(Function),
+    });
+    // The seam forwards the SDK's own byte accounting — the visible progress
+    // is the upload's truth, not a spinner pretending.
+    const opts = vi.mocked(client.uploadContent).mock.calls[0]![1] as { progressHandler?: (progress: { loaded: number; total: number }) => void };
+    opts.progressHandler?.({ loaded: 3, total: 5 });
+    expect(progress).toEqual([[3, 5]]);
+    expect(shared).toEqual({ name: "notes.txt", mimeType: "text/plain", size: 5, url: "mxc://workspace.example/abc123", image: false });
+  });
+
+  it("marks an image share by its declared type — never a filename guess", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const shared = await connection.uploadFile({ name: "diagram.png", mimeType: "image/png", size: 2048, bytes: new ArrayBuffer(2048) });
+
+    expect(shared.image).toBe(true);
+    expect(shared.url).toBe("mxc://workspace.example/abc123");
+  });
+
+  it("sends a share as the m.file / m.image wire shape core #190's adapter reads back", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.sendFile("!project-x:workspace.example", {
+      name: "notes.txt",
+      mimeType: "text/plain",
+      size: 5,
+      url: "mxc://workspace.example/abc123",
+      image: false,
+    });
+    expect(client.sendMessage).toHaveBeenLastCalledWith("!project-x:workspace.example", {
+      msgtype: "m.file",
+      body: "notes.txt",
+      filename: "notes.txt",
+      url: "mxc://workspace.example/abc123",
+      info: { mimetype: "text/plain", size: 5 },
+    });
+
+    await connection.sendFile("!project-x:workspace.example", {
+      name: "diagram.png",
+      mimeType: "image/png",
+      size: 2048,
+      url: "mxc://workspace.example/img1",
+      image: true,
+    });
+    expect(client.sendMessage).toHaveBeenLastCalledWith("!project-x:workspace.example", {
+      msgtype: "m.image",
+      body: "diagram.png",
+      filename: "diagram.png",
+      url: "mxc://workspace.example/img1",
+      info: { mimetype: "image/png", size: 2048 },
+    });
+  });
+
+  it("translates a reference to the member's own authenticated media URL — or null, honestly", async () => {
+    const client = fakeClient();
+    vi.mocked(client.mxcUrlToHttp).mockReturnValue("https://workspace.example/_matrix/media/v3/download/workspace.example/abc123");
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.mediaUrl("mxc://workspace.example/abc123")).toBe(
+      "https://workspace.example/_matrix/media/v3/download/workspace.example/abc123",
+    );
+    // Authenticated media (MSC3916): the translation carries this member's
+    // own token on the https URL — the 7th argument is useAuthentication.
+    expect(client.mxcUrlToHttp).toHaveBeenCalledWith("mxc://workspace.example/abc123", undefined, undefined, undefined, undefined, undefined, true);
+
+    vi.mocked(client.mxcUrlToHttp).mockReturnValue(null);
+    expect(connection.mediaUrl("mxc://workspace.example/gone")).toBeNull();
+  });
+
+  it("an edited share folds its label only — the reference and the declared facts stand (core #190)", async () => {
+    const events = [
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@ana:workspace.example",
+        msgtype: "m.file",
+        body: "draft-v1.txt",
+        ts: 1_000,
+        url: "mxc://workspace.example/draft1",
+        info: { mimetype: "text/plain", size: 900 },
+      }),
+      // The sharer renames their own share: a replacement of the same kind.
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@ana:workspace.example",
+        msgtype: "m.file",
+        body: "* draft-v2.txt",
+        ts: 2_000,
+        relatesTo: { rel_type: "m.replace", event_id: "$1000" },
+        newContent: { msgtype: "m.file", body: "draft-v2.txt" },
+      }),
+      // A kind flip is not an edit — a replacement that would turn a share
+      // into text (or back) changes what the message IS, and folds nothing.
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@ana:workspace.example",
+        msgtype: "m.text",
+        body: "* not a share",
+        ts: 3_000,
+        relatesTo: { rel_type: "m.replace", event_id: "$1000" },
+        newContent: { msgtype: "m.text", body: "not a share" },
+      }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timeline("!project-x:workspace.example");
+    expect(messages).toEqual([
+      {
+        eventId: "$1000",
+        roomId: "!project-x:workspace.example",
+        senderId: "@ana:workspace.example",
+        senderName: "ana",
+        body: "draft-v2.txt", // the replacement's label
+        file: { name: "draft-v2.txt", mimeType: "text/plain", size: 900, url: "mxc://workspace.example/draft1", image: false }, // the facts stand
+        originServerTs: 1_000,
+        edited: true,
+        redacted: false,
+        reactions: [],
+        thread: null,
+        threadRootEventId: null,
+      },
+    ]);
+  });
+});
+
 describe("the seam stays the SDK's only door", () => {
   it("no file outside src/workspace/matrix.ts references matrix-js-sdk", () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
@@ -1135,6 +1328,26 @@ describe("the seam stays the SDK's only door", () => {
       }
     };
     walk(root);
+    expect(offenders).toEqual([]);
+  });
+
+  it("no module in the share path imports the daemon's api — sharing is not importing, structurally (#66)", () => {
+    // The modules a share touches, from the pick to the wire: the policy,
+    // the seam, the card, and the two routes that render or compose one.
+    // None may reach the daemon's client (`src/api/*`) — the backend's own
+    // structural pin (core PR #223), mirrored here: there is no module path
+    // from "a file was shared in a conversation" to "it was imported".
+    const sharePath = [
+      join("src", "workspace", "sharing.ts"),
+      join("src", "workspace", "matrix.ts"),
+      join("src", "components", "SharedFileCard.tsx"),
+      join("src", "routes", "Room.tsx"),
+      join("src", "routes", "Thread.tsx"),
+    ];
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const offenders = sharePath.filter((relative) =>
+      /from\s+"(\.\.?\/)+(.*\/)?api\/[^"]+"/.test(readFileSync(join(root, relative), "utf8")),
+    );
     expect(offenders).toEqual([]);
   });
 });
