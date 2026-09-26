@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Knowledge } from "../src/routes/Knowledge.js";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Knows } from "../src/profile/Knows.js";
 import type { DuoKnowledge } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 
@@ -12,6 +12,12 @@ function renderWithClient(ui: React.ReactElement) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
+/*
+ * #45, on its live surface: the profile's Knows tab (the old Knowledge page's
+ * body, in an owner's words). Fixtures speak the daemon's side of the wire;
+ * the tab also reads /channels for its "Where it listens" section, which
+ * ProfileChannels.test.tsx pins — here it is an empty list.
+ */
 function knowledgeFor(over?: Partial<DuoKnowledge>): DuoKnowledge {
   return {
     records: { total: 312, bySource: { slack: 288, markdown: 24 } },
@@ -62,25 +68,26 @@ function knowledgeFor(over?: Partial<DuoKnowledge>): DuoKnowledge {
 function stubKnowledge(knowledge: DuoKnowledge) {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(JSON.stringify(knowledge), { status: 200 })),
+    vi.fn(async (url: string) => {
+      const path = String(url).replace("http://test", "");
+      return new Response(path === "/channels" ? "[]" : JSON.stringify(knowledge), { status: 200 });
+    }),
   );
 }
 
-describe("#45 — a screen that says what your duo knows", () => {
-  beforeEach(() => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(knowledgeFor()), { status: 200 })));
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
-  it("describes the corpus: records by source, the last import, topic coverage, rule counts", async () => {
+describe("#45 — the Knows tab says what your duo knows", () => {
+  it("describes what it has read: records by source, the last import, topic coverage — and leaves rule counts to the Rules tab", async () => {
     stubKnowledge(knowledgeFor());
-    renderWithClient(<Knowledge api={api} />);
-    await waitFor(() => expect(screen.getByTestId("knowledge")).toBeInTheDocument());
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knows-tab")).toBeInTheDocument());
 
-    // Records: every source the daemon names, with its count — the
-    // daemon's own source strings, no client-side registry.
+    // Every source the daemon names, with its count — the daemon's own
+    // strings, no client-side registry.
     const sources = screen.getAllByTestId("record-source").map((el) => el.textContent);
     expect(sources.some((t) => t?.includes("slack") && t?.includes("288"))).toBe(true);
     expect(sources.some((t) => t?.includes("markdown") && t?.includes("24"))).toBe(true);
@@ -89,20 +96,16 @@ describe("#45 — a screen that says what your duo knows", () => {
     expect(screen.getByTestId("last-import").textContent).toContain("24");
     expect(screen.getByTestId("last-import").textContent).toContain("288");
 
-    // Topic coverage reads like the Mirror's — label, count, a bar for the
-    // share — because it IS the portrait's breakdown, not a recomputation.
+    // Topic coverage: label, count, a bar for the share.
     const topics = screen.getAllByTestId("knowledge-topic").map((el) => el.textContent);
     expect(topics.some((t) => t?.includes("scheduling") && t?.includes("73"))).toBe(true);
     expect(screen.getAllByTestId("knowledge-topic-share-fill").length).toBe(2);
 
-    // Derived-rule counts by review status, every key the daemon sends.
-    const rules = screen.getByTestId("rule-counts").textContent;
-    expect(rules).toContain("pending");
-    expect(rules).toContain("3");
-    expect(rules).toContain("approved");
-    expect(rules).toContain("12");
-    expect(rules).toContain("superseded");
-    expect(rules).toContain("1");
+    // The old page's rule counts by review status now live on the Rules tab
+    // ("rules-counts", pinned in Profile.test.tsx) — none renders here, and
+    // none of the daemon's status codes leak into this tab.
+    expect(screen.queryByTestId("rule-counts")).toBeNull();
+    expect(screen.getByTestId("knows-tab").textContent).not.toMatch(/superseded/i);
   });
 
   it("states thinness, not implies it: the verdict names the bar and what would thicken it — and no breakdown renders", async () => {
@@ -118,11 +121,10 @@ describe("#45 — a screen that says what your duo knows", () => {
         },
       }),
     );
-    renderWithClient(<Knowledge api={api} />);
+    renderWithClient(<Knows api={api} />);
 
-    // The portrait's own verdict, in the portrait's own words-grade: the
-    // threshold, the count, and the action that changes it. A breakdown of
-    // four questions would be costume jewellery — none renders.
+    // The threshold, the count, and the action that changes it. A breakdown
+    // of four questions would be costume jewellery — none renders.
     const thin = await waitFor(() => screen.getByTestId("corpus-thin"));
     expect(thin.textContent).toContain("10");
     expect(thin.textContent).toContain("4");
@@ -132,22 +134,21 @@ describe("#45 — a screen that says what your duo knows", () => {
 
   it("renders no percentage the data cannot carry — counts and bars, never numerals of derived rates", async () => {
     stubKnowledge(knowledgeFor());
-    renderWithClient(<Knowledge api={api} />);
-    await waitFor(() => expect(screen.getByTestId("knowledge")).toBeInTheDocument());
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knows-tab")).toBeInTheDocument());
 
     // The answer rate arrives as a fraction; it renders as a bar with the
-    // counts it came from beside it. Nowhere on the surface does a
-    // percentage numeral appear — not for shares, not for rates.
+    // counts it came from beside it. Nowhere on the tab does a percentage
+    // numeral appear — not for shares, not for rates.
     expect(screen.getByTestId("answer-rate-fill")).toBeInTheDocument();
-    expect(screen.getByTestId("shared-usage").textContent).toContain("41");
-    expect(screen.getByTestId("shared-usage").textContent).toContain("55");
-    expect(screen.getByTestId("knowledge").textContent).not.toMatch(/\d+(\.\d+)?\s?%/);
+    expect(screen.getByTestId("knows-others").textContent).toContain("41 of 55");
+    expect(screen.getByTestId("knows-tab").textContent).not.toMatch(/\d+(\.\d+)?\s?%/);
   });
 
   it("names the providers: which is answering, which is embedding", async () => {
     stubKnowledge(knowledgeFor());
-    renderWithClient(<Knowledge api={api} />);
-    await waitFor(() => expect(screen.getByTestId("knowledge")).toBeInTheDocument());
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knows-tab")).toBeInTheDocument());
 
     expect(screen.getByTestId("inference-provider").textContent).toContain("qwen-local");
     expect(screen.getByTestId("embedding-provider").textContent).toContain("ollama");
@@ -156,30 +157,30 @@ describe("#45 — a screen that says what your duo knows", () => {
 
   it("says so plainly when no provider is configured — an absence is a fact, not a blank", async () => {
     stubKnowledge(knowledgeFor({ providers: { inference: null, embedding: null } }));
-    renderWithClient(<Knowledge api={api} />);
-    await waitFor(() => expect(screen.getByTestId("knowledge")).toBeInTheDocument());
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knows-tab")).toBeInTheDocument());
 
-    expect(screen.getByTestId("inference-provider").textContent).toMatch(/no inference/i);
-    expect(screen.getByTestId("embedding-provider").textContent).toMatch(/no embedding/i);
+    expect(screen.getByTestId("inference-provider").textContent).toMatch(/nothing is set up to write answers/i);
+    expect(screen.getByTestId("embedding-provider").textContent).toMatch(/nothing is set up to search your history/i);
   });
 
-  it("shared usage: the daemon's summary verbatim, its askers, and its gaps", async () => {
+  it("when others ask: the daemon's summary verbatim, its askers, and its gaps", async () => {
     stubKnowledge(knowledgeFor());
-    renderWithClient(<Knowledge api={api} />);
-    await waitFor(() => expect(screen.getByTestId("knowledge")).toBeInTheDocument());
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knows-tab")).toBeInTheDocument());
 
     expect(screen.getByTestId("shared-usage-summary").textContent).toBe(
       "The shared duo answered 41 of 55 questions over the last month.",
     );
-    expect(screen.getByTestId("shared-usage").textContent).toContain("9");
+    expect(within(screen.getByTestId("knows-others")).getByText(/asked by 9 people/)).toBeInTheDocument();
     const gaps = screen.getAllByTestId("usage-gap").map((el) => el.textContent);
     expect(gaps.some((t) => t?.includes("wifi password") && t?.includes("3"))).toBe(true);
   });
 
   it("a store that has never seen an import says so, in words", async () => {
     stubKnowledge(knowledgeFor({ lastImport: null }));
-    renderWithClient(<Knowledge api={api} />);
-    await waitFor(() => expect(screen.getByTestId("knowledge")).toBeInTheDocument());
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knows-tab")).toBeInTheDocument());
     expect(screen.getByTestId("last-import").textContent).toMatch(/no import yet/i);
   });
 });

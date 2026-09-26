@@ -11,8 +11,6 @@
  * authoritative shapes this file must never drift from silently.
  */
 
-export type DuoSummary = { kind: "personal" } | { kind: "shared"; ownerId: string; ownerName: string };
-
 export interface DraftSource {
   // "attachment" (digital-duo #190/#183): a file shared in the conversation
   // the question rode with; `id` is the workspace's own file reference and

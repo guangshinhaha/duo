@@ -2,7 +2,7 @@ import type { DuoApiConfig } from "../api/client.js";
 import { useKnowledge } from "../api/queries.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
-import { corpusSentence, lastImportSentence } from "../routes/Knowledge.js";
+import { corpusSentence, lastImportSentence } from "../profile/knowledgeWords.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 import { useWaitingItems } from "./waiting.js";
 

@@ -1,9 +1,17 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Mirror } from "../src/routes/Mirror.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { InterruptionPortrait, RefusalsListing, Rule, RuleReviewListing } from "../src/api/types.js";
+import { Portrait } from "../src/profile/Portrait.js";
+import { RefusalsSection } from "../src/profile/Refusals.js";
+import { Rules } from "../src/profile/Rules.js";
+
+/*
+ * What the old Mirror page pinned, carried to the profile tabs that now own
+ * it: the Portrait tab for the portrait, the Rules tab for the rule buckets,
+ * and RefusalsSection (hosted by the Rules tab) for refusals.
+ */
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
 
@@ -74,83 +82,126 @@ function stubMirrorResponses(p: InterruptionPortrait, l: RuleReviewListing, r: R
       if (url.includes("/mirror/refusals")) {
         return new Response(JSON.stringify(r), { status: 200 });
       }
+      if (url.includes("/review")) {
+        return new Response("[]", { status: 200 });
+      }
       return new Response(JSON.stringify(l), { status: 200 });
     }),
   );
 }
 
-describe("Mirror — the owner's window onto what the duo derived (C6)", () => {
+describe("Portrait tab — the owner's window onto what the duo worked out (C6)", () => {
   beforeEach(() => {
     stubMirrorResponses(portrait, listing);
   });
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
   });
 
   it("renders the portrait's period, totals, topics, and threads — counts and bars, no percentage numerals", async () => {
-    renderWithClient(<Mirror api={api} />);
-    await waitFor(() => expect(screen.getByTestId("portrait")).toBeInTheDocument());
-    expect(screen.getByTestId("portrait")).toHaveTextContent("42 questions");
-    expect(screen.getByText("leave policy")).toBeInTheDocument();
-    expect(screen.getByText("procurement")).toBeInTheDocument();
+    renderWithClient(<Portrait api={api} />);
+    await waitFor(() => expect(screen.getByTestId("portrait-tab")).toBeInTheDocument());
+    expect(screen.getByTestId("portrait-source")).toHaveTextContent("42 questions");
+    expect(screen.getByTestId("portrait-source")).toHaveTextContent("–"); // the period, start to end
+    expect(screen.getByTestId("portrait-sentences")).toHaveTextContent("You were asked about leave policy 30 times.");
+    // The numbers are one tap away (in the <details>), but present in the DOM.
+    expect(screen.getByText("leave policy", { selector: "span" })).toBeInTheDocument();
+    expect(screen.getByText("procurement", { selector: "span" })).toBeInTheDocument();
     expect(screen.getAllByTestId("portrait-topic")).toHaveLength(2);
     expect(screen.getAllByTestId("portrait-thread")).toHaveLength(1);
-    expect(screen.getByTestId("mirror")).not.toHaveTextContent("%");
+    expect(screen.getByTestId("portrait-tab")).not.toHaveTextContent("%");
   });
 
   it("renders the honest thin-data state rather than zeros when history is insufficient (AR-19)", async () => {
     // Field names as the daemon actually sends them (verified live 2026-09-20):
     // `tooThin` + `minimumQuestionsToCharacterize`, not a guessed `insufficientHistory`.
     stubMirrorResponses({ ...portrait, tooThin: true, totalQuestions: 3 }, listing);
-    renderWithClient(<Mirror api={api} />);
+    renderWithClient(<Portrait api={api} />);
     await waitFor(() => expect(screen.getByTestId("portrait-thin")).toBeInTheDocument());
     expect(screen.getByTestId("portrait-thin")).toHaveTextContent("Not enough history yet");
     expect(screen.getByTestId("portrait-thin")).toHaveTextContent("10 questions");
     expect(screen.getByTestId("portrait-thin")).toHaveTextContent("has 3");
-    expect(screen.queryByTestId("portrait")).toBeNull();
+    expect(screen.queryByTestId("portrait-sentences")).toBeNull();
+    expect(screen.queryByTestId("portrait-numbers")).toBeNull();
+  });
+
+  it("surfaces the daemon's error message when the portrait cannot be read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: { code: "unknown", message: "store locked" } }), { status: 500 })),
+    );
+    renderWithClient(<Portrait api={api} />);
+    await waitFor(() => expect(screen.getByText("store locked")).toBeInTheDocument());
+    expect(screen.getByTestId("route-error")).toBeInTheDocument();
+  });
+
+  it("renders no free-text editing and no percentage numeral", async () => {
+    const { container } = renderWithClient(<Portrait api={api} />);
+    await screen.findByTestId("portrait-sentences");
+    expect(container.querySelectorAll("input, textarea, select, [contenteditable]")).toHaveLength(0);
+    expect(container).not.toHaveTextContent("%");
+  });
+});
+
+describe("Rules tab — the buckets, the refusals, and no authoring here (AR-18)", () => {
+  beforeEach(() => {
+    stubMirrorResponses(portrait, listing);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
   });
 
   it("renders each bucket with its rules and counts, in decision order", async () => {
-    renderWithClient(<Mirror api={api} />);
+    renderWithClient(<Rules api={api} />);
     await waitFor(() => expect(screen.getByTestId("bucket-awaitingApproval")).toBeInTheDocument());
-    expect(screen.getByTestId("bucket-awaitingApproval")).toHaveTextContent("Awaiting your approval (2)");
+    expect(screen.getByTestId("bucket-awaitingApproval")).toHaveTextContent("Waiting for you (2)");
     expect(screen.getByTestId("bucket-awaitingApproval")).toHaveTextContent("rule a1");
-    expect(screen.getByTestId("bucket-weakSignals")).toHaveTextContent("Weak signals (1)");
+    expect(screen.getByTestId("bucket-weakSignals")).toHaveTextContent("Not sure yet (1)");
     expect(screen.getByTestId("bucket-weakSignals")).toHaveTextContent("rule w1");
-    expect(screen.getByTestId("bucket-inconsistent")).toHaveTextContent("Inconsistent (1)");
+    expect(screen.getByTestId("bucket-inconsistent")).toHaveTextContent("Contradicting each other (1)");
+    const order = ["awaitingApproval", "weakSignals", "inconsistent", "approved", "rejected"].map((key) => screen.getByTestId(`bucket-${key}`));
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 
   it("collapses history buckets — reachable, not loud", async () => {
-    renderWithClient(<Mirror api={api} />);
+    renderWithClient(<Rules api={api} />);
     await waitFor(() => expect(screen.getByTestId("bucket-approved")).toBeInTheDocument());
-    expect(screen.getByTestId("bucket-approved")).toHaveTextContent("Approved (1)");
-    expect(screen.getByTestId("bucket-rejected")).toHaveTextContent("Rejected (0)");
+    expect(screen.getByTestId("bucket-approved")).toHaveTextContent("In use (1)");
+    expect(screen.getByTestId("bucket-rejected")).toHaveTextContent("Set aside (0)");
+    expect(screen.getByTestId("bucket-approved").tagName).toBe("DETAILS");
+    expect(screen.getByTestId("bucket-rejected").tagName).toBe("DETAILS");
+    expect(screen.getByTestId("bucket-awaitingApproval").tagName).toBe("SECTION");
   });
 
   it("renders honest empty lines for a thin mirror instead of hiding sections (AR-19)", async () => {
     const empty: RuleReviewListing = { awaitingApproval: [], weakSignals: [], inconsistent: [], approved: [], rejected: [] };
     stubMirrorResponses(portrait, empty);
-    renderWithClient(<Mirror api={api} />);
+    renderWithClient(<Rules api={api} />);
     await waitFor(() => expect(screen.getByTestId("bucket-awaitingApproval")).toBeInTheDocument());
-    expect(screen.getByTestId("bucket-awaitingApproval")).toHaveTextContent("No rules waiting on you.");
-    expect(screen.getByTestId("bucket-weakSignals")).toHaveTextContent("No weak signals yet.");
+    expect(screen.getByTestId("bucket-awaitingApproval")).toHaveTextContent("Nothing to confirm.");
+    expect(screen.getByTestId("bucket-weakSignals")).toHaveTextContent("Nothing it is unsure about.");
+    expect(screen.getByTestId("bucket-inconsistent")).toHaveTextContent("No contradictions.");
+    expect(screen.getByTestId("bucket-approved")).toHaveTextContent("Nothing in use yet.");
+    expect(screen.getByTestId("bucket-rejected")).toHaveTextContent("Nothing set aside.");
   });
 
-  it("surfaces the daemon's error message when a route fails", async () => {
+  it("surfaces the daemon's error message when the rules route fails", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(JSON.stringify({ error: { code: "unknown", message: "store locked" } }), { status: 500 })),
     );
-    renderWithClient(<Mirror api={api} />);
-    // Both the portrait and rules queries fail against this mock, so the
-    // message legitimately appears once per section — assert presence, not
-    // uniqueness.
+    renderWithClient(<Rules api={api} />);
     await waitFor(() => expect(screen.getAllByText("store locked").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("bucket-awaitingApproval")).toBeNull();
   });
 
   describe("refusals — what the duo will not speak for the owner on, and why (#53)", () => {
     it("shows each refusal with what is refused and the basis the owner wrote", async () => {
-      renderWithClient(<Mirror api={api} />);
+      renderWithClient(<Rules api={api} />);
       const rows = await screen.findAllByTestId("refusal");
       expect(rows).toHaveLength(2);
       expect(rows[0]).toHaveTextContent("Salary negotiations");
@@ -159,7 +210,7 @@ describe("Mirror — the owner's window onto what the duo derived (C6)", () => {
     });
 
     it("says so, rather than showing a blank, when a refusal carries no written reason", async () => {
-      renderWithClient(<Mirror api={api} />);
+      renderWithClient(<Rules api={api} />);
       const rows = await screen.findAllByTestId("refusal");
       expect(rows[1]).toHaveTextContent("Legal holds");
       expect(rows[1]).toHaveTextContent("No reason written.");
@@ -167,7 +218,7 @@ describe("Mirror — the owner's window onto what the duo derived (C6)", () => {
 
     it("keeps the owner's multi-line reason as written", async () => {
       stubMirrorResponses(portrait, listing, { decided: true, refusals: [{ heading: "Pay", reason: "line one\nline two" }] });
-      renderWithClient(<Mirror api={api} />);
+      renderWithClient(<RefusalsSection api={api} />);
       const reason = await screen.findByTestId("refusal-reason");
       expect(reason.textContent).toBe("line one\nline two");
       expect(reason.className).toContain("whitespace-pre-wrap");
@@ -175,14 +226,14 @@ describe("Mirror — the owner's window onto what the duo derived (C6)", () => {
 
     it("tells 'never asked' from 'asked, none' — the daemon's own decided flag (AR-19)", async () => {
       stubMirrorResponses(portrait, listing, { decided: false, refusals: [] });
-      const { unmount } = renderWithClient(<Mirror api={api} />);
+      const { unmount } = renderWithClient(<RefusalsSection api={api} />);
       await waitFor(() => expect(screen.getByTestId("refusals-undecided")).toBeInTheDocument());
       expect(screen.getByTestId("refusals-undecided")).toHaveTextContent("hasn't been asked");
       expect(screen.queryAllByTestId("refusal")).toHaveLength(0);
       unmount();
 
       stubMirrorResponses(portrait, listing, { decided: true, refusals: [] });
-      renderWithClient(<Mirror api={api} />);
+      renderWithClient(<RefusalsSection api={api} />);
       await waitFor(() => expect(screen.getByTestId("refusals-none")).toBeInTheDocument());
       expect(screen.getByTestId("refusals-none")).toHaveTextContent("none");
       expect(screen.queryByTestId("refusals-undecided")).toBeNull();
@@ -190,31 +241,31 @@ describe("Mirror — the owner's window onto what the duo derived (C6)", () => {
 
     it("points the empty state at the terminal instead of offering to record one here (AR-18)", async () => {
       stubMirrorResponses(portrait, listing, { decided: false, refusals: [] });
-      renderWithClient(<Mirror api={api} />);
+      renderWithClient(<RefusalsSection api={api} />);
       await waitFor(() => expect(screen.getByTestId("refusals-undecided")).toBeInTheDocument());
       expect(screen.getByTestId("refusals-undecided")).toHaveTextContent("duo mirror refusals");
     });
 
-    it("surfaces the daemon's error message when refusals cannot be read, without taking the rest down", async () => {
+    it("surfaces the daemon's error message when refusals cannot be read, without taking the rest of the tab down", async () => {
       vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string) => {
           if (url.includes("/mirror/refusals")) {
             return new Response(JSON.stringify({ error: { code: "unknown", message: "refusals file unreadable" } }), { status: 500 });
           }
-          if (url.includes("/mirror/portrait")) {
-            return new Response(JSON.stringify(portrait), { status: 200 });
+          if (url.includes("/review")) {
+            return new Response("[]", { status: 200 });
           }
           return new Response(JSON.stringify(listing), { status: 200 });
         }),
       );
-      renderWithClient(<Mirror api={api} />);
+      renderWithClient(<Rules api={api} />);
       await waitFor(() => expect(screen.getByText("refusals file unreadable")).toBeInTheDocument());
       await waitFor(() => expect(screen.getByTestId("bucket-awaitingApproval")).toBeInTheDocument());
     });
 
     it("reads the daemon's route and nothing else — no write leaves the refusals view", async () => {
-      renderWithClient(<Mirror api={api} />);
+      renderWithClient(<RefusalsSection api={api} />);
       await screen.findAllByTestId("refusal");
       const calls = vi.mocked(fetch).mock.calls as unknown as [string, RequestInit | undefined][];
       expect(calls.some(([url]) => url === "http://test/mirror/refusals")).toBe(true);
@@ -223,20 +274,21 @@ describe("Mirror — the owner's window onto what the duo derived (C6)", () => {
   });
 
   describe("authoring stays with the files (AR-18, #53)", () => {
-    it("renders no free-text editing anywhere on the Mirror — rules or refusals", async () => {
-      const { container } = renderWithClient(<Mirror api={api} />);
+    it("renders no free-text editing anywhere on the Rules tab — rules or refusals", async () => {
+      const { container } = renderWithClient(<Rules api={api} />);
       await screen.findAllByTestId("refusal");
       await screen.findByTestId("bucket-awaitingApproval");
       expect(container.querySelectorAll("input, textarea, select, [contenteditable]")).toHaveLength(0);
+      expect(screen.queryAllByRole("button").length).toBeGreaterThan(0); // approve / reject / promote are here…
       for (const button of screen.queryAllByRole("button")) {
-        expect(button.textContent ?? "").not.toMatch(/\b(add|edit|write|record|new|save)\b/i);
+        expect(button.textContent ?? "").not.toMatch(/\b(add|edit|write|record|new|save)\b/i); // …authoring is not
       }
     });
 
     it("carries no percentage numeral anywhere, refusals included", async () => {
-      renderWithClient(<Mirror api={api} />);
+      renderWithClient(<Rules api={api} />);
       await screen.findAllByTestId("refusal");
-      expect(screen.getByTestId("mirror")).not.toHaveTextContent("%");
+      expect(screen.getByTestId("rules-tab")).not.toHaveTextContent("%");
     });
   });
 });

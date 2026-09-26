@@ -4,8 +4,8 @@ import type { DuoKnowledge } from "../api/types.js";
 import { MeterBar } from "../components/MeterBar.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
-import { ChannelList, isChannelList } from "../routes/Channels.js";
-import { corpusSentence, isDuoKnowledgeShape, lastImportSentence } from "../routes/Knowledge.js";
+import { ChannelList, isChannelList } from "./ChannelList.js";
+import { corpusSentence, isDuoKnowledgeShape, lastImportSentence } from "./knowledgeWords.js";
 
 const formatDate = (iso: string | null): string => (iso ? new Date(iso).toLocaleDateString() : "—");
 

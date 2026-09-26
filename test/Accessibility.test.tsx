@@ -17,15 +17,10 @@ import { MutationError } from "../src/components/MutationError.js";
 import { SyncStatusProvider, type SyncTarget } from "../src/sync.js";
 import { WaitingHome } from "../src/shell/WaitingHome.js";
 import { DraftTray } from "../src/components/DraftTray.js";
-import { Corrections } from "../src/routes/Corrections.js";
 import { Duo } from "../src/routes/Duo.js";
 import { Draft } from "../src/routes/Draft.js";
-import { Trust } from "../src/routes/Trust.js";
-import { Audit } from "../src/routes/Audit.js";
-import { Knowledge } from "../src/routes/Knowledge.js";
-import { Escalations } from "../src/routes/Escalations.js";
-import { Mirror } from "../src/routes/Mirror.js";
 import { Settings } from "../src/routes/Settings.js";
+import { ProfilePane } from "../src/shell/ProfilePane.js";
 import { Confirmations } from "../src/routes/Confirmations.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { AuditEntry, CorrectionCandidate, DraftRecord, GridRow, PendingT4RequestForJudgement, Rule } from "../src/api/types.js";
@@ -218,22 +213,23 @@ describe("#39 AC1 — the page has structure", () => {
     const cases: Array<{ name: string; ui: ReactElement; routes: Record<string, unknown> }> = [
       { name: "Waiting on you — queue", ui: <WaitingHome api={api} />, routes: { "/drafts?outcome=pending": [draftFor("d1"), escalatedDraft] } },
       { name: "Waiting on you — empty", ui: <WaitingHome api={api} />, routes: { "/drafts?outcome=pending": [], "/knowledge": knowledgeFor() } },
-      { name: "Corrections — list", ui: <Corrections api={api} />, routes: { "/review?status=pending": [candidate] } },
-      { name: "Corrections — empty", ui: <Corrections api={api} />, routes: { "/review?status=pending": [] } },
+      { name: "Profile › Rules — edits waiting", ui: <ProfilePane api={api} tab="rules" />, routes: { "/review?status=pending": [candidate], "/mirror/rules": { awaitingApproval: [rule], weakSignals: [], inconsistent: [], approved: [], rejected: [] }, "/mirror/refusals": { decided: true, refusals: [{ heading: "Pay", reason: "Never on pay." }] } } },
+      { name: "Profile › Rules — empty", ui: <ProfilePane api={api} tab="rules" />, routes: { "/review?status=pending": [], "/mirror/rules": { awaitingApproval: [], weakSignals: [], inconsistent: [], approved: [], rejected: [] } } },
       { name: "Duo", ui: <Duo api={api} />, routes: { "/drafts?limit=50": [] } },
       // The one parameterized route (#25) is a page like the named ones.
       { name: "Draft", ui: <Draft api={api} draftId="d1" />, routes: { "/drafts/d1": draftFor("d1") } },
-      { name: "Trust — grid", ui: <Trust api={api} />, routes: { "/trust/grid": [gridRow] } },
-      { name: "Trust — empty", ui: <Trust api={api} />, routes: { "/trust/grid": [] } },
-      { name: "Audit — log", ui: <Audit api={api} />, routes: { "/audit": [auditEntry] } },
-      { name: "Audit — empty", ui: <Audit api={api} />, routes: { "/audit": [] } },
-      { name: "Knowledge", ui: <Knowledge api={api} />, routes: { "/knowledge": knowledgeFor() } },
+      { name: "Profile › May do — grid", ui: <ProfilePane api={api} tab="may" />, routes: { "/trust/grid": [gridRow] } },
+      { name: "Profile › May do — empty", ui: <ProfilePane api={api} tab="may" />, routes: { "/trust/grid": [] } },
+      { name: "Profile › Activity — log", ui: <ProfilePane api={api} tab="activity" />, routes: { "/audit": [auditEntry] } },
+      { name: "Profile › Activity — empty", ui: <ProfilePane api={api} tab="activity" />, routes: { "/audit": [] } },
+      { name: "Profile › Knows", ui: <ProfilePane api={api} tab="knows" />, routes: { "/knowledge": knowledgeFor() } },
       { name: "Confirmations — waiting", ui: <Confirmations api={api} />, routes: { "/actions/t4/pending": [pendingConfirmation] } },
       { name: "Confirmations — empty", ui: <Confirmations api={api} />, routes: { "/actions/t4/pending": [] } },
       {
-        name: "Escalations",
-        ui: <Escalations api={api} />,
+        name: "Profile › Activity — where it runs out",
+        ui: <ProfilePane api={api} tab="activity" />,
         routes: {
+          "/audit": [],
           "/escalations/history": [
             { id: "g1", createdAt: "2026-01-01T00:00:00.000Z", itemCount: 1, items: [{ draftId: "e1", question: "q", threadContext: null, escalationReason: "why", createdAt: "2026-01-01T00:00:00.000Z" }] },
           ],
@@ -241,8 +237,8 @@ describe("#39 AC1 — the page has structure", () => {
         },
       },
       {
-        name: "Mirror",
-        ui: <Mirror api={api} />,
+        name: "Profile › Portrait",
+        ui: <ProfilePane api={api} tab="portrait" />,
         routes: {
           "/mirror/portrait": { totalQuestions: 0, periodStart: null, periodEnd: null, topicBreakdown: [], topFiveShare: 0, busiestThreads: [], tooThin: true, minimumQuestionsToCharacterize: 10 },
           "/mirror/rules": { awaitingApproval: [rule], weakSignals: [], inconsistent: [], approved: [], rejected: [] },
@@ -265,7 +261,7 @@ describe("#39 AC1 — the page has structure", () => {
     }
   });
 
-  it("Mirror's buckets sit at h2 under the page's h1, not at h3", async () => {
+  it("Rules' buckets sit at h2 under the page's h1, not at h3", async () => {
     vi.stubGlobal(
       "fetch",
       stubFetch({
@@ -273,13 +269,13 @@ describe("#39 AC1 — the page has structure", () => {
         "/mirror/rules": { awaitingApproval: [rule], weakSignals: [], inconsistent: [], approved: [], rejected: [] },
       }),
     );
-    const { container } = renderWithClient(<Mirror api={api} />);
+    const { container } = renderWithClient(<ProfilePane api={api} tab="rules" />);
     await waitFor(() => expect(container.querySelector("[data-testid^='bucket-']")).not.toBeNull());
     const bucketHeading = container.querySelector("[data-testid^='bucket-'] h2, [data-testid^='bucket-'] h3");
     expect(bucketHeading?.tagName).toBe("H2");
   });
 
-  it("Mirror's refusals sit at h2 with each refusal at h3 beneath it — no level skipped (#53)", async () => {
+  it("Rules' refusals sit at h2 with each refusal at h3 beneath it — no level skipped (#53)", async () => {
     vi.stubGlobal(
       "fetch",
       stubFetch({
@@ -288,7 +284,7 @@ describe("#39 AC1 — the page has structure", () => {
         "/mirror/refusals": { decided: true, refusals: [{ heading: "Pay", reason: "Never on pay." }] },
       }),
     );
-    const { container } = renderWithClient(<Mirror api={api} />);
+    const { container } = renderWithClient(<ProfilePane api={api} tab="rules" />);
     await waitFor(() => expect(container.querySelector("[data-testid='refusal']")).not.toBeNull());
     expect(container.querySelector("[data-testid='refusals'] > h2")).not.toBeNull();
     expect(container.querySelector("[data-testid='refusal'] h3")).not.toBeNull();

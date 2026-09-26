@@ -205,30 +205,3 @@ export function PatternSection({ api }: { api: DuoApiConfig }) {
     </section>
   );
 }
-
-/**
- * What the duo keeps having to ask about (#54): the pattern across its
- * escalations, where individual ones only ever showed in Review — the
- * clearest signal of where the corpus is thin and which standing orders are
- * missing. Read-only by construction: it reads digital-duo #178's history
- * and rate, and never the digest POST, because assembling a digest is the
- * send (it writes the append-only row and marks its items), and opening a
- * screen must not send anything. The fix is the existing one — open a group
- * and answer its latest escalation, which queues a standing-order candidate
- * for approval in Corrections. Escalation thresholds are not this screen's
- * to change.
- */
-export function Escalations({ api }: { api: DuoApiConfig }) {
-  return (
-    <div className="flex flex-col gap-6 p-6" data-testid="escalations">
-      <header className="flex flex-col gap-1">
-        <h1 className="type-heading">Escalations</h1>
-        <p className="type-provenance text-[var(--muted)]">
-          What your duo keeps having to ask you about — where its knowledge runs out. Answering one queues a standing-order candidate.
-        </p>
-      </header>
-      <RateSection api={api} />
-      <PatternSection api={api} />
-    </div>
-  );
-}

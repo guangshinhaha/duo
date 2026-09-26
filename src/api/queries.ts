@@ -29,7 +29,6 @@ import type {
   DraftPipelineResult,
   DraftRecord,
   DuoKnowledge,
-  DuoSummary,
   EscalationUrgencyRate,
   EmbedJobStatus,
   GridRow,
@@ -63,7 +62,6 @@ export const DRAFTS_PAGE_SIZE = 50;
  * is the easiest bug to ship here (§3.2's own warning).
  */
 export const queryKeys = {
-  duos: ["duos"] as const,
   drafts: (opts?: { outcome?: DraftOutcome | "pending" }) => ["drafts", opts ?? {}] as const,
   // The paged shape of GET /drafts (#29). Keyed by an object like the
   // outcome filter so it can never collide with `draft(id)`'s string
@@ -109,10 +107,6 @@ export const queryKeys = {
   // search never blocks a new one.
   search: (q: string) => ["search", q] as const,
 };
-
-export function useDuos(api: DuoApiConfig, options?: Partial<UseQueryOptions<DuoSummary[]>>) {
-  return useQuery({ queryKey: queryKeys.duos, queryFn: () => apiRequest<DuoSummary[]>(api, "/duos"), ...options });
-}
 
 /** `null` (a member with no duo paired) reads nothing: the query stays idle, and its data is `undefined`. */
 export function usePendingDrafts(api: DuoApiConfig | null) {
