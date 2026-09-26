@@ -170,6 +170,21 @@ the verb here is the owner's, distinct from a member muting a conversation
 (below). Connecting or authorising a channel is not done from this app — it
 happens where the credentials are.
 
+### trust reading
+
+What an asker reads under a colleague's duo's answer to judge it — always in
+words, never as a number or a percentage, because the confidence is a
+composite against a threshold, not a probability. Four readings, each its own
+sentence: *confident* ("{owner} has trusted this duo with this topic, and it's
+sure of this answer"), *hedging* (the same trust, "less sure of this answer",
+treat it as a starting point), *outside what this duo answers on its own* (it
+passed the question to {owner}), and *a boundary {owner} set* (a refusal —
+the system working as designed, never a fault). Beside an answer it shows
+what it drew on at zero clicks, exactly as far as the words carried it: the
+evidence itself stays on the owner's machine. A passed-on question is
+*waiting on {owner}* until {owner} speaks after it, then *replied* — the
+answer itself is {owner}'s own message, a person's, never the duo's.
+
 ## The verbs
 
 One action, one name, everywhere it appears. If a control and a sentence
@@ -333,7 +348,10 @@ never paraphrased, never "improved":
 - **The passed-on message and the refusal message** the asker page shows
   (`PUBLIC_PASSED_ON_MESSAGE` / `PUBLIC_REFUSAL_MESSAGE`, #43 AC3) —
   deliberately indistinct by underlying reason; a friendlier paraphrase here
-  would reintroduce exactly the signal those fixed strings remove.
+  would reintroduce exactly the signal those fixed strings remove. In a
+  conversation they render in an element of their own (#67), the client's
+  framing ("outside what this duo answers on its own", "a boundary {owner}
+  set") beside them, never instead of them.
 - **The duo attribution** — whose voice a block of text is. The client's
   three phrasings are pinned above and by test; the labelling is structural
   (`DuoMessage`, no avatar, AR-13), not a coat of paint.

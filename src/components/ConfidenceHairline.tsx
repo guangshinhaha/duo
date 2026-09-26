@@ -1,4 +1,5 @@
 import type { DraftPipelineResult } from "../api/types.js";
+import { HEDGE_MARGIN } from "../workspace/duoAnswer.js";
 
 /**
  * The 2px hairline on a draft's leading edge (`client-tech-design.md` Part
@@ -41,7 +42,9 @@ export function hairlineState(result: DraftPipelineResult): HairlineState {
     return result.refused ? "refused" : "escalated";
   }
   const { score, threshold } = result.confidence;
-  if (score < threshold + 0.15) {
+  // The margin is one value with the asker's reading of a duo's answer (#67):
+  // an answer reads the same to its owner and to the colleague who asked.
+  if (score < threshold + HEDGE_MARGIN) {
     return "hedged";
   }
   return "confident";

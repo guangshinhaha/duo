@@ -113,7 +113,8 @@ written to be quoted
 A member's lever is what they send, never what they import. A sent answer carries its text and
 nothing else — provenance, sources and grounding chunks stay local beside the corpus, always
 (org-read §5, #191); the full provenance rail renders for the owner, who is the one whose
-documents it indexes.
+documents it indexes. An asker reads what the words themselves carried — the sources the daemon
+composed into the answer, the evidence's age, and the duo's trust in plain words (#67).
 
 **One exception, per duo, by choice.** A duo's daemon may run on org hardware
 ([`workspace/org-mode-deployment.md`](https://github.com/guangshinhaha/digital-duo/blob/main/docs/workspace/org-mode-deployment.md),
