@@ -1,12 +1,6 @@
-// @ts-expect-error no node types by design
-import { readFileSync } from "node:fs";
-// @ts-expect-error no node types by design
-import { fileURLToPath } from "node:url";
-// @ts-expect-error no node types by design
-import { dirname, join } from "node:path";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { App } from "../src/App.js";
+import { App, NAMED_ROUTES } from "../src/App.js";
 import { NAV_SECTIONS, SETTINGS_SCREEN } from "../src/navSections.js";
 import { connect } from "../src/workspace/matrix.js";
 
@@ -27,8 +21,6 @@ vi.mock("../src/workspace/matrix.js", () => ({
   signIn: vi.fn(),
   connect: vi.fn(),
 }));
-
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const SESSION = {
   homeserverUrl: "https://workspace.example",
@@ -96,8 +88,9 @@ describe("#129 — the map is three sections, every screen in exactly one", () =
   });
 
   it("covers every named route the app has — a new route must be placed, not forgotten", () => {
-    const source = readFileSync(join(root, "src/App.tsx"), "utf8") as string;
-    const routes = [...source.matchAll(/hash === "(#[a-z]+)"/g)].map((match) => match[1]);
+    // The parser and this test read one list, so a route of any spelling
+    // (hyphenated, numeric) is seen here the moment it can be parsed.
+    const routes = NAMED_ROUTES.map((name) => `#${name}`);
     // The first run is the way in, not a place in the map.
     const expected = routes.filter((route) => route !== "#onboarding").sort();
     expect(expected.length).toBeGreaterThan(8);

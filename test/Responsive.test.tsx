@@ -254,9 +254,13 @@ describe("#38 AC3 — §3.1's mobile rules hold", () => {
     const nav = await openMobileNav();
     expect(within(nav).queryByText("More")).toBeNull();
     expect(sectionLinks(nav)).toEqual(desktop);
-    // Long enough to outgrow a short phone, so the panel scrolls inside the screen.
-    expect(nav.className).toMatch(/overflow-y-auto/);
+    // Long enough to outgrow a short phone: the panel is capped to the screen
+    // and only the surfaces list scrolls, so the title and Close stay put.
     expect(nav.className).toMatch(/max-h-/);
+    expect(nav.className).not.toMatch(/overflow-y-auto/);
+    const surfaces = within(nav).getByRole("navigation", { name: "Surfaces" });
+    expect(surfaces.className).toMatch(/overflow-y-auto/);
+    expect(surfaces.className).toMatch(/min-h-0/);
   });
 
   it("no rule-authoring affordance appears on a phone (AR-18) — read, approve, reject, promote stay", async () => {

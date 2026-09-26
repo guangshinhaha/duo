@@ -97,20 +97,31 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * own address within it. The parameterized entries are objects so no
  * string compare can ever confuse them with a named route.
  */
+/**
+ * Every route that is one plain address (`#name`). One list feeds the
+ * `Route` type and `routeFromHash`, and the nav-coverage test reads it too,
+ * so a route added here cannot dodge being placed in a section (#129).
+ */
+export const NAMED_ROUTES = [
+  "review",
+  "conversations",
+  "corrections",
+  "confirmations",
+  "duo",
+  "trust",
+  "audit",
+  "settings",
+  "mirror",
+  "knowledge",
+  "channels",
+  "escalations",
+  "onboarding",
+] as const;
+
+type NamedRoute = (typeof NAMED_ROUTES)[number];
+
 type Route =
-  | "review"
-  | "conversations"
-  | "corrections"
-  | "confirmations"
-  | "duo"
-  | "trust"
-  | "audit"
-  | "settings"
-  | "mirror"
-  | "knowledge"
-  | "channels"
-  | "escalations"
-  | "onboarding"
+  | NamedRoute
   | { draft: string }
   | { room: string; at?: string }
   | { thread: { roomId: string; rootEventId: string; at?: string } };
@@ -155,47 +166,12 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
     }
     return id ? { room: id, ...(at ? { at } : {}) } : "conversations";
   }
-  if (hash === "#conversations") {
-    return "conversations";
-  }
   // #68: Review is a named address too, not only the empty hash's default —
   // with a workspace session the default is Conversations, and the link
   // that says "#review" must still land on the queue.
-  if (hash === "#review") {
-    return "review";
-  }
-  if (hash === "#mirror") {
-    return "mirror";
-  }
-  if (hash === "#knowledge") {
-    return "knowledge";
-  }
-  if (hash === "#channels") {
-    return "channels";
-  }
-  if (hash === "#escalations") {
-    return "escalations";
-  }
-  if (hash === "#onboarding") {
-    return "onboarding";
-  }
-  if (hash === "#corrections") {
-    return "corrections";
-  }
-  if (hash === "#confirmations") {
-    return "confirmations";
-  }
-  if (hash === "#duo") {
-    return "duo";
-  }
-  if (hash === "#trust") {
-    return "trust";
-  }
-  if (hash === "#audit") {
-    return "audit";
-  }
-  if (hash === "#settings") {
-    return "settings";
+  const named = NAMED_ROUTES.find((name) => hash === `#${name}`);
+  if (named) {
+    return named;
   }
   return fallback;
 }
@@ -541,11 +517,10 @@ function TopBarConfirmations({ api }: { api: DuoApiConfig }) {
 /**
  * #38: the folded navigation — §1.5's "phone-width folds the same map, it
  * does not replace it". No tab bar, no second product: the same surfaces
- * nav, arranged for the width, with §3.1's one mobile-only rule applied —
- * Trust and Audit, the rare globals, share one "More" section instead of
- * two top-level entries. The dialog primitive (#34) supplies the focus
- * trap, Escape, and the scrim; every entry is still a real anchor, and
- * following one dismisses the overlay on the way through.
+ * nav, arranged for the width. It renders the same three sections as the
+ * sidebar (#129), so the two cannot disagree. The dialog primitive (#34)
+ * supplies the focus trap, Escape, and the scrim; every entry is still a
+ * real anchor, and following one dismisses the overlay on the way through.
  *
  * #62: `api` is nullable now — a member signed in to the workspace with no
  * paired duo folds the member's map (Conversations, Settings, and the
@@ -572,8 +547,8 @@ function MobileNav({
   const close = () => onOpenChange(false);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* #129: three sections outgrow a short phone — the panel scrolls inside the screen rather than running off it. */}
-      <DialogContent className="max-h-[calc(100dvh-3rem)] max-w-sm overflow-y-auto" data-testid="mobile-nav">
+      {/* #129: three sections outgrow a short phone — the panel is capped to the screen and only the nav scrolls, so the title and its Close button stay in view. */}
+      <DialogContent className="max-h-[calc(100dvh-3rem)] max-w-sm" data-testid="mobile-nav">
         <div className="flex items-center justify-between gap-2">
           <DialogTitle className="type-heading">Duo</DialogTitle>
           {/* The phone's dismissal: Escape is a keyboard's gesture, and a
@@ -592,7 +567,7 @@ function MobileNav({
             title stays "Duo" (the dialog's name); whose duos these are is
             the roster's half to say. */}
         {api ? <DuoRoster api={api} /> : <NoDuoPanel onPairDuo={onPairDuo} condensed />}
-        <nav aria-label="Surfaces" className="flex flex-col gap-1">
+        <nav aria-label="Surfaces" className="flex min-h-0 flex-col gap-1 overflow-y-auto">
           <NavSections api={api} session={session} route={route} onNavigate={close} />
           {api && (
             <button
