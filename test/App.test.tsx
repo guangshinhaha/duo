@@ -112,7 +112,7 @@ describe("App — the query cache never leaks across a reconnect to a different 
     fireEvent.change(screen.getByRole("textbox", { name: /token/i }), { target: { value: "tok-a" } });
     fireEvent.click(screen.getByText("Connect"));
 
-    await waitFor(() => expect(screen.getByText("question from A's daemon")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/question from A's daemon/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("Forget this device"));
     fireEvent.change(screen.getByPlaceholderText("100.64.1.5:7717"), { target: { value: "daemon-b:7717" } });
@@ -122,11 +122,11 @@ describe("App — the query cache never leaks across a reconnect to a different 
     // Daemon A's question must not still be showing while daemon B's
     // request hasn't resolved yet — that would mean the cache carried A's
     // data across the reconnect.
-    expect(screen.queryByText("question from A's daemon")).toBeNull();
+    expect(screen.queryByText(/question from A's daemon/)).toBeNull();
 
     resolveB(new Response(JSON.stringify([draftFor("B")]), { status: 200 }));
-    await waitFor(() => expect(screen.getByText("question from B's daemon")).toBeInTheDocument());
-    expect(screen.queryByText("question from A's daemon")).toBeNull();
+    await waitFor(() => expect(screen.getByText(/question from B's daemon/)).toBeInTheDocument());
+    expect(screen.queryByText(/question from A's daemon/)).toBeNull();
   });
 });
 
@@ -276,18 +276,18 @@ describe("App — hash routing between the surfaces", () => {
 
     window.location.hash = "#waiting";
     render(<App />);
-    await waitFor(() => expect(screen.getByText("question from A's daemon")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/question from A's daemon/)).toBeInTheDocument());
 
     // Open from the keyboard, over the open screen.
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     await waitFor(() => expect(screen.getByTestId("search-overlay")).toBeInTheDocument());
     // Over, not instead of: the route underneath never unmounted.
-    expect(screen.getByText("question from A's daemon")).toBeInTheDocument();
+    expect(screen.getByText(/question from A's daemon/)).toBeInTheDocument();
 
     // Close from the keyboard: the same screen, the same state.
     fireEvent.keyDown(screen.getByPlaceholderText(/search what your duo knows/i), { key: "Escape" });
     await waitFor(() => expect(screen.queryByTestId("search-overlay")).toBeNull());
-    expect(screen.getByText("question from A's daemon")).toBeInTheDocument();
+    expect(screen.getByText(/question from A's daemon/)).toBeInTheDocument();
 
     // Ctrl+K is the same gesture on the other platform.
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
@@ -376,7 +376,7 @@ describe("App — hash routing between the surfaces", () => {
     // The drafts queue loads first so a query actually runs and
     // the persister has something to write — the drafts are the data this
     // test watches leave, so without this the cache-removal below proves nothing.
-    await waitFor(() => expect(screen.getByText("question from A's daemon")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/question from A's daemon/)).toBeInTheDocument());
     await waitFor(() => expect(localStorage.getItem("duo-cache")).toContain("question from A's daemon"), { timeout: 3000 });
 
     window.location.hash = "#settings";

@@ -142,17 +142,98 @@ describe("#141 — the keyboard walks the list", () => {
   });
 });
 
-describe("#141 — the filter is one number", () => {
-  it("shows Waiting on you with the count of drafts and confirmations together, and the active one lit", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) =>
-        new Response(String(input).includes("/actions/t4/pending") ? JSON.stringify([{}]) : JSON.stringify([{}, {}]), { status: 200 }),
-      ),
-    );
-    renderList({}, "waiting");
+const draftAt = (id: string, createdAt: string, over: Record<string, unknown> = {}) => ({
+  id,
+  question: `question ${id}`,
+  threadContext: null,
+  draftText: `answer ${id}`,
+  escalated: false,
+  escalationReason: null,
+  confidenceScore: 0.8,
+  sources: [],
+  createdAt,
+  outcome: null,
+  outcomeRecordedAt: null,
+  sentText: null,
+  refused: false,
+  escalationThreshold: 0.55,
+  provenance: { origin: "unknown" },
+  delivery: null,
+  ...over,
+});
+
+function stubQueues(drafts: unknown[], confirmations: unknown[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) =>
+      new Response(JSON.stringify(String(input).includes("/actions/t4/pending") ? confirmations : drafts), { status: 200 }),
+    ),
+  );
+}
+
+describe("#143 — Waiting on you is a count and a filter", () => {
+  it("counts drafts and confirmations together, and the chip is lit while the filter is on", async () => {
+    stubQueues([draftAt("a", "2026-01-01T00:00:00Z"), draftAt("b", "2026-01-02T00:00:00Z")], [{ id: "t", createdAt: "2026-01-03T00:00:00Z" }]);
+    renderList({ filterWaiting: true }, "waiting");
     expect(await screen.findByTestId("waiting-badge")).toHaveTextContent("3");
     expect(screen.getByTestId("waiting-chip")).toHaveAttribute("aria-current", "page");
-    await waitFor(() => expect(screen.getByTestId("duo-row-count")).toHaveTextContent("3"));
+    expect(screen.getByTestId("all-chip")).not.toHaveAttribute("aria-current");
+  });
+
+  it("lists only what waits, oldest first — a draft's own row, then the confirmations", async () => {
+    stubQueues([draftAt("late", "2026-01-05T00:00:00Z"), draftAt("early", "2026-01-01T00:00:00Z")], [{ id: "t", createdAt: "2026-01-03T00:00:00Z" }]);
+    renderList({ filterWaiting: true }, "waiting");
+    const rows = await screen.findAllByTestId("waiting-link");
+    expect(rows.map((row) => row.getAttribute("href"))).toEqual(["#draft/early", "#confirmations", "#draft/late"]);
+    expect(within(rows[1]!).getByTestId("waiting-title")).toHaveTextContent("Confirmations");
+    // Not the whole list: your duo is not pinned above a filter that is about what waits.
+    expect(screen.queryByTestId("duo-link")).toBeNull();
+  });
+
+  it("an answer you asked your duo for waits in Your duo, and the row says so with the hairline's colour", async () => {
+    stubQueues([draftAt("mine", "2026-01-01T00:00:00Z", { provenance: { origin: "owner" }, confidenceScore: 0.6 })], []);
+    renderList({ filterWaiting: true }, "waiting");
+    const row = await screen.findByTestId("waiting-link");
+    expect(row).toHaveAttribute("href", "#duo");
+    expect(within(row).getByTestId("waiting-title")).toHaveTextContent("Your duo");
+    expect(within(row).getByTestId("waiting-preview")).toHaveTextContent("Draft · hedging");
+    expect(within(row).getByTestId("draft-line")).toBeInTheDocument();
+    expect(within(row).getByTestId("chat-avatar")).toHaveAttribute("data-kind", "duo");
+  });
+
+  it("says so when nothing waits — in the list only when the list is the whole page", async () => {
+    stubQueues([], []);
+    renderList({ filterWaiting: true }, "waiting");
+    expect(await screen.findByTestId("waiting-empty")).toHaveTextContent("You're clear.");
+    cleanup();
+    renderList({ filterWaiting: true, titleAs: "h1" }, "waiting");
+    expect(await screen.findByTestId("waiting-empty")).toHaveTextContent("Nothing waiting on you.");
+  });
+
+  it("J and K walk only the waiting rows while the filter is on", async () => {
+    stubQueues([draftAt("a", "2026-01-01T00:00:00Z"), draftAt("b", "2026-01-02T00:00:00Z")], []);
+    renderList({ filterWaiting: true }, "waiting");
+    await screen.findAllByTestId("waiting-link");
+    window.location.hash = "#waiting";
+    fireEvent.keyDown(window, { key: "j" });
+    expect(window.location.hash).toBe("#draft/a");
+    window.location.hash = "#draft/a";
+    fireEvent.keyDown(window, { key: "j" });
+    expect(window.location.hash).toBe("#draft/b");
+    fireEvent.keyDown(window, { key: "j" });
+    expect(window.location.hash).toBe("#draft/a");
+  });
+
+  it("a draft for a conversation you hold puts its state on that room's row in the full list, with its count", async () => {
+    const roomId = "!p:w";
+    const permalink = `https://matrix.to/#/${roomId}/$e?via=w`;
+    stubQueues(
+      [draftAt("d", "2026-01-01T00:00:00Z", { provenance: { origin: "channel", channelKind: "native", askerRef: "@b:w", threadId: null, permalink } })],
+      [],
+    );
+    renderList({ connection: connectionWith([room(roomId, { name: "project-x", kind: "group" })]), session: {} as never });
+    const link = await screen.findByTestId("conversations-room");
+    await waitFor(() => expect(within(link).getByTestId("room-preview")).toHaveTextContent("Draft ready"));
+    expect(within(link).getByTestId("waiting-count")).toHaveTextContent("1");
   });
 });

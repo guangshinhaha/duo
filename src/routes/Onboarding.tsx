@@ -16,9 +16,7 @@ import { MeterBar } from "../components/MeterBar.js";
 import { MutationError } from "../components/MutationError.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
-import type { WorkspaceConnection } from "../workspace/matrix.js";
 import { isDuoKnowledgeShape } from "./Knowledge.js";
-import { Review } from "./Review.js";
 
 /**
  * How often the flow re-asks the daemon while something is in motion —
@@ -475,25 +473,13 @@ export function Onboarding({ api, onFinish, pollMs = POLL_MS }: { api: DuoApiCon
 }
 
 /**
- * The default surface's door to onboarding (#49): Review, unless the
- * daemon says this duo is empty — then the address moves to `#onboarding`,
- * where the first run lives. A duo already built in a terminal is never
- * empty by the daemon's own facts, so it opens on Review exactly as
- * before. Review renders while the read is in flight and for any payload
- * that is not the daemon's documented shape: only a definite "empty" ever
- * redirects.
- */
-export function ReviewOrFirstRun({ api, connection = null }: { api: DuoApiConfig; connection?: WorkspaceConnection | null }) {
-  useFirstRunRedirect(api);
-  return <Review api={api} connection={connection} />;
-}
-
-/**
- * The redirect half of `ReviewOrFirstRun`, callable from anywhere that is a
- * default surface: when the daemon says this duo is empty, the address moves
- * to `#onboarding`. The chat-first shell mounts it for the chat list (the
- * new default), so a brand-new duo's first screen is still its first run.
- * Only a definite "empty" ever redirects.
+ * The default surface's door to onboarding (#49): when the daemon says this
+ * duo is empty, the address moves to `#onboarding`, where the first run
+ * lives. A duo already built in a terminal is never empty by the daemon's own
+ * facts, so it opens on its chats exactly as before. The chat-first shell
+ * mounts this for the chat list and the waiting list, so a brand-new duo's
+ * first screen is its first run. It redirects only on a definite "empty": a
+ * payload that is not the daemon's documented shape is not an empty duo.
  */
 export function useFirstRunRedirect(api: DuoApiConfig): void {
   const knowledge = useKnowledge(api);

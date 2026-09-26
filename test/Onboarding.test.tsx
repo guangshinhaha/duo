@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { App } from "../src/App.js";
 import { Setup } from "../src/routes/Setup.js";
-import { Onboarding, ReviewOrFirstRun } from "../src/routes/Onboarding.js";
+import { Onboarding, useFirstRunRedirect } from "../src/routes/Onboarding.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { ClaudeImportSummary, DeriveJobStatus, DuoKnowledge, EmbedJobStatus, PasteImportSummary, Rule, RuleReviewListing } from "../src/api/types.js";
 
@@ -488,8 +488,8 @@ describe("#49 AC4 — a duo built in a terminal never sees onboarding", () => {
     const daemon = fakeDaemon({ knowledge: existingDuo, embedGet: () => idle });
     await launch("#waiting");
 
-    await screen.findByTestId("review-empty-knowledge");
-    await waitFor(() => expect(screen.getByTestId("review-empty-knowledge")).toHaveTextContent(/312 records/));
+    await screen.findByTestId("waiting-home-knowledge");
+    await waitFor(() => expect(screen.getByTestId("waiting-home-knowledge")).toHaveTextContent(/312 records/));
     expect(daemon.count("GET", "/knowledge")).toBeGreaterThan(0);
     expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
     expect(window.location.hash).toBe("#waiting");
@@ -503,15 +503,19 @@ describe("#49 AC4 — a duo built in a terminal never sees onboarding", () => {
     expect(window.location.hash).toBe("#onboarding");
   });
 
-  it("a payload that is not the daemon's documented shape is not 'an empty duo' — Review stays", async () => {
+  it("a payload that is not the daemon's documented shape is not 'an empty duo' — the chats stay", async () => {
     // The cache is a storage layer, not a promise (Knowledge's own law):
     // an array where the object should be must never launch a first run.
     // Rendered on its own client: the app's module-level cache would carry
     // an earlier test's knowledge in, which is a different question.
     fakeDaemon({ knowledge: () => [] as unknown as DuoKnowledge, embedGet: () => idle });
-    renderWithClient(<ReviewOrFirstRun api={api} />);
+    function FirstRunProbe() {
+      useFirstRunRedirect(api);
+      return <p data-testid="probe">the surface</p>;
+    }
+    renderWithClient(<FirstRunProbe />);
 
-    await screen.findByTestId("review-empty");
+    await screen.findByTestId("probe");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
     expect(window.location.hash).toBe("");

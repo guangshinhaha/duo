@@ -114,10 +114,12 @@ export function useDuos(api: DuoApiConfig, options?: Partial<UseQueryOptions<Duo
   return useQuery({ queryKey: queryKeys.duos, queryFn: () => apiRequest<DuoSummary[]>(api, "/duos"), ...options });
 }
 
-export function usePendingDrafts(api: DuoApiConfig) {
+/** `null` (a member with no duo paired) reads nothing: the query stays idle, and its data is `undefined`. */
+export function usePendingDrafts(api: DuoApiConfig | null) {
   return useQuery({
     queryKey: queryKeys.drafts({ outcome: "pending" }),
-    queryFn: () => apiRequest<DraftRecord[]>(api, "/drafts?outcome=pending"),
+    queryFn: () => apiRequest<DraftRecord[]>(api!, "/drafts?outcome=pending"),
+    enabled: api !== null,
   });
 }
 
@@ -504,12 +506,13 @@ export const T4_POLL_MS = 30_000;
  * background, because the notification this feeds is for the owner who is
  * not looking at the window.
  */
-export function usePendingT4(api: DuoApiConfig) {
+export function usePendingT4(api: DuoApiConfig | null) {
   return useQuery({
     queryKey: queryKeys.t4Pending,
-    queryFn: () => apiRequest<PendingT4RequestForJudgement[]>(api, "/actions/t4/pending"),
+    queryFn: () => apiRequest<PendingT4RequestForJudgement[]>(api!, "/actions/t4/pending"),
     refetchInterval: T4_POLL_MS,
     refetchIntervalInBackground: true,
+    enabled: api !== null,
   });
 }
 

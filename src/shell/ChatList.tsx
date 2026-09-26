@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Settings as SettingsIcon, SquarePen } from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
-import { usePendingDrafts, usePendingT4 } from "../api/queries.js";
+import { usePendingT4 } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
 import { ConversationSearch } from "../components/ConversationSearch.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
@@ -18,18 +18,8 @@ import { roomHref } from "../workspace/links.js";
 import type { NotificationMode, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
 import type { Route } from "./routes.js";
 import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
-
-/**
- * What is waiting on the owner: drafts they haven't decided (a passed-on
- * question is a draft too) plus actions staged for their explicit yes. One
- * number, from the two queries the app already polls — the chip, the dock and
- * the menu bar all read it from here, so they cannot disagree.
- */
-export function useWaitingCount(api: DuoApiConfig): number {
-  const drafts = usePendingDrafts(api);
-  const confirmations = usePendingT4(api);
-  return (drafts.data?.length ?? 0) + (confirmations.data?.length ?? 0);
-}
+import { useWaitingItems, waitingWords, type WaitingItem } from "./waiting.js";
+import type { HairlineState } from "../components/ConfidenceHairline.js";
 
 function initialsOf(title: string): string {
   const words = title.split(/[\s,]+/).filter(Boolean);
@@ -113,6 +103,20 @@ function Row({
   );
 }
 
+/** The 2px line that says how sure the draft behind a row is — the hairline, in the list. */
+function DraftLine({ state }: { state: HairlineState | null }) {
+  const colour =
+    state === "confident" ? "var(--confident)" : state === "refused" ? "var(--refused)" : state === null ? "var(--accent)" : "var(--escalate)";
+  return (
+    <span
+      aria-hidden="true"
+      className="mr-2 inline-block align-middle"
+      data-testid="draft-line"
+      style={{ width: 2, height: 12, background: colour, opacity: state === "hedged" ? 0.45 : 1 }}
+    />
+  );
+}
+
 function CountPill({ n, label, testId, prefix = "" }: { n: number; label: string; testId: string; prefix?: string }) {
   return (
     <span
@@ -150,7 +154,10 @@ export function ChatList({
   onSignOutWorkspace,
   footer,
   titleAs: Title = "h2",
+  filterWaiting = false,
 }: {
+  /** The "Waiting on you" filter is on: the list is the chats (and other places) holding a decision, oldest first. */
+  filterWaiting?: boolean;
   /** The list's heading level: h1 when it is the whole page (a phone's home screen), h2 beside an open surface. */
   titleAs?: "h1" | "h2";
   api: DuoApiConfig | null;
@@ -226,11 +233,17 @@ export function ChatList({
       });
   };
 
+  const waiting = useWaitingItems(api, connection);
+  const waitingByRoom = useMemo(() => new Map(waiting.items.filter((item) => item.roomId !== null).map((item) => [item.roomId!, item])), [waiting.items]);
+  const duoWaiting = waiting.items.find((item) => item.kind === "duo") ?? null;
   const roomRows = rooms.data ?? [];
   const activeRoom = typeof route === "object" && "chat" in route ? route.chat : typeof route === "object" && "thread" in route ? route.thread.roomId : null;
 
   // The addresses in list order — what J/K and ⌘1–9 walk.
-  const hrefs = useMemo(() => [...(api ? ["#duo"] : []), ...roomRows.map((room) => roomHref(room.roomId))], [api, roomRows]);
+  const hrefs = useMemo(
+    () => (filterWaiting ? waiting.items.map((item) => item.href) : [...(api ? ["#duo"] : []), ...roomRows.map((room) => roomHref(room.roomId))]),
+    [api, roomRows, filterWaiting, waiting.items],
+  );
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       // A key event can target the window or document, which have no `closest`.
@@ -266,6 +279,94 @@ export function ChatList({
   }, [hrefs]);
 
   const duoActive = route === "duo" || (typeof route === "object" && "profile" in route);
+
+  const roomsById = new Map(roomRows.map((room) => [room.roomId, room]));
+  const activeDraft = typeof route === "object" && "draft" in route ? route.draft : null;
+  const renderWaiting = (): ReactNode => {
+    // Beside an open pane, its headline says "Nothing waiting on you."; the list only says it when it is the whole page.
+    const nothing = Title === "h1" ? "Nothing waiting on you." : "You're clear.";
+    if (!api) {
+      return (
+        <p className="p-4 type-body text-[var(--muted)]" data-testid="waiting-empty">
+          {nothing}
+        </p>
+      );
+    }
+    if (waiting.isLoading) {
+      return <RouteLoading variant="rows" />;
+    }
+    if (waiting.error) {
+      return (
+        <div className="p-4">
+          <p className="type-body text-[var(--escalate)]">Couldn&apos;t read what is waiting on you — try again.</p>
+          <button
+            className="mt-3 inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body"
+            onClick={waiting.refetch}
+            type="button"
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+    if (waiting.items.length === 0) {
+      return (
+        <p className="p-4 type-body text-[var(--muted)]" data-testid="waiting-empty">
+          {nothing}
+        </p>
+      );
+    }
+    return (
+      <div className="mt-1 flex flex-col gap-1" data-testid="waiting-list">
+        {waiting.items.map((item) => {
+          const room = item.roomId !== null ? roomsById.get(item.roomId) : undefined;
+          const sole = room ? soleDuoLabel(room) : null;
+          const title =
+            item.kind === "chat"
+              ? (sole ?? (room ? roomTitle(room) : "Conversation"))
+              : item.kind === "duo"
+                ? "Your duo"
+                : item.kind === "confirmations"
+                  ? "Confirmations"
+                  : (item.label ?? "Unknown origin");
+          const kind: "duo" | "person" | "group" =
+            item.kind === "duo" || item.kind === "confirmations" || sole ? "duo" : room && room.name !== null ? "group" : "person";
+          const isActive =
+            item.kind === "chat"
+              ? activeRoom === item.roomId
+              : item.kind === "duo"
+                ? duoActive
+                : item.kind === "confirmations"
+                  ? route === "confirmations"
+                  : activeDraft === item.key;
+          return (
+            <Row
+              active={isActive}
+              avatar={<Avatar kind={kind} title={title} />}
+              href={item.href}
+              ids={{ entry: "waiting-entry", link: "waiting-link", title: "waiting-title" }}
+              key={`${item.kind}:${item.key}`}
+              meta={
+                <>
+                  <Timestamp iso={item.oldestAt} />
+                  <CountPill label={`${item.count} waiting on you`} n={item.count} testId="waiting-count" />
+                </>
+              }
+              preview={
+                <>
+                  <DraftLine state={item.state} />
+                  {waitingWords(item)}
+                  {item.question ? ` · ${item.question}` : ""}
+                </>
+              }
+              previewTestId="waiting-preview"
+              title={title}
+            />
+          );
+        })}
+      </div>
+    );
+  };
 
   const renderRooms = (): ReactNode => {
     if (workspaceError !== null) {
@@ -358,6 +459,9 @@ export function ChatList({
                     <>
                       {room.latest && <Timestamp iso={new Date(room.latest.at).toISOString()} />}
                       <span className="flex items-center gap-1">
+                        {waitingByRoom.get(room.roomId) && (
+                          <CountPill label={`${waitingByRoom.get(room.roomId)!.count} waiting on you`} n={waitingByRoom.get(room.roomId)!.count} testId="waiting-count" />
+                        )}
                         {room.unread.mentions > 0 && <CountPill label={`${room.unread.mentions} mentions`} n={room.unread.mentions} prefix="@ " testId="room-mentions" />}
                         {room.unread.notifications > 0 && (
                           <span
@@ -383,7 +487,18 @@ export function ChatList({
                       <Ellipsis aria-label={`More for ${title}`} size={16} />
                     </button>
                   }
-                  preview={room.latest ? plainPreview(room.latest.body) : "No messages yet."}
+                  preview={
+                    waitingByRoom.get(room.roomId) ? (
+                      <>
+                        <DraftLine state={waitingByRoom.get(room.roomId)!.state} />
+                        {waitingWords(waitingByRoom.get(room.roomId)!)}
+                      </>
+                    ) : room.latest ? (
+                      plainPreview(room.latest.body)
+                    ) : (
+                      "No messages yet."
+                    )
+                  }
                   previewTestId="room-preview"
                   title={title}
                 >
@@ -450,13 +565,14 @@ export function ChatList({
       </div>
       <div className="flex flex-wrap items-center gap-2 px-4 pb-2" role="group" aria-label="Filter chats">
         <a
-          aria-current={route !== "waiting" ? "page" : undefined}
-          className={`inline-flex min-h-8 items-center rounded-full border border-[var(--edge)] px-3 type-provenance ${route !== "waiting" ? "bg-[var(--surface-2)] text-[var(--text)]" : "text-[var(--muted)]"}`}
+          aria-current={route === "chats" ? "page" : undefined}
+          className={`inline-flex min-h-8 items-center rounded-full border border-[var(--edge)] px-3 type-provenance ${!filterWaiting ? "bg-[var(--surface-2)] text-[var(--text)]" : "text-[var(--muted)]"}`}
+          data-testid="all-chip"
           href="#chats"
         >
           All
         </a>
-        {api && <WaitingChip api={api} active={route === "waiting"} />}
+        {api && <WaitingChip active={filterWaiting} count={waiting.count} current={route === "waiting"} />}
         {api && <ConfirmationsChip api={api} active={route === "confirmations"} />}
       </div>
       <nav aria-label="Chats" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -465,15 +581,21 @@ export function ChatList({
             {actionError}
           </p>
         )}
-        {api ? (
-          <>
-            <DuoRow api={api} active={duoActive} />
-            <div className="mx-2 my-1 h-px bg-[var(--edge)]" />
-          </>
+        {filterWaiting ? (
+          renderWaiting()
         ) : (
-          <NoDuoPanel condensed onPairDuo={onPairDuo} />
+          <>
+            {api ? (
+              <>
+                <DuoRow active={duoActive} waiting={duoWaiting} />
+                <div className="mx-2 my-1 h-px bg-[var(--edge)]" />
+              </>
+            ) : (
+              <NoDuoPanel condensed onPairDuo={onPairDuo} />
+            )}
+            {renderRooms()}
+          </>
         )}
-        {renderRooms()}
       </nav>
       {footer && <div className="flex flex-wrap items-center gap-x-4 border-t border-[var(--edge)] px-4 py-2">{footer}</div>}
       {newOpen && connection && (
@@ -527,12 +649,11 @@ export function ChatList({
   );
 }
 
-/** The "Waiting on you" filter and its count — the count is the one number the dock and menu bar mirror too. */
-function WaitingChip({ api, active }: { api: DuoApiConfig; active: boolean }) {
-  const count = useWaitingCount(api);
+/** The "Waiting on you" filter and its count — the count is the one number the dock, the menu bar and the window title mirror too. */
+function WaitingChip({ active, current, count }: { active: boolean; current: boolean; count: number }) {
   return (
     <a
-      aria-current={active ? "page" : undefined}
+      aria-current={current ? "page" : undefined}
       className={`inline-flex min-h-8 items-center gap-2 rounded-full border border-[var(--edge)] px-3 type-provenance ${active ? "bg-[var(--surface-2)] text-[var(--text)]" : "text-[var(--muted)]"}`}
       data-testid="waiting-chip"
       href="#waiting"
@@ -576,8 +697,8 @@ function ConfirmationsChip({ api, active }: { api: DuoApiConfig; active: boolean
 }
 
 /** Your duo — pinned first, always there, and the only row that is not a person or a colleague's duo. */
-function DuoRow({ api, active }: { api: DuoApiConfig; active: boolean }) {
-  const count = useWaitingCount(api);
+function DuoRow({ waiting, active }: { waiting: WaitingItem | null; active: boolean }) {
+  const count = waiting?.count ?? 0;
   return (
     <Row
       active={active}
@@ -585,7 +706,7 @@ function DuoRow({ api, active }: { api: DuoApiConfig; active: boolean }) {
       href="#duo"
       ids={{ entry: "duo-entry", link: "duo-link", title: "duo-title" }}
       meta={count > 0 ? <CountPill label={`${count} waiting on you`} n={count} testId="duo-row-count" /> : null}
-      preview={count > 0 ? `${count} waiting on you` : "Ask your duo anything"}
+      preview={waiting ? <><DraftLine state={waiting.state} />{waitingWords(waiting)}</> : "Ask your duo anything"}
       previewTestId="duo-row-preview"
       title="Your duo"
     />

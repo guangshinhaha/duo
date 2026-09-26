@@ -8,7 +8,8 @@ import { useFirstRunRedirect } from "../routes/Onboarding.js";
 import { setDockBadgeCount } from "../dockBadge.js";
 import { setTrayPendingCount } from "../tray.js";
 import type { WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
-import { ChatList, useWaitingCount } from "./ChatList.js";
+import { ChatList } from "./ChatList.js";
+import { useWaitingCount } from "./waiting.js";
 import { DESKTOP_QUERY, useMediaQuery } from "./useMediaQuery.js";
 import type { Route } from "./routes.js";
 
@@ -22,12 +23,49 @@ function WaitingMirror({ api }: { api: DuoApiConfig }) {
   useEffect(() => {
     void setDockBadgeCount(count);
     void setTrayPendingCount(count);
+    // The window title carries it too — the same number, where a background tab or the app switcher shows it.
+    document.title = count > 0 ? `(${count}) Duo` : "Duo";
     return () => {
       void setDockBadgeCount(0);
       void setTrayPendingCount(0);
+      document.title = "Duo";
     };
   }, [count]);
   return null;
+}
+
+const FILTER_KEY = "duo.waiting-filter";
+
+/**
+ * Whether the list is filtered to "Waiting on you". The `#waiting` address
+ * turns it on, `#chats` (All) turns it off, and it stays on while the owner
+ * works down the list — opening a chat, deciding its draft, moving to the
+ * next — so the filter is a mode of the list, not a page you leave. It lives
+ * in this tab's session only.
+ */
+function useWaitingFilter(route: Route): boolean {
+  useEffect(() => {
+    try {
+      if (route === "waiting") {
+        sessionStorage.setItem(FILTER_KEY, "1");
+      } else if (route === "chats") {
+        sessionStorage.removeItem(FILTER_KEY);
+      }
+    } catch {
+      // no storage: the filter simply follows the address
+    }
+  }, [route]);
+  if (route === "waiting") {
+    return true;
+  }
+  if (route === "chats") {
+    return false;
+  }
+  try {
+    return sessionStorage.getItem(FILTER_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 /** A brand-new duo opens on its first run, not an empty list. */
@@ -95,7 +133,9 @@ export function ChatShell({
   footer?: ReactNode;
 }) {
   const desktop = useMediaQuery(DESKTOP_QUERY);
-  const atHome = route === "chats";
+  // Home is the list: the chat list itself, or that list filtered to what waits on the owner.
+  const atHome = route === "chats" || route === "waiting";
+  const filterWaiting = useWaitingFilter(route);
   const showList = desktop || atHome;
   const showPane = desktop || !atHome;
   // The page has exactly one main landmark: the open surface — or, on a
@@ -117,6 +157,7 @@ export function ChatShell({
             <ChatList
               api={api}
               connection={connection}
+              filterWaiting={filterWaiting}
               footer={footer}
               onPairDuo={onPairDuo}
               onSignIn={onSignIn}
@@ -144,7 +185,7 @@ export function ChatShell({
               </header>
             )}
             <main className="min-h-0 flex-1 overflow-y-auto" data-testid="pane">
-              {atHome ? <EmptyPane hasDuo={api !== null} /> : pane}
+              {route === "chats" ? <EmptyPane hasDuo={api !== null} /> : pane}
             </main>
           </div>
         )}

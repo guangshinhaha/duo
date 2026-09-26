@@ -301,12 +301,20 @@ export function Settings({
             <dd>Search what your duo knows.</dd>
           </div>
           <div className="flex gap-2">
-            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">↑ ↓</dt>
-            <dd>Move through the Review queue, entry by entry.</dd>
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">J K</dt>
+            <dd>Move to the next or previous chat — in Waiting on you, to the next one waiting.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">⌘ 1–9</dt>
+            <dd>Open the first nine chats, your duo first.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">⏎ E X</dt>
+            <dd>On your duo's draft: send it, edit it, dismiss it.</dd>
           </div>
           <div className="flex gap-2">
             <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">Tab</dt>
-            <dd>Reach the focused entry's actions.</dd>
+            <dd>Reach a draft's actions.</dd>
           </div>
           <div className="flex gap-2">
             <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">Esc</dt>
