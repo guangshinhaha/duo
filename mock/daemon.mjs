@@ -71,6 +71,8 @@ const isUrgent = (draft) => /\b(is down|outage|breach)\b/i.test(`${draft.questio
 
 function seedState() {
   const state = {
+    // #55: flips on a confirmed POST /lifecycle/end — see the auth guard.
+    ended: false,
     drafts: [
       escalatedSeed("e-1", PAY_FIX, PAY_FIX_REASON, 60 * 24 * 9, 0.47),
       escalatedSeed("e-3", "Which vendor do we use for payroll audits?", "Nothing in your records answers this.", 60 * 24 * 8, 0.31),
@@ -534,6 +536,14 @@ export function createMockDaemon({ empty = false, embedTickMs = 400 } = {}) {
       send(fail(401, "unauthorized", "Missing or empty bearer token."));
       return;
     }
+    // #55 (digital-duo #181): after a confirmed end every token is dead —
+    // the store that held them is gone — so every authenticated request is
+    // the same clean 401 a revoked device gets. Only /health (above) still
+    // answers, like the real daemon process still running with no store.
+    if (state.ended) {
+      send(fail(401, "unauthorized", "Token is not recognised."));
+      return;
+    }
 
     const readBody = async () => {
       const chunks = [];
@@ -953,6 +963,53 @@ export function createMockDaemon({ empty = false, embedTickMs = 400 } = {}) {
           }
           state.rules[action === "reject" ? "rejected" : "approved"].push(found);
           return ok(found);
+        },
+      ],
+      // #55: digital-duo #181's lifecycle routes. GET is the record plus
+      // every transfer's state (none seeded — handover is out of scope for
+      // the client). POST /lifecycle/end has the real route's two
+      // protections: it names who decided it (`decidedBy`, non-empty), and
+      // it only DESCRIBES what would go until `confirmed === true` — the
+      // same EndDuoResult shape either way, `confirmed` saying which
+      // happened. Confirmed, it "deletes" (the flag the auth guard reads).
+      [
+        "GET",
+        /^\/lifecycle$/,
+        () =>
+          ok({
+            lifecycle: {
+              status: "active",
+              archivedBy: null,
+              archivedAt: null,
+              orphanedBy: null,
+              orphanedAt: null,
+              orphanReason: null,
+              transferredFrom: null,
+              transferredTo: null,
+              transferredAt: null,
+            },
+            transfers: [],
+          }),
+      ],
+      [
+        "POST",
+        /^\/lifecycle\/end$/,
+        (_m, body) => {
+          const { decidedBy, confirmed } = body ?? {};
+          if (typeof decidedBy !== "string" || decidedBy.trim().length === 0) {
+            return fail(400, "bad_request", "Ending a duo requires naming who decided it (decidedBy, a non-empty string).");
+          }
+          const result = {
+            confirmed: confirmed === true,
+            storeDataDir: "/Users/mock/.duo/data",
+            storePaths: ["duo.db", "embeddings.bin", "passphrase"],
+            duoDir: "/Users/mock/duo",
+            duoDirPaths: ["voice.md", "refusals.md", "lifecycle.json", "rules/r-3.md"],
+          };
+          if (result.confirmed) {
+            state.ended = true;
+          }
+          return ok(result);
         },
       ],
       [

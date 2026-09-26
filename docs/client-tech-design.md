@@ -130,7 +130,7 @@ domain types.
 | `POST` | `/actions/t4/:id/confirm` | `PendingT4Request` — confirming is this route and only this route; the confirming device's id rides the attempt (#180) | `actions/t4-guard` |
 | `GET` | `/actions/attempts` | `ActionAttemptEntry[]` — every attempt, refused or resolved (#180) | `actions/attempt-log` |
 | `GET` | `/lifecycle` | `{ lifecycle, transfers }` — the lifecycle record plus every transfer's state (#181) | `continuity/lifecycle`, `continuity/transfer` |
-| `POST` | `/lifecycle/end` | `EndDuoResult` — describes what would go until `confirmed: true` (#181) | `continuity/lifecycle` |
+| `POST` | `/lifecycle/end` | `EndDuoResult` — describes what would go until `confirmed: true`; a confirmed end drops every token, so each device's next request is a 401 (#181; the client's kill switch is Settings' "End this duo", #55 — see *Ending the duo* below) | `continuity/lifecycle` |
 | `POST` | `/corpus/import-paste` | `PasteImportSummary` — the transcript text in the body, down `duo import paste`'s own path (#176) | `ingest/paste-import` |
 | `POST` | `/corpus/embed` | `EmbedJobStatus` — 202 (starts the one job); 409 `embed_already_running` (#176) | `serve/embed-job` |
 | `GET` | `/corpus/embed` | `EmbedJobStatus` — the running job's progress (#176) | `serve/embed-job` |
@@ -140,6 +140,35 @@ domain types.
 | `GET` | `/escalations/rate` | `EscalationUrgencyRate` (#178) — `{ total, urgent, rate }` over every classified escalation, urgent ones included; drawn as counts plus a bar, never a percentage | `escalation/digest` |
 | `GET` | `/audit` | `AuditEntry[]` | `permissions/audit` |
 | `GET` | `/ws` | the one push channel — `draft-ready`; auth by first message (#162) | `serve/ws` |
+
+**Ending the duo (#55).** "Instantly killable" is only true if it is not tied to one laptop, so
+Settings carries the kill switch: `POST /lifecycle/end` twice, and only the second deletes. The
+first call, `{ decidedBy, confirmed: false }`, is when the confirmation opens — the daemon's own
+`EndDuoResult` lists what would go, and the dialog states *what ends, what is kept, what cannot be
+undone* from that list (counts, and the files verbatim). Nothing proceeds without a typed
+confirmation; the second call, `{ decidedBy, confirmed: true }`, is sent only then. `decidedBy`
+is the signed-in member's user id, or "the owner, from a paired device" when no workspace is
+signed in — the route requires a non-empty name and a device has none of its own. The client
+says only what the route establishes:
+
+- **What it says is kept** is the daemon's record of the ending (the audit log lives outside what
+  the route deletes) and — only when one exists — the workspace sign-in, which is the client's
+  own, separate credential.
+- **A failure is not always "not ended".** The route deletes and *then* audits, so a 5xx can be
+  an ending that finished; a lost response can be one too. Only a 4xx is worded "was not
+  ended"; the rest say the device *can't tell*, and it finds out on its next request.
+- **Success is `confirmed: true` in the answer, nothing else.** A 200 without it is not an end.
+- **After the end every token is dead**, so this device's next request is a 401 — on the wire
+  exactly a revoked token (#41). The client therefore remembers, per device (`duo.ended`), that
+  *it* ended the duo, and says so on Setup and in the member shell; that notice outranks "no
+  longer paired". A *different* paired device meeting the same 401 cannot know why and says the
+  generic thing — the daemon has no way to say more. A fresh pairing is a different duo and
+  clears the marker.
+- **Offline is disabled, never queued** (AR-15): the control is disabled with the reason, and an
+  irreversible act is never held to fire later. While the request is in flight the dialog cannot
+  be dismissed.
+
+Transfer and handover flows (`GET /lifecycle`'s `transfers`) are out of scope for the client.
 
 There is deliberately no `/duos/:id/ask` route. Asking the **personal** duo something *is*
 drafting — there is no separate "ask" action for it, the same way `duo ask`/`duo draft` never
@@ -256,7 +285,7 @@ a machine that is already on the tailnet, and that attacker gets to retry.
 /mirror          portrait · rules · weak signals · refusals — a rule opens onto its evidence
 /trust           grid, read-only on mobile (AR-17)
 /audit
-/settings        daemon address · paired devices (list, revoke) · forget this device
+/settings        daemon address · paired devices (list, revoke) · forget this device · end this duo (#55)
 /onboarding      the first run: import · embed · derive → ends at /mirror (#49)
 ```
 
