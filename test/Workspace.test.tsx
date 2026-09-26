@@ -228,6 +228,10 @@ function fakeConnection(state: {
     searchPeople: vi.fn(async (query: string) =>
       (state.people ?? []).filter((person) => person.name.toLowerCase().includes(query.toLowerCase())),
     ),
+    // #70: search and landing at a hit are pinned by WorkspaceSearch.test.tsx;
+    // this fake only has to be a whole connection.
+    searchMessages: vi.fn(async () => ({ hits: [], next: null })),
+    timelineAt: vi.fn(async (roomId: string) => [...(state.timelines[roomId] ?? [])]),
     // #64's message verbs — each one moves the timeline the way the
     // homeserver's own state would move under the same op, so the
     // surface's reflection is always the server's next answer.

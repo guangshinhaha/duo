@@ -187,6 +187,44 @@ export interface LiveArrival {
   readonly mentionsMe: boolean;
 }
 
+/** One line of the words around a search hit — who said it (by id, with the name the workspace holds for them) and what. */
+export interface SearchContextLine {
+  readonly senderId: string;
+  readonly senderName: string;
+  readonly body: string;
+}
+
+/**
+ * One result of a message search (#70): a text message somewhere in the
+ * member's conversations, with the conversation it was said in, who said it
+ * — the id carried structurally, so a duo's answer is attributed from the
+ * user-id grammar like every other message (#60) — and the few lines said
+ * around it. This is the WORKSPACE's search, the shared one: what people and
+ * duos said in conversations the member is in. It is never the corpus search
+ * (#46), which is private, on the owner's Mac, and reaches this type by no
+ * road.
+ */
+export interface MessageSearchHit {
+  readonly eventId: string;
+  readonly roomId: string;
+  readonly senderId: string;
+  /** The room's own record of the sender's name, else the search's profile, else the localpart — a claim; the id is the fact. */
+  readonly senderName: string;
+  readonly body: string;
+  /** The homeserver's epoch-ms timestamp. */
+  readonly originServerTs: number;
+  /** The root this hit answers inside a thread — null for a message in the main flow. Opening a threaded hit lands in its thread. */
+  readonly threadRootEventId: string | null;
+  /** The lines said just before and just after, each in the order it was said. */
+  readonly context: { readonly before: readonly SearchContextLine[]; readonly after: readonly SearchContextLine[] };
+}
+
+/** One page of a message search: the hits, and the homeserver's token for the next page (null when this was the last). */
+export interface MessageSearchPage {
+  readonly hits: readonly MessageSearchHit[];
+  readonly next: string | null;
+}
+
 /** The held workspace connection: rooms, timelines, the message verbs, and live arrivals. */
 export interface WorkspaceConnection {
   /** Whose connection this is — the member's own user id, the way the surface tells its own messages (editable, deletable) from everyone else's. */
@@ -194,6 +232,25 @@ export interface WorkspaceConnection {
   /** The member's conversations, ordered by latest activity — the server's answer, not this device's cache of it. */
   rooms(): Promise<readonly RoomSummary[]>;
   timeline(roomId: string): Promise<readonly RoomMessage[]>;
+  /**
+   * The window of a conversation around one event (#70) — what the
+   * homeserver's `/context` holds around it, projected exactly like a
+   * timeline. This is how a search hit is landed at in context even when
+   * it is older than anything the live timeline carries. Empty for a
+   * conversation this account is not in.
+   */
+  timelineAt(roomId: string, eventId: string): Promise<readonly RoomMessage[]>;
+  /**
+   * Searches what was said (#70): the homeserver's own `POST /search` over
+   * message bodies, in the member's words. Membership scoping is the
+   * homeserver's rule — the request chooses no rooms — and the projection
+   * refuses a result from a conversation this account is not joined to, so
+   * nothing of another conversation can reach the surface. `next` is the
+   * homeserver's page token. A refusal rejects; it is never an empty page.
+   * This is the shared search. The corpus search (#46, private, on the
+   * owner's Mac) is a different thing, served by a different module.
+   */
+  searchMessages(query: string, next?: string): Promise<MessageSearchPage>;
   /**
    * Sends a text message (#65): the body says what people read; when the
    * message addresses members, the seam builds the spec's full mention
@@ -393,12 +450,14 @@ function relationOf(event: MatrixEvent): Relation | undefined {
  * member's own marked, thread replies carry their root's id out of the main
  * flow, and a redaction keeps the row while striking the words.
  */
-function timelineOf(client: MatrixClient, roomId: string): readonly RoomMessage[] {
+function timelineOf(client: MatrixClient, roomId: string, around?: readonly MatrixEvent[]): readonly RoomMessage[] {
   const room = client.getRoom(roomId);
   if (!room) {
     return [];
   }
-  const events = room.getLiveTimeline().getEvents();
+  // #70: the live timeline, or — landing at a search hit — the window the
+  // homeserver's /context holds around it. One projection either way.
+  const events = around ?? room.getLiveTimeline().getEvents();
   const nameOf = (senderId: string): string => room.getMember(senderId)?.name || localpartOf(senderId);
   // #65: the pills the message was sent with, read from its formatted
   // body's matrix.to user anchors. A person's label prefers the room's own
@@ -672,6 +731,37 @@ function notificationModeOf(room: MatrixRoom, muted: boolean): NotificationMode 
 /** How many people a directory search answers with — enough to pick a colleague out, small enough to read. */
 const PEOPLE_SEARCH_LIMIT = 10;
 
+/** How many hits a search page asks for — enough to scan, small enough to read. */
+const SEARCH_PAGE_SIZE = 20;
+
+/** How many lines around each hit the search is asked to bring: enough to recognise the moment, not to reread it. */
+const SEARCH_CONTEXT_LINES = 2;
+
+/** An event as the homeserver's `/search` hands it back — the SDK's own wire type, read through the one door. */
+type SearchWireEvent = NonNullable<
+  Awaited<ReturnType<MatrixClient["search"]>>["search_categories"]["room_events"]["results"]
+>[number]["result"];
+
+/**
+ * A search result's conversation words: a text message that is a row of its
+ * conversation. An edit's replacement event is not one — it amends a row that
+ * exists elsewhere — and neither is a file, a notice, or anything else that
+ * merely carries a body.
+ */
+function searchableText(event: SearchWireEvent): { body: string; threadRootEventId: string | null } | null {
+  if (event.type !== EventType.RoomMessage || event.content?.msgtype !== MsgType.Text || typeof event.content.body !== "string") {
+    return null;
+  }
+  const relation = event.content["m.relates_to"] as Relation | undefined;
+  if (relation?.rel_type === RelationType.Replace) {
+    return null;
+  }
+  return {
+    body: event.content.body,
+    threadRootEventId: relation?.rel_type === RelationType.Thread && relation.event_id !== undefined ? relation.event_id : null,
+  };
+}
+
 /**
  * The event types a live arrival can change a timeline's projection under
  * (#64): a message, a reaction, or a redaction. Everything else on the
@@ -708,6 +798,74 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
         .sort((a, b) => (b.latest?.at ?? Number.MIN_SAFE_INTEGER) - (a.latest?.at ?? Number.MIN_SAFE_INTEGER));
     },
     timeline: async (roomId) => timelineOf(client, roomId),
+    timelineAt: async (roomId, eventId) => {
+      const room = client.getRoom(roomId);
+      if (!room || room.getMyMembership() !== "join") {
+        return [];
+      }
+      // The homeserver's /context, through the SDK: the event's window, or
+      // the live timeline itself when the event is recent enough to be in it.
+      const window = await client.getEventTimeline(room.getUnfilteredTimelineSet(), eventId);
+      return timelineOf(client, roomId, window?.getEvents() ?? []);
+    },
+    searchMessages: async (query, next) => {
+      const term = query.trim();
+      if (term === "") {
+        return { hits: [], next: null };
+      }
+      // The request names no rooms: which conversations are searched is the
+      // homeserver's rule about this account, not a list this client keeps.
+      const response = await client.search({
+        body: {
+          search_categories: {
+            room_events: {
+              search_term: term,
+              keys: ["content.body"],
+              filter: { limit: SEARCH_PAGE_SIZE },
+              event_context: { before_limit: SEARCH_CONTEXT_LINES, after_limit: SEARCH_CONTEXT_LINES, include_profile: true },
+            },
+          },
+        },
+        next_batch: next,
+      });
+      const found = response.search_categories.room_events;
+      // The last inch of membership: only conversations this account is in
+      // now. The homeserver scopes the search; this keeps a slip of it (or a
+      // membership just dropped) from ever putting another conversation's
+      // words on this member's screen.
+      const joined = new Set(client.getRooms().filter((room) => room.getMyMembership() === "join").map((room) => room.roomId));
+      const hits: MessageSearchHit[] = [];
+      for (const { result, context } of found.results ?? []) {
+        const text = searchableText(result);
+        if (text === null || !joined.has(result.room_id)) {
+          continue;
+        }
+        const room = client.getRoom(result.room_id);
+        const nameOf = (senderId: string): string =>
+          room?.getMember(senderId)?.name || context?.profile_info?.[senderId]?.displayname || localpartOf(senderId);
+        // The listing order of events_before isn't fixed by the spec, so the
+        // lines are read in the order they were said — by the server's time.
+        const linesOf = (events: readonly SearchWireEvent[] | undefined): SearchContextLine[] =>
+          [...(events ?? [])]
+            .filter((event) => event.room_id === result.room_id)
+            .sort((a, b) => a.origin_server_ts - b.origin_server_ts)
+            .flatMap((event) => {
+              const line = searchableText(event);
+              return line === null ? [] : [{ senderId: event.sender, senderName: nameOf(event.sender), body: line.body }];
+            });
+        hits.push({
+          eventId: result.event_id,
+          roomId: result.room_id,
+          senderId: result.sender,
+          senderName: nameOf(result.sender),
+          body: text.body,
+          originServerTs: result.origin_server_ts,
+          threadRootEventId: text.threadRootEventId,
+          context: { before: linesOf(context?.events_before), after: linesOf(context?.events_after) },
+        });
+      }
+      return { hits, next: found.next_batch ?? null };
+    },
     send: async (roomId, body, mentions = []) => {
       // #65: the spec's mention wire shape (§User and room mentions). The
       // HTML half rides only when something was anchored; the intent half
