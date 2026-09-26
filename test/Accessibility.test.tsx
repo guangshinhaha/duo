@@ -22,6 +22,7 @@ import { Draft } from "../src/routes/Draft.js";
 import { Trust } from "../src/routes/Trust.js";
 import { Audit } from "../src/routes/Audit.js";
 import { Knowledge } from "../src/routes/Knowledge.js";
+import { Escalations } from "../src/routes/Escalations.js";
 import { Mirror } from "../src/routes/Mirror.js";
 import { Settings } from "../src/routes/Settings.js";
 import type { DuoApiConfig } from "../src/api/client.js";
@@ -203,6 +204,16 @@ describe("#39 AC1 — the page has structure", () => {
       { name: "Audit — log", ui: <Audit api={api} />, routes: { "/audit": [auditEntry] } },
       { name: "Audit — empty", ui: <Audit api={api} />, routes: { "/audit": [] } },
       { name: "Knowledge", ui: <Knowledge api={api} />, routes: { "/knowledge": knowledgeFor() } },
+      {
+        name: "Escalations",
+        ui: <Escalations api={api} />,
+        routes: {
+          "/escalations/history": [
+            { id: "g1", createdAt: "2026-01-01T00:00:00.000Z", itemCount: 1, items: [{ draftId: "e1", question: "q", threadContext: null, escalationReason: "why", createdAt: "2026-01-01T00:00:00.000Z" }] },
+          ],
+          "/escalations/rate": { total: 4, urgent: 1, rate: 0.25 },
+        },
+      },
       {
         name: "Mirror",
         ui: <Mirror api={api} />,
