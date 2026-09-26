@@ -63,7 +63,7 @@ describe("mock daemon — the drafts loop (D2/D3)", () => {
     const res = await get("/drafts");
     expect(res.status).toBe(200);
     const drafts = await res.json();
-    expect(drafts.map((d) => d.id)).toEqual(["e-1", "e-2", "d-1", "d-3", "d-4", "d-2"]);
+    expect(drafts.map((d) => d.id)).toEqual(["e-1", "e-3", "e-4", "e-2", "d-1", "d-3", "d-4", "d-2"]);
     for (const field of ["question", "threadContext", "draftText", "outcome", "refused", "escalationThreshold"]) {
       expect(field in drafts[0]).toBe(true);
     }

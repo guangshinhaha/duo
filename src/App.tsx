@@ -29,6 +29,7 @@ import { Audit } from "./routes/Audit.js";
 import { Mirror } from "./routes/Mirror.js";
 import { Knowledge } from "./routes/Knowledge.js";
 import { Channels } from "./routes/Channels.js";
+import { Escalations } from "./routes/Escalations.js";
 import { SearchOverlay } from "./components/SearchOverlay.js";
 import { DuoRoster } from "./components/DuoRoster.js";
 import { NoDuoPanel } from "./components/NoDuoPanel.js";
@@ -99,6 +100,7 @@ type Route =
   | "mirror"
   | "knowledge"
   | "channels"
+  | "escalations"
   | { draft: string }
   | { room: string }
   | { thread: { roomId: string; rootEventId: string } };
@@ -147,6 +149,9 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
   }
   if (hash === "#channels") {
     return "channels";
+  }
+  if (hash === "#escalations") {
+    return "escalations";
   }
   if (hash === "#corrections") {
     return "corrections";
@@ -430,6 +435,9 @@ function MobileNav({
               <NavLink active={route === "channels"} href="#channels" onClick={close}>
                 Channels
               </NavLink>
+              <NavLink active={route === "escalations"} href="#escalations" onClick={close}>
+                Escalations
+              </NavLink>
               <section className="mt-2 flex flex-col gap-1">
                 <div className="px-2 type-provenance uppercase text-[var(--faint)]">More</div>
                 <NavLink active={route === "trust"} href="#trust" onClick={close}>
@@ -517,6 +525,8 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       return <Knowledge api={shell.api!} />;
     case "channels":
       return <Channels api={shell.api!} />;
+    case "escalations":
+      return <Escalations api={shell.api!} />;
     case "corrections":
       return <Corrections api={shell.api!} />;
     case "duo":
@@ -861,6 +871,11 @@ function AppShell() {
                   knows. */}
               <NavLink active={route === "channels"} href="#channels">
                 Channels
+              </NavLink>
+              {/* #54: then where that knowledge runs out — what it keeps
+                  having to ask about. */}
+              <NavLink active={route === "escalations"} href="#escalations">
+                Escalations
               </NavLink>
             </>
           )}

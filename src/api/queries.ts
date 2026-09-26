@@ -11,6 +11,7 @@ import type {
   DraftRecord,
   DuoKnowledge,
   DuoSummary,
+  EscalationUrgencyRate,
   GridRow,
   InterruptionPortrait,
   RefusalsListing,
@@ -18,6 +19,7 @@ import type {
   RuleReviewListing,
   RuleWithEvidence,
   SearchOutcome,
+  SentEscalationDigest,
   SettableDraftOutcome,
 } from "./types.js";
 
@@ -58,6 +60,10 @@ export const queryKeys = {
   knowledge: ["knowledge"] as const,
   // #47: what this duo is reachable through — the mute routes invalidate it, since `muted` on each row is the daemon's re-read of the policy.
   channels: ["channels"] as const,
+  // #54: the two read-only escalation routes — nothing this client writes
+  // touches either (the digest POST is deliberately never called).
+  escalationHistory: ["escalations", "history"] as const,
+  escalationRate: ["escalations", "rate"] as const,
   // #46: keyed by the submitted query — each distinct search is its own
   // cache entry, so revisiting a recent query is instant and a stale
   // search never blocks a new one.
@@ -236,6 +242,43 @@ export function useCorpusSearch(api: DuoApiConfig, q: string) {
     getNextPageParam: (lastPage) =>
       lastPage.results.length >= SEARCH_PAGE_SIZE ? lastPage.results[lastPage.results.length - 1]!.rank + 1 : undefined,
   });
+}
+
+/**
+ * #54: the most digests one `GET /escalations/history` page carries — the
+ * daemon's own bound (digital-duo #178 validates 1..100, /search's
+ * vocabulary). Sent at its maximum so the whole history is few requests.
+ */
+export const ESCALATION_HISTORY_PAGE_SIZE = 100;
+
+/**
+ * #54: every digest the daemon has sent, as pages. The route is oldest
+ * first and its `cursor` is an offset into that order, so the next page's
+ * cursor is the number of digests already held; a short page is the end.
+ * The pattern counts across all of them, so the screen walks every page
+ * before it draws a count.
+ */
+export function useEscalationHistory(api: DuoApiConfig) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.escalationHistory,
+    queryFn: ({ pageParam }) =>
+      apiRequest<SentEscalationDigest[]>(
+        api,
+        pageParam === 0
+          ? `/escalations/history?limit=${ESCALATION_HISTORY_PAGE_SIZE}`
+          : `/escalations/history?limit=${ESCALATION_HISTORY_PAGE_SIZE}&cursor=${pageParam}`,
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      Array.isArray(lastPage) && lastPage.length >= ESCALATION_HISTORY_PAGE_SIZE
+        ? allPages.reduce((held, page) => held + (Array.isArray(page) ? page.length : 0), 0)
+        : undefined,
+  });
+}
+
+/** #54: the urgency rate — the daemon's counts and its own quotient, read-only. */
+export function useEscalationRate(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.escalationRate, queryFn: () => apiRequest<EscalationUrgencyRate>(api, "/escalations/rate") });
 }
 
 export function useTrustGrid(api: DuoApiConfig) {

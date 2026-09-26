@@ -380,3 +380,30 @@ export interface ChannelPolicy {
   readonly muted: string[];
   readonly mutedThreads: { readonly channel: string; readonly threadId: string }[];
 }
+
+// #54: `GET /escalations/history` and `GET /escalations/rate` (digital-duo
+// #178), mirrored by hand from `src/escalation/digest.ts`. A digest is an
+// append-only record of a batch actually sent — its items are the ordinary
+// (never the urgent, which interrupt live) unresolved escalations gathered
+// into it.
+export interface EscalationDigestItem {
+  readonly draftId: string;
+  readonly question: string;
+  readonly threadContext: string | null;
+  readonly escalationReason: string | null;
+  readonly createdAt: string;
+}
+
+export interface SentEscalationDigest {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly itemCount: number;
+  readonly items: readonly EscalationDigestItem[];
+}
+
+/** All-time, over every escalation the daemon has classified: `rate` is `urgent / total`, and 0 (never NaN) when `total` is 0. */
+export interface EscalationUrgencyRate {
+  readonly total: number;
+  readonly urgent: number;
+  readonly rate: number;
+}
