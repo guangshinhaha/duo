@@ -19,6 +19,7 @@ import type { NotificationMode, RoomSummary, WorkspaceConnection, WorkspaceSessi
 import type { Route } from "./routes.js";
 import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
 import { useWaitingItems, waitingWords, type WaitingItem } from "./waiting.js";
+import { useTrainingCount } from "../components/TrainingCards.js";
 import type { HairlineState } from "../components/ConfidenceHairline.js";
 
 function initialsOf(title: string): string {
@@ -587,7 +588,7 @@ export function ChatList({
           <>
             {api ? (
               <>
-                <DuoRow active={duoActive} waiting={duoWaiting} />
+                <DuoRow active={duoActive} api={api} waiting={duoWaiting} />
                 <div className="mx-2 my-1 h-px bg-[var(--edge)]" />
               </>
             ) : (
@@ -697,8 +698,10 @@ function ConfirmationsChip({ api, active }: { api: DuoApiConfig; active: boolean
 }
 
 /** Your duo — pinned first, always there, and the only row that is not a person or a colleague's duo. */
-function DuoRow({ waiting, active }: { waiting: WaitingItem | null; active: boolean }) {
+function DuoRow({ api, waiting, active }: { api: DuoApiConfig; waiting: WaitingItem | null; active: boolean }) {
   const count = waiting?.count ?? 0;
+  // Training is quiet: it never counts as waiting, but the row says there is something to look at.
+  const training = useTrainingCount(api);
   return (
     <Row
       active={active}
@@ -706,7 +709,18 @@ function DuoRow({ waiting, active }: { waiting: WaitingItem | null; active: bool
       href="#duo"
       ids={{ entry: "duo-entry", link: "duo-link", title: "duo-title" }}
       meta={count > 0 ? <CountPill label={`${count} waiting on you`} n={count} testId="duo-row-count" /> : null}
-      preview={waiting ? <><DraftLine state={waiting.state} />{waitingWords(waiting)}</> : "Ask your duo anything"}
+      preview={
+        waiting ? (
+          <>
+            <DraftLine state={waiting.state} />
+            {waitingWords(waiting)}
+          </>
+        ) : training > 0 ? (
+          `${training} ${training === 1 ? "thing" : "things"} to look at when you have a minute`
+        ) : (
+          "Ask your duo anything"
+        )
+      }
       previewTestId="duo-row-preview"
       title="Your duo"
     />

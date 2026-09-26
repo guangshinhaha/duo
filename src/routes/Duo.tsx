@@ -14,6 +14,7 @@ import { RouteLoading } from "../components/RouteLoading.js";
 import { SourceList } from "../components/SourceList.js";
 import { StructuredText } from "../components/StructuredText.js";
 import { Timestamp } from "../components/Timestamp.js";
+import { TrainingCards } from "../components/TrainingCards.js";
 
 /**
  * Whether a draft is a turn of the owner's own conversation with their duo:
@@ -205,6 +206,10 @@ export function Duo({ api }: { api: DuoApiConfig }) {
             })}
           </section>
         )}
+        {/* What your duo has to say about training: a few cards, batched and paced, after the last turn — the way the newest thing in any chat is at the bottom. */}
+        <div className="mt-5">
+          <TrainingCards api={api} />
+        </div>
       </div>
       {/* Answers waiting on you: above the composer, never in the transcript (AR-14). */}
       {waiting.length > 0 && (
