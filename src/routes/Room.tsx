@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Paperclip, X } from "lucide-react";
-import type { DuoApiConfig } from "../api/client.js";
-import { RoomDrafts } from "../components/RoomDrafts.js";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -42,8 +40,9 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../compon
  * in from a second source.
  *
  * #68: for an owner with a paired duo, the conversation also shows the
- * drafts the duo made for messages that arrived here — `RoomDrafts`, in a
- * region of its own beside the composer, never in the transcript.
+ * drafts the duo made for messages that arrived here — the shell's
+ * `RoomDrafts`, handed in as a slot and rendered in a region of its own
+ * beside the composer, never in the transcript.
  */
 
 /** The reaction keys the picker offers — a fixed, readable set, not a free-text field. */
@@ -102,12 +101,17 @@ function messageWords(message: RoomMessage): ReactNode {
 export function Room({
   connection,
   roomId,
-  api = null,
+  drafts = null,
 }: {
   connection: WorkspaceConnection | null;
   roomId: string;
-  /** #68: the owner's paired duo, when there is one — the drafts of this conversation are its to show. A member with no duo has none. */
-  api?: DuoApiConfig | null;
+  /**
+   * #68: the owner's drafts for this conversation, when the shell has a duo
+   * to ask — a slot, because the share path (#66) may not import the
+   * daemon's client: this route renders where the drafts go and knows
+   * nothing of where they come from.
+   */
+  drafts?: ReactNode;
 }) {
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -233,7 +237,7 @@ export function Room({
       {/* #68: outside the transcript's scroll, above the composer — the
           owner's drafts for this conversation, never part of what its
           members read. */}
-      {api && <RoomDrafts api={api} roomId={roomId} />}
+      {drafts}
       <RoomComposer connection={connection} roomId={roomId} roomName={roomName} members={room?.members ?? []} />
       {/* A delete asks first: the words go for everyone, and the surface
           says so in the same words it will show afterwards. */}

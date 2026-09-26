@@ -103,13 +103,15 @@ function roomsFixture(): RoomSummary[] {
       latest: { at: Date.now(), body: BOSE_QUESTION },
       unread: { notifications: 1, mentions: 0 },
       muted: false,
+      notifications: "all",
     },
   ];
 }
 
 /** A fake workspace connection — only what these ACs touch is real, and every write it could make is a spy. */
 function fakeConnection(timelines: Record<string, RoomMessage[]>) {
-  let listener: ((roomId: string) => void) | null = null;
+  // Every surface that subscribes hears every arrival (the shell's notification dispatcher subscribes beside the room).
+  const listeners = new Set<(roomId: string) => void>();
   const connection = {
     userId: SESSION.userId,
     rooms: vi.fn(async () => roomsFixture()),
@@ -121,9 +123,9 @@ function fakeConnection(timelines: Record<string, RoomMessage[]>) {
     unreact: vi.fn(async () => {}),
     replyInThread: vi.fn(async () => {}),
     subscribe: vi.fn((handler: (roomId: string) => void) => {
-      listener = handler;
+      listeners.add(handler);
       return () => {
-        listener = null;
+        listeners.delete(handler);
       };
     }),
     stop: vi.fn(async () => {}),
@@ -135,7 +137,7 @@ function fakeConnection(timelines: Record<string, RoomMessage[]>) {
     deliver: (message: RoomMessage) => {
       const list = (timelines[message.roomId] ??= []);
       list.push(message);
-      listener?.(message.roomId);
+      listeners.forEach((listener) => listener(message.roomId));
     },
   };
 }

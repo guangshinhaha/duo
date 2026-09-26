@@ -22,6 +22,7 @@ import { Draft } from "./routes/Draft.js";
 import { Corrections } from "./routes/Corrections.js";
 import { Conversations, roomTitle } from "./routes/Conversations.js";
 import { Room } from "./routes/Room.js";
+import { RoomDrafts } from "./components/RoomDrafts.js";
 import { ThreadView } from "./routes/Thread.js";
 import { Duo } from "./routes/Duo.js";
 import { Trust } from "./routes/Trust.js";
@@ -483,7 +484,13 @@ interface SurfaceContext {
 function routeSurface(route: Route, shell: SurfaceContext) {
   if (typeof route === "object") {
     if ("room" in route) {
-      return <Room connection={shell.connection} roomId={route.room} api={shell.api} />;
+      return (
+        <Room
+          connection={shell.connection}
+          roomId={route.room}
+          drafts={shell.api ? <RoomDrafts api={shell.api} roomId={route.room} /> : null}
+        />
+      );
     }
     if ("thread" in route) {
       return (
