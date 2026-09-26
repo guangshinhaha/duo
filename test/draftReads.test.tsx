@@ -120,15 +120,13 @@ describe("#26 — time is visible", () => {
   });
 
   it("a draft carries its time, and so does every thread entry", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([draft]), { status: 200 })));
+    const decided = { ...draft, provenance: { origin: "owner" as const }, outcome: "sent" as const, sentText: "as drafted" };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([decided]), { status: 200 })));
     renderWithClient(<DraftCard api={api} draft={draft} />);
     expect(screen.getAllByTestId("timestamp").length).toBeGreaterThan(0);
     cleanup();
 
     renderWithClient(<Duo api={api} />);
-    // #28: the single conversation sits in the list until picked.
-    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(1));
-    fireEvent.click(screen.getAllByTestId("conversation-entry")[0]);
     await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(1));
     expect(screen.getAllByTestId("timestamp")).toHaveLength(1);
   });

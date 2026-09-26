@@ -31,9 +31,10 @@ function draftFor(n: number, thread: string | null, question?: string): DraftRec
     confidenceScore: 0.8,
     sources: [],
     createdAt: isoAt(n),
-    outcome: null,
-    outcomeRecordedAt: null,
-    sentText: null,
+    // Decided, like the long history of a chat is: a waiting answer would be a tray, and this is about the transcript.
+    outcome: "sent",
+    outcomeRecordedAt: isoAt(n),
+    sentText: `kept ${id}`,
     refused: false,
     escalationThreshold: 0.55,
     provenance: { origin: "owner" },
@@ -76,11 +77,10 @@ function stubPagedDaemon(all: DraftRecord[]) {
   return { gets, fetchMock };
 }
 
-// The newest DRAFTS_PAGE_SIZE drafts share the "fresh" thread, the rest sit
-// in "old" — page one is exactly "fresh", so what loaded and what didn't is
-// visible as which conversations exist.
-function seedTwoThreads(total: number): DraftRecord[] {
-  return Array.from({ length: total }, (_, n) => draftFor(n, n < total - DRAFTS_PAGE_SIZE ? "old" : "fresh"));
+// One continuous chat of `total` turns: page one is exactly the newest
+// DRAFTS_PAGE_SIZE, so what loaded and what didn't is visible as which turns exist.
+function seedHistory(total: number): DraftRecord[] {
+  return Array.from({ length: total }, (_, n) => draftFor(n, null));
 }
 
 describe("#29 — history pages as you read it", () => {
@@ -93,14 +93,12 @@ describe("#29 — history pages as you read it", () => {
 
   it("opens on the newest page — one fetch, oldest history absent until asked for", async () => {
     const total = DRAFTS_PAGE_SIZE * 2 + 3;
-    const { gets } = stubPagedDaemon(seedTwoThreads(total));
+    const { gets } = stubPagedDaemon(seedHistory(total));
     renderWithClient(<Duo api={api} />);
 
-    // Only "fresh" exists as a conversation: the "old" thread lives entirely
-    // in pages not yet asked for.
-    await waitFor(() =>
-      expect(screen.getAllByTestId("conversation-entry").map((el) => el.textContent)).toEqual(["fresh"]),
-    );
+    // Only the newest window is a turn on screen: the oldest history lives
+    // entirely in pages not yet asked for.
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(DRAFTS_PAGE_SIZE));
     expect(screen.queryByText("question d000")).toBeNull();
 
     // The first page asked for the newest window: limit, no cursor — and
@@ -114,30 +112,26 @@ describe("#29 — history pages as you read it", () => {
 
   it("Load older walks the cursor down — adjacent, exclusive, ending", async () => {
     const total = DRAFTS_PAGE_SIZE * 2 + 3;
-    const { gets } = stubPagedDaemon(seedTwoThreads(total));
+    const { gets } = stubPagedDaemon(seedHistory(total));
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(1));
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(DRAFTS_PAGE_SIZE));
 
     // One page older: the cursor is page one's OLDEST createdAt, and `before`
     // is exclusive — the adjacent window, not a re-read.
     fireEvent.click(screen.getByTestId("load-older"));
-    await waitFor(() =>
-      expect(screen.getAllByTestId("conversation-entry").map((el) => el.textContent)).toEqual(["fresh", "old"]),
-    );
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(DRAFTS_PAGE_SIZE * 2));
     expect(gets).toHaveLength(2);
     const second = new URL(gets[1]);
     expect(second.searchParams.get("before")).toBe(isoAt(total - DRAFTS_PAGE_SIZE));
 
-    // "old" holds 53 drafts; two pages cover 50 of them. The last three are
-    // still unloaded — one more short page ends the walk, and the button goes.
-    fireEvent.click(screen.getAllByTestId("conversation-entry")[1]);
-    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(DRAFTS_PAGE_SIZE));
+    // Two pages cover 100 of the 103. The last three are still unloaded — one
+    // more short page ends the walk, and the button goes.
     expect(screen.queryByText("question d000")).toBeNull();
     expect(screen.getByTestId("load-older")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(screen.queryByTestId("load-older")).toBeNull());
-    expect(screen.getAllByTestId("thread-entry")).toHaveLength(total - DRAFTS_PAGE_SIZE);
+    expect(screen.getAllByTestId("thread-entry")).toHaveLength(total);
     expect(screen.getByText("question d000")).toBeInTheDocument();
     // End of history: three page fetches total, none repeated.
     expect(gets).toHaveLength(3);
@@ -145,14 +139,14 @@ describe("#29 — history pages as you read it", () => {
 
   it("an outcome mutation's invalidation refreshes every loaded page without losing the seam or the view", async () => {
     const total = DRAFTS_PAGE_SIZE * 2 + 3;
-    const drafts = seedTwoThreads(total);
+    const drafts = seedHistory(total);
     const { gets } = stubPagedDaemon(drafts);
     renderWithClient(<Duo api={api} />);
 
-    fireEvent.click((await screen.findAllByTestId("conversation-entry"))[0]);
     await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(DRAFTS_PAGE_SIZE));
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(gets).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(DRAFTS_PAGE_SIZE * 2));
 
     // The seam draft: page one's oldest. When a newer draft arrives, the
     // newest window shifts past it — it stays on screen only if the refetch
@@ -188,32 +182,30 @@ describe("#29 — history pages as you read it", () => {
   });
 
   it("a draft-ready push's root-key invalidation refreshes the same feed", async () => {
-    const drafts = seedTwoThreads(DRAFTS_PAGE_SIZE + 3);
+    const drafts = seedHistory(DRAFTS_PAGE_SIZE + 3);
     const { gets } = stubPagedDaemon(drafts);
     const { client } = renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(1));
-    const freshEntry = screen.getAllByTestId("conversation-entry")[0];
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(DRAFTS_PAGE_SIZE));
+    const chat = screen.getByTestId("thread-group");
 
     // A draft lands daemon-side (what /ws announces), then the handler's
     // exact call: invalidate the ["drafts"] root, which the feed's key sits
     // under (src/ws.ts performs this very invalidation).
-    drafts.push(draftFor(drafts.length, "pushed"));
+    drafts.push(draftFor(drafts.length, null, "pushed"));
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["drafts"] });
     });
 
-    // The pushed thread arrives on top; the loaded view wasn't reset to get it.
-    await waitFor(() =>
-      expect(screen.getAllByTestId("conversation-entry").map((el) => el.textContent)).toEqual(["pushed", "fresh"]),
-    );
+    // The pushed turn arrives at the end of the chat; the loaded view wasn't reset to get it.
+    await waitFor(() => expect(screen.getByText("pushed")).toBeInTheDocument());
     expect(gets).toHaveLength(2);
-    expect(freshEntry.isConnected).toBe(true);
+    expect(screen.getByTestId("thread-group")).toBe(chat);
+    expect(chat.isConnected).toBe(true);
   });
 
   it("a failed refresh keeps the loaded feed on screen instead of blanking it", async () => {
-    stubPagedDaemon(seedTwoThreads(DRAFTS_PAGE_SIZE + 3));
+    stubPagedDaemon(seedHistory(DRAFTS_PAGE_SIZE + 3));
     const { client } = renderWithClient(<Duo api={api} />);
-    fireEvent.click((await screen.findAllByTestId("conversation-entry"))[0]);
     await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(DRAFTS_PAGE_SIZE));
     const entry = screen.getByText("question d003");
 
@@ -234,11 +226,11 @@ describe("#29 — history pages as you read it", () => {
     expect(entry.isConnected).toBe(true);
   });
 
-  it("a conversation with hundreds of entries renders whole and unduplicated", async () => {
+  it("a chat with hundreds of turns renders whole and unduplicated", async () => {
     const total = DRAFTS_PAGE_SIZE * 6; // 300 — an exact multiple of the page size
     const { gets } = stubPagedDaemon(Array.from({ length: total }, (_, n) => draftFor(n, "long")));
     renderWithClient(<Duo api={api} />);
-    await waitFor(() => expect(screen.getAllByTestId("conversation-entry")).toHaveLength(1));
+    await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(DRAFTS_PAGE_SIZE));
 
     // An exact multiple costs one empty page at the end — the daemon's
     // documented end-of-history signal — so 300 drafts walk in 7 fetches.
@@ -257,7 +249,6 @@ describe("#29 — history pages as you read it", () => {
     }
     expect(screen.queryByTestId("load-older")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("conversation-entry"));
     await waitFor(() => expect(screen.getAllByTestId("thread-entry")).toHaveLength(total));
     // Every entry exactly once — a mis-walked cursor shows up as overlap
     // (duplicates) or a gap (missing turns).

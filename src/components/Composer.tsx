@@ -22,7 +22,7 @@ import { useSyncStatus } from "../sync.js";
  * applies as it does in DraftCard: unreachable disables submission
  * rather than queueing it.
  */
-export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thread: string | null; threadLabel: string }) {
+export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thread: string | null; threadLabel?: string }) {
   const { mutation: createDraft, cancel } = useCreateDraft(api);
   const { reachable } = useSyncStatus();
   const [question, setQuestion] = useState(readComposerBuffer());
@@ -98,9 +98,11 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
           )}
         </div>
       </div>
-      <p className="mt-2 type-provenance text-[var(--faint)]" data-testid="composer-thread">
-        Asking in: {threadLabel}
-      </p>
+      {threadLabel !== undefined && (
+        <p className="mt-2 type-provenance text-[var(--faint)]" data-testid="composer-thread">
+          Asking in: {threadLabel}
+        </p>
+      )}
       <MutationError error={cancelledByOwner ? null : createDraft.error} />
     </form>
   );
