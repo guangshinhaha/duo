@@ -243,7 +243,7 @@ a machine that is already on the tailnet, and that attacker gets to retry.
 ```
 /review          ← default. badge = drafts where outcome is null
 /duo/:id         thread view + composer
-/mirror          portrait · rules · weak signals · refusals
+/mirror          portrait · rules · weak signals · refusals — a rule opens onto its evidence
 /trust           grid, read-only on mobile (AR-17)
 /audit
 /settings        daemon address, device name, unpair
@@ -259,7 +259,7 @@ TanStack Query for everything server-shaped. Keys mirror the routes so invalidat
 ```ts
 ["drafts", { outcome: "pending" }]   // invalidated by any outcome POST and by draft-ready
 ["review"]                           // invalidated by an outcome POST — an edit queues a candidate
-["mirror", "rules"]  ["mirror", "portrait"]  ["trust", "grid"]  ["audit"]
+["mirror", "rules"]  ["mirror", "rules", id]  ["mirror", "refusals"]  ["mirror", "portrait"]  ["trust", "grid"]  ["audit"]
 ```
 
 The only client-owned state is the composer buffer and UI preferences. No Zustand, no Redux: there

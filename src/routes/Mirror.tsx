@@ -1,5 +1,5 @@
 import type { DuoApiConfig } from "../api/client.js";
-import { useMirrorPortrait, useMirrorRules } from "../api/queries.js";
+import { useMirrorPortrait, useMirrorRefusals, useMirrorRules } from "../api/queries.js";
 import { InterruptionPortraitView } from "../components/InterruptionPortraitView.js";
 import { RuleCard, type RuleBucket } from "../components/RuleCard.js";
 import type { Rule, RuleReviewListing } from "../api/types.js";
@@ -55,12 +55,73 @@ function RuleBucketSection({ api, listing, bucket }: { api: DuoApiConfig; listin
 }
 
 /**
+ * What the owner has told the duo it must never speak for them on, and the
+ * reason they gave (#53) — `GET /mirror/refusals`, `duo/refusals.md` verbatim.
+ * The daemon's `decided` flag is what tells "never asked" from "asked, and
+ * the owner recorded none": an empty list alone cannot. Recording a refusal
+ * stays at the terminal (AR-18), so the empty states point there rather than
+ * offering a control the daemon has no route for.
+ */
+function RefusalsSection({ api }: { api: DuoApiConfig }) {
+  const refusals = useMirrorRefusals(api);
+
+  let body: React.ReactNode = null;
+  if (refusals.isLoading) {
+    body = <div className="text-[var(--muted)]">Loading refusals…</div>;
+  } else if (refusals.error) {
+    body = <div className="text-[var(--refused)]">{(refusals.error as Error).message}</div>;
+  } else if (refusals.data) {
+    const { decided, refusals: list } = refusals.data;
+    if (!decided) {
+      body = (
+        <p className="type-provenance text-[var(--faint)]" data-testid="refusals-undecided">
+          What your duo must refuse hasn&apos;t been asked yet. Record refusals in the terminal on your Mac — duo mirror refusals add, or
+          duo mirror refusals confirm-none.
+        </p>
+      );
+    } else if (list.length === 0) {
+      body = (
+        <p className="type-provenance text-[var(--faint)]" data-testid="refusals-none">
+          You reviewed this and recorded none — your duo has no standing refusals.
+        </p>
+      );
+    } else {
+      body = (
+        <div className="flex flex-col gap-3">
+          {list.map((refusal) => (
+            <div key={refusal.heading} className="flex flex-col gap-1 shape-entry p-4" data-testid="refusal">
+              <h3 className="type-heading" data-testid="refusal-heading">
+                {refusal.heading}
+              </h3>
+              {refusal.reason.length > 0 ? (
+                <p className="type-body whitespace-pre-wrap text-[var(--muted)]" data-testid="refusal-reason">
+                  {refusal.reason}
+                </p>
+              ) : (
+                <p className="type-provenance text-[var(--faint)]">No reason written.</p>
+              )}
+            </div>
+          ))}
+        </div>
+      );
+    }
+  }
+
+  return (
+    <section className="shape-container flex flex-col gap-2 p-4" data-testid="refusals">
+      <h2 className="type-heading">Refusals{refusals.data && refusals.data.decided ? ` (${refusals.data.refusals.length})` : ""}</h2>
+      {body}
+    </section>
+  );
+}
+
+/**
  * The Mirror browser (`client-tech-design.md` §1.4 / tech-design §3.1,
  * build step C6): what the duo has derived about its owner, and the owner's
- * say over it — the portrait, and rules to approve / reject / promote.
- * Deliberately no refusals tab yet: no daemon route lists them, and a surface
- * must not add a behaviour. Equally deliberately no authoring (AR-18) — rule
- * writing stays where the files are, in `duo/rules/*.md` on the Mac.
+ * say over it — the portrait, rules to approve / reject / promote (each
+ * opening onto the evidence behind it, #53), and the refusals the owner
+ * wrote. Deliberately no authoring (AR-18) — rule and refusal writing stay
+ * where the files are, in `duo/` on the Mac.
  */
 export function Mirror({ api }: { api: DuoApiConfig }) {
   const portrait = useMirrorPortrait(api);
@@ -71,7 +132,8 @@ export function Mirror({ api }: { api: DuoApiConfig }) {
       <header className="flex flex-col gap-1">
         <h1 className="type-heading">Mirror</h1>
         <p className="type-provenance text-[var(--muted)]">
-          What the duo has derived about how you work. Read it, disposition it — rule writing stays in duo/rules/*.md on your Mac.
+          What the duo has derived about how you work, and what you told it to refuse. Read it, disposition it — rule and refusal writing
+          stay in duo/ on your Mac.
         </p>
       </header>
 
@@ -88,6 +150,8 @@ export function Mirror({ api }: { api: DuoApiConfig }) {
           ))}
         </div>
       )}
+
+      <RefusalsSection api={api} />
     </div>
   );
 }

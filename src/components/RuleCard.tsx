@@ -1,9 +1,11 @@
+import { useState } from "react";
 import type { Rule } from "../api/types.js";
 import type { DuoApiConfig } from "../api/client.js";
 import { useRuleAction } from "../api/queries.js";
 import { DuoMessage } from "./DuoMessage.js";
 import { MutationError } from "./MutationError.js";
 import { MeterBar } from "./MeterBar.js";
+import { RuleEvidence } from "./RuleEvidence.js";
 import { useSyncStatus } from "../sync.js";
 
 /** Which `RuleReviewListing` bucket a rule came from — fixes the action set and the section it renders under. */
@@ -42,6 +44,7 @@ const ACTION_LABELS: Record<RuleAction, string> = {
  */
 export function RuleCard({ api, rule, bucket }: { api: DuoApiConfig; rule: Rule; bucket: RuleBucket }) {
   const ruleAction = useRuleAction(api);
+  const [showEvidence, setShowEvidence] = useState(false);
   const actions = ACTIONS[bucket];
   // AR-15, same as DraftCard: disposition waits for the daemon to answer —
   // a queued Approve firing against rules that moved is worse than none.
@@ -61,6 +64,21 @@ export function RuleCard({ api, rule, bucket }: { api: DuoApiConfig; rule: Rule;
         </span>
         {rule.lastConfirmedAt && <span>last confirmed {new Date(rule.lastConfirmedAt).toLocaleDateString()}</span>}
       </div>
+      <div>
+        {/* #53: "why did it say that" — the exchanges behind the rule, read
+            on demand. A read of GET /mirror/rules/:id; it grants no action
+            and edits nothing, so the disposition set below is unchanged. */}
+        <button
+          type="button"
+          data-testid="rule-evidence-toggle"
+          aria-expanded={showEvidence}
+          className="type-provenance text-[var(--muted)] underline"
+          onClick={() => setShowEvidence((open) => !open)}
+        >
+          {showEvidence ? "Hide evidence" : "Why this rule"}
+        </button>
+      </div>
+      {showEvidence && <RuleEvidence api={api} rule={rule} />}
       {actions.length > 0 && (
         <div className="flex gap-2">
           {actions.map((action) => (

@@ -233,6 +233,32 @@ describe("mock daemon — mirror, trust, audit, ask (D2/D6)", () => {
     expect(unknown.status).toBe(404);
   });
 
+  it("serves GET /mirror/rules/:id as RuleWithEvidence — the rule and the exchanges it cites (#182)", async () => {
+    const res = await get("/mirror/rules/r-15");
+    expect(res.status).toBe(200);
+    const detail = await res.json();
+    expect(detail.rule.id).toBe("r-15");
+    expect(detail.evidence.length).toBe(detail.rule.supportCount);
+    for (const exchange of detail.evidence) {
+      expect(typeof exchange.qaPairId).toBe("string");
+      expect(typeof exchange.questionText).toBe("string");
+      expect(typeof exchange.answerText).toBe("string");
+    }
+    expect((await get("/mirror/rules/r-999")).status).toBe(404);
+  });
+
+  it("serves GET /mirror/refusals as { decided, refusals } — file state, not a list alone (#182)", async () => {
+    const res = await get("/mirror/refusals");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.decided).toBe(true);
+    expect(body.refusals.length).toBeGreaterThan(0);
+    for (const refusal of body.refusals) {
+      expect(typeof refusal.heading).toBe("string");
+      expect(typeof refusal.reason).toBe("string");
+    }
+  });
+
   it("serves the three public-answer outcomes on POST /ask", async () => {
     const answered = await (await post("/ask", { question: "What's the refund policy?" })).json();
     expect(answered.kind).toBe("answered");

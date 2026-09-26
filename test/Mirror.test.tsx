@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Mirror } from "../src/routes/Mirror.js";
 import type { DuoApiConfig } from "../src/api/client.js";
-import type { InterruptionPortrait, Rule, RuleReviewListing } from "../src/api/types.js";
+import type { InterruptionPortrait, RefusalsListing, Rule, RuleReviewListing } from "../src/api/types.js";
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
 
@@ -53,12 +53,26 @@ const listing: RuleReviewListing = {
   rejected: [],
 };
 
-function stubMirrorResponses(p: InterruptionPortrait, l: RuleReviewListing) {
+// GET /mirror/refusals (digital-duo #182): pure duo/refusals.md file state —
+// `decided` says whether the owner has ever answered the question at all, a
+// distinction the empty list alone cannot carry.
+const refusals: RefusalsListing = {
+  decided: true,
+  refusals: [
+    { heading: "Salary negotiations", reason: "Never speak for me on pay — that is a conversation I have myself." },
+    { heading: "Legal holds", reason: "" },
+  ],
+};
+
+function stubMirrorResponses(p: InterruptionPortrait, l: RuleReviewListing, r: RefusalsListing = refusals) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       if (url.includes("/mirror/portrait")) {
         return new Response(JSON.stringify(p), { status: 200 });
+      }
+      if (url.includes("/mirror/refusals")) {
+        return new Response(JSON.stringify(r), { status: 200 });
       }
       return new Response(JSON.stringify(l), { status: 200 });
     }),
@@ -132,5 +146,97 @@ describe("Mirror — the owner's window onto what the duo derived (C6)", () => {
     // message legitimately appears once per section — assert presence, not
     // uniqueness.
     await waitFor(() => expect(screen.getAllByText("store locked").length).toBeGreaterThan(0));
+  });
+
+  describe("refusals — what the duo will not speak for the owner on, and why (#53)", () => {
+    it("shows each refusal with what is refused and the basis the owner wrote", async () => {
+      renderWithClient(<Mirror api={api} />);
+      const rows = await screen.findAllByTestId("refusal");
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveTextContent("Salary negotiations");
+      expect(rows[0]).toHaveTextContent("Never speak for me on pay");
+      expect(screen.getByTestId("refusals")).toHaveTextContent("Refusals (2)");
+    });
+
+    it("says so, rather than showing a blank, when a refusal carries no written reason", async () => {
+      renderWithClient(<Mirror api={api} />);
+      const rows = await screen.findAllByTestId("refusal");
+      expect(rows[1]).toHaveTextContent("Legal holds");
+      expect(rows[1]).toHaveTextContent("No reason written.");
+    });
+
+    it("keeps the owner's multi-line reason as written", async () => {
+      stubMirrorResponses(portrait, listing, { decided: true, refusals: [{ heading: "Pay", reason: "line one\nline two" }] });
+      renderWithClient(<Mirror api={api} />);
+      const reason = await screen.findByTestId("refusal-reason");
+      expect(reason.textContent).toBe("line one\nline two");
+      expect(reason.className).toContain("whitespace-pre-wrap");
+    });
+
+    it("tells 'never asked' from 'asked, none' — the daemon's own decided flag (AR-19)", async () => {
+      stubMirrorResponses(portrait, listing, { decided: false, refusals: [] });
+      const { unmount } = renderWithClient(<Mirror api={api} />);
+      await waitFor(() => expect(screen.getByTestId("refusals-undecided")).toBeInTheDocument());
+      expect(screen.getByTestId("refusals-undecided")).toHaveTextContent("hasn't been asked");
+      expect(screen.queryAllByTestId("refusal")).toHaveLength(0);
+      unmount();
+
+      stubMirrorResponses(portrait, listing, { decided: true, refusals: [] });
+      renderWithClient(<Mirror api={api} />);
+      await waitFor(() => expect(screen.getByTestId("refusals-none")).toBeInTheDocument());
+      expect(screen.getByTestId("refusals-none")).toHaveTextContent("none");
+      expect(screen.queryByTestId("refusals-undecided")).toBeNull();
+    });
+
+    it("points the empty state at the terminal instead of offering to record one here (AR-18)", async () => {
+      stubMirrorResponses(portrait, listing, { decided: false, refusals: [] });
+      renderWithClient(<Mirror api={api} />);
+      await waitFor(() => expect(screen.getByTestId("refusals-undecided")).toBeInTheDocument());
+      expect(screen.getByTestId("refusals-undecided")).toHaveTextContent("duo mirror refusals");
+    });
+
+    it("surfaces the daemon's error message when refusals cannot be read, without taking the rest down", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url.includes("/mirror/refusals")) {
+            return new Response(JSON.stringify({ error: { code: "unknown", message: "refusals file unreadable" } }), { status: 500 });
+          }
+          if (url.includes("/mirror/portrait")) {
+            return new Response(JSON.stringify(portrait), { status: 200 });
+          }
+          return new Response(JSON.stringify(listing), { status: 200 });
+        }),
+      );
+      renderWithClient(<Mirror api={api} />);
+      await waitFor(() => expect(screen.getByText("refusals file unreadable")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByTestId("bucket-awaitingApproval")).toBeInTheDocument());
+    });
+
+    it("reads the daemon's route and nothing else — no write leaves the refusals view", async () => {
+      renderWithClient(<Mirror api={api} />);
+      await screen.findAllByTestId("refusal");
+      const calls = vi.mocked(fetch).mock.calls as unknown as [string, RequestInit | undefined][];
+      expect(calls.some(([url]) => url === "http://test/mirror/refusals")).toBe(true);
+      expect(calls.filter(([, init]) => init?.method && init.method !== "GET")).toEqual([]);
+    });
+  });
+
+  describe("authoring stays with the files (AR-18, #53)", () => {
+    it("renders no free-text editing anywhere on the Mirror — rules or refusals", async () => {
+      const { container } = renderWithClient(<Mirror api={api} />);
+      await screen.findAllByTestId("refusal");
+      await screen.findByTestId("bucket-awaitingApproval");
+      expect(container.querySelectorAll("input, textarea, select, [contenteditable]")).toHaveLength(0);
+      for (const button of screen.queryAllByRole("button")) {
+        expect(button.textContent ?? "").not.toMatch(/\b(add|edit|write|record|new|save)\b/i);
+      }
+    });
+
+    it("carries no percentage numeral anywhere, refusals included", async () => {
+      renderWithClient(<Mirror api={api} />);
+      await screen.findAllByTestId("refusal");
+      expect(screen.getByTestId("mirror")).not.toHaveTextContent("%");
+    });
   });
 });
