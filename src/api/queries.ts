@@ -3,6 +3,8 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type UseQueryO
 import { apiRequest, type DuoApiConfig } from "./client.js";
 import type {
   AuditEntry,
+  ChannelPolicy,
+  ChannelSummary,
   CorrectionCandidate,
   DraftOutcome,
   DraftPipelineResult,
@@ -54,6 +56,8 @@ export const queryKeys = {
   trustGrid: ["trust", "grid"] as const,
   audit: ["audit"] as const,
   knowledge: ["knowledge"] as const,
+  // #47: what this duo is reachable through — the mute routes invalidate it, since `muted` on each row is the daemon's re-read of the policy.
+  channels: ["channels"] as const,
   // #46: keyed by the submitted query — each distinct search is its own
   // cache entry, so revisiting a recent query is instant and a stale
   // search never blocks a new one.
@@ -180,6 +184,32 @@ export function useMirrorRule(api: DuoApiConfig, id: string, enabled: boolean) {
 /** #45: what this duo knows, in one read (digital-duo #175's composition). Read-only — no client route writes it, so nothing invalidates it but a refetch. */
 export function useKnowledge(api: DuoApiConfig, options?: Partial<UseQueryOptions<DuoKnowledge>>) {
   return useQuery({ queryKey: queryKeys.knowledge, queryFn: () => apiRequest<DuoKnowledge>(api, "/knowledge"), ...options });
+}
+
+/** #47: what this duo is reachable through (digital-duo #171) — one row per bridged channel, every display string the adapter's own. An empty list is a supported configuration, not an error. */
+export function useChannels(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.channels, queryFn: () => apiRequest<ChannelSummary[]>(api, "/channels") });
+}
+
+/**
+ * #47: mute or unmute one channel through the policy route (digital-duo
+ * #172). The body carries the channel's `kind` — the key the daemon's one
+ * mute store uses — and nothing this client computed. The answer is the
+ * updated policy, which this screen has no use for: the list is refetched,
+ * because the row's `muted` is the daemon's word, not a local flag.
+ */
+export function useSetChannelMute(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ channel, muted }: { channel: string; muted: boolean }) =>
+      apiRequest<ChannelPolicy>(api, muted ? "/channels/policy/mute" : "/channels/policy/unmute", {
+        method: "POST",
+        body: JSON.stringify({ channel }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.channels });
+    },
+  });
 }
 
 /**

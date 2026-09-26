@@ -257,6 +257,27 @@ describe("App — hash routing between the surfaces", () => {
     await waitFor(() => expect(screen.getByTestId("search-overlay")).toBeInTheDocument());
   });
 
+  it("navigates to Channels on #channels, with the your-duo surfaces (#47)", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })),
+    );
+
+    render(<App />);
+
+    const link = screen.getByRole("link", { name: "Channels" });
+    expect(link).toHaveAttribute("href", "#channels");
+    const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
+    expect(entries.indexOf("Knowledge")).toBeLessThan(entries.indexOf("Channels"));
+    expect(entries.indexOf("Channels")).toBeLessThan(entries.indexOf("Settings"));
+
+    window.location.hash = "#channels";
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => expect(screen.getByTestId("channels")).toBeInTheDocument());
+    expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
+  });
+
   it("navigates to Duo on #duo and back to Review", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(

@@ -134,6 +134,23 @@ message — including its permissions outcomes (passed on, declined), which
 render in the daemon's own words, verbatim, never paraphrased into
 something friendlier.
 
+### channel
+
+An outside system bridged into the duo — the daemon's word, and the core's
+concern: an adapter there supplies a kind and a display label, and this
+client renders both **without recognising either**, so a channel added to
+the core needs no change here. The Channels screen lists what the daemon
+reports — the adapter's label, its state, when it last carried something,
+whether it is muted — and a channel whose connection has failed is put first
+with the adapter's reason under it, because that screen is where the owner
+goes to learn why it is quiet. No channels is a complete configuration, not
+an unfinished one: the screen says the duo answers only its owner right now
+and offers nothing to finish. To *mute* a channel is to ask the daemon to
+create no drafts from it; the muted state shown is the daemon's re-read, and
+the verb here is the owner's, distinct from a member muting a conversation
+(below). Connecting or authorising a channel is not done from this app — it
+happens where the credentials are.
+
 ## The verbs
 
 One action, one name, everywhere it appears. If a control and a sentence
@@ -246,6 +263,9 @@ never paraphrased, never "improved":
 - **The duo attribution** — whose voice a block of text is. The client's
   three phrasings are pinned above and by test; the labelling is structural
   (`DuoMessage`, no avatar, AR-13), not a coat of paint.
+- **A channel's label, its state, and its failure reason** — the adapter's own
+  words, on the Channels screen, shown as sent (#47); the client keeps no
+  table from a channel kind to a name, an icon, or a colour.
 - **Delivery failure reasons** — rendered verbatim after the client's own
   "Couldn't deliver — " prefix.
 - **The daemon's error and owner-notice messages** — when the daemon speaks

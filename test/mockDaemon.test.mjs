@@ -536,3 +536,68 @@ describe("mock daemon — corpus search (duo #46, mirroring digital-duo #174)", 
     expect((await res.json()).results).toEqual([]);
   });
 });
+
+describe("mock daemon — channels and their policy (duo #47, mirroring digital-duo #171 and #172)", () => {
+  it("serves one row per adapter in ChannelSummary's shape, failure reasons included", async () => {
+    const res = await get("/channels");
+    expect(res.status).toBe(200);
+    const channels = await res.json();
+    expect(channels.length).toBeGreaterThanOrEqual(2);
+    for (const channel of channels) {
+      expect(typeof channel.kind).toBe("string");
+      expect(typeof channel.label).toBe("string");
+      expect(["connected", "failed"]).toContain(channel.state);
+      expect(channel.lastActivityAt === null || typeof channel.lastActivityAt === "string").toBe(true);
+      expect(typeof channel.muted).toBe("boolean");
+      // `reason` is present iff the channel has failed — the adapter's own words.
+      expect("reason" in channel).toBe(channel.state === "failed");
+    }
+    expect(channels.some((c) => c.state === "failed")).toBe(true);
+    expect(channels.some((c) => c.state === "connected")).toBe(true);
+  });
+
+  it("mute and unmute round-trip through one store — the row and the policy agree", async () => {
+    const [first] = await (await get("/channels")).json();
+    const mute = await post("/channels/policy/mute", { channel: first.kind });
+    expect(mute.status).toBe(200);
+    expect((await mute.json()).muted).toContain(first.kind);
+    expect((await (await get("/channels")).json()).find((c) => c.kind === first.kind).muted).toBe(true);
+    expect((await (await get("/channels/policy")).json()).muted).toContain(first.kind);
+
+    // Idempotent, like the real store.
+    const again = await (await post("/channels/policy/mute", { channel: first.kind })).json();
+    expect(again.muted.filter((k) => k === first.kind)).toHaveLength(1);
+
+    const unmute = await post("/channels/policy/unmute", { channel: first.kind });
+    expect((await unmute.json()).muted).not.toContain(first.kind);
+    expect((await (await get("/channels")).json()).find((c) => c.kind === first.kind).muted).toBe(false);
+  });
+
+  it("matches a mute against the channel's kind case-insensitively, as describeChannels does", async () => {
+    const [first] = await (await get("/channels")).json();
+    await post("/channels/policy/mute", { channel: first.kind.toUpperCase() });
+    expect((await (await get("/channels")).json()).find((c) => c.kind === first.kind).muted).toBe(true);
+    await post("/channels/policy/unmute", { channel: first.kind });
+  });
+
+  it("scopes a thread mute below its channel without muting the channel (#172 AC2)", async () => {
+    const [first] = await (await get("/channels")).json();
+    const res = await post("/channels/policy/mute", { channel: first.kind, threadId: "t-1" });
+    const policy = await res.json();
+    expect(policy.mutedThreads).toEqual([{ channel: first.kind, threadId: "t-1" }]);
+    expect(policy.muted).not.toContain(first.kind);
+    expect((await (await get("/channels")).json()).find((c) => c.kind === first.kind).muted).toBe(false);
+    await post("/channels/policy/unmute", { channel: first.kind, threadId: "t-1" });
+  });
+
+  it("refuses a bad mute target with the daemon's own words", async () => {
+    const missing = await post("/channels/policy/mute", {});
+    expect(missing.status).toBe(400);
+    expect((await missing.json()).error).toEqual({ code: "bad_request", message: "channel is required and must be a non-empty string" });
+    const slash = await post("/channels/policy/mute", { channel: "a/b" });
+    expect(slash.status).toBe(400);
+    expect((await slash.json()).error.message).toBe(
+      'channel must not contain "/" — it scopes a thread within a channel — got "a/b"',
+    );
+  });
+});

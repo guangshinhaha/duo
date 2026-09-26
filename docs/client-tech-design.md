@@ -104,9 +104,9 @@ domain types.
 |---|---|---|---|
 | `GET` | `/health` | `{ ok: true }` | inline |
 | `GET` | `/duos` | `DuoSummary[]` *(new, 1.6)* | `duo/registry` |
-| `GET` | `/channels` | `ChannelSummary[]` — one row per registered adapter, display strings supplied by the adapter (#171) | `drafting/delivery` |
+| `GET` | `/channels` | `ChannelSummary[]` — one row per registered adapter, display strings supplied by the adapter (#171); the Channels screen (`#channels`, #47) renders it without recognising a kind or a label | `drafting/delivery` |
 | `GET` | `/channels/policy` | `ChannelPolicy` — which channels, and which threads in them, produce no proactive offers (#172) | `drafting/channel-mutes` |
-| `POST` | `/channels/policy/mute` | `ChannelPolicy` — the updated policy (channel or thread scope) | `drafting/channel-mutes` |
+| `POST` | `/channels/policy/mute` | `ChannelPolicy` — the updated policy (channel or thread scope); the Channels screen mutes at channel scope by `kind` and re-reads `GET /channels` (#47) | `drafting/channel-mutes` |
 | `POST` | `/channels/policy/unmute` | `ChannelPolicy` — the updated policy | `drafting/channel-mutes` |
 | `GET` | `/devices` | `DeviceToken[]` — no token or hash field, so the list structurally cannot leak a credential (#177) | `serve/tokens` |
 | `POST` | `/devices/:id/revoke` | `DeviceToken` — same-tick teardown: cached auth and live socket drop with it | `serve/tokens` |

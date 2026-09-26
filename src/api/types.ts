@@ -350,3 +350,33 @@ export interface PublicDeclinedRefused {
 }
 
 export type PublicAnswerOutcome = PublicAnswered | PublicPassedOn | PublicDeclinedRefused;
+
+/**
+ * One row of `GET /channels` (digital-duo #171) — a channel in a shape that
+ * names no messaging product: `kind` is an opaque identifier and `label` is
+ * the adapter's own display string, and this client renders both without
+ * recognising either (#43). `state` is the daemon's own connection-health
+ * word; a screen may branch on `"failed"` (the daemon's general vocabulary,
+ * not any one channel's) and must render any other value as it arrived.
+ * `reason` is present iff `state` is `"failed"`, in the adapter's words.
+ * `muted` is the daemon's re-read of the one mute store — never a flag the
+ * client keeps.
+ */
+export interface ChannelSummary {
+  readonly kind: string;
+  readonly label: string;
+  readonly state: "connected" | "failed";
+  readonly reason?: string;
+  readonly lastActivityAt: string | null;
+  readonly muted: boolean;
+}
+
+/**
+ * What the policy routes answer (digital-duo #172): the one mute store read
+ * by scope. `muted` holds channel kinds; `mutedThreads` scopes a mute to one
+ * thread within a channel, which no client screen sets yet.
+ */
+export interface ChannelPolicy {
+  readonly muted: string[];
+  readonly mutedThreads: { readonly channel: string; readonly threadId: string }[];
+}
