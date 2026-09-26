@@ -26,7 +26,10 @@ function draftFor(owner: string): DraftRecord {
 
 function knowledgeFor() {
   return {
-    records: { total: 0, bySource: {} },
+    // #49: a duo with records is a built one. An empty knowledge read is a
+    // first run and opens on onboarding — these tests are about the shell
+    // of a duo that already exists.
+    records: { total: 3, bySource: {} },
     lastImport: null,
     corpus: {
       tooThin: true,
@@ -76,6 +79,11 @@ describe("App — the query cache never leaks across a reconnect to a different 
       // is about — not whichever query happened to fire last.
       if (url.includes("/duos")) {
         return Promise.resolve(new Response(JSON.stringify([{ kind: "personal" }]), { status: 200 }));
+      }
+      // #49: the default surface also reads what the duo knows (to tell a
+      // first run from a built duo) — answered on its own, like the roster.
+      if (url.includes("/knowledge")) {
+        return Promise.resolve(new Response(JSON.stringify(knowledgeFor()), { status: 200 }));
       }
       // daemon B's request is held open deliberately, so a synchronous
       // stale-cache read (if the bug were still present) would be

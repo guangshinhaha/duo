@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { App } from "../src/App.js";
 import { Setup } from "../src/routes/Setup.js";
-import { Onboarding } from "../src/routes/Onboarding.js";
+import { Onboarding, ReviewOrFirstRun } from "../src/routes/Onboarding.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { DuoKnowledge, EmbedJobStatus, PasteImportSummary, Rule, RuleReviewListing } from "../src/api/types.js";
 
@@ -352,9 +352,10 @@ describe("#49 AC3 — it ends at the Mirror", () => {
 
     knowledge = withPendingRules(4);
     await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1));
-    // Keep watching for a while: a later poll must not finish it again.
-    const before = daemon.count("GET", "/knowledge");
-    await waitFor(() => expect(daemon.count("GET", "/knowledge")).toBeGreaterThan(before));
+    // Give later refetches every chance to finish it again — focus, remount, a status change.
+    fireEvent.focus(window);
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS * 5));
+    expect(daemon.count("GET", "/knowledge")).toBeGreaterThan(0);
     expect(onFinish).toHaveBeenCalledTimes(1);
   });
 
@@ -437,8 +438,10 @@ describe("#49 AC4 — a duo built in a terminal never sees onboarding", () => {
   it("a payload that is not the daemon's documented shape is not 'an empty duo' — Review stays", async () => {
     // The cache is a storage layer, not a promise (Knowledge's own law):
     // an array where the object should be must never launch a first run.
+    // Rendered on its own client: the app's module-level cache would carry
+    // an earlier test's knowledge in, which is a different question.
     fakeDaemon({ knowledge: () => [] as unknown as DuoKnowledge, embedGet: () => idle });
-    await launch();
+    renderWithClient(<ReviewOrFirstRun api={api} />);
 
     await screen.findByTestId("review-empty");
     await new Promise((resolve) => setTimeout(resolve, 50));

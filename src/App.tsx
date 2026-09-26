@@ -17,7 +17,7 @@ import { usePendingDrafts } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Settings } from "./routes/Settings.js";
-import { Review } from "./routes/Review.js";
+import { Onboarding, ReviewOrFirstRun } from "./routes/Onboarding.js";
 import { Draft } from "./routes/Draft.js";
 import { Corrections } from "./routes/Corrections.js";
 import { Conversations, roomTitle } from "./routes/Conversations.js";
@@ -102,6 +102,7 @@ type Route =
   | "knowledge"
   | "channels"
   | "escalations"
+  | "onboarding"
   | { draft: string }
   | { room: string }
   | { thread: { roomId: string; rootEventId: string } };
@@ -159,6 +160,9 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
   }
   if (hash === "#escalations") {
     return "escalations";
+  }
+  if (hash === "#onboarding") {
+    return "onboarding";
   }
   if (hash === "#corrections") {
     return "corrections";
@@ -476,6 +480,11 @@ function MobileNav({
   );
 }
 
+/** #49: where onboarding lands — the Mirror, on the rules the daemon just derived. */
+function goToMirror(): void {
+  window.location.hash = "#mirror";
+}
+
 /** What each route renders, and what it needs from the shell — one switch, each surface exactly once. */
 interface SurfaceContext {
   api: DuoApiConfig | null;
@@ -552,8 +561,12 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       return <Trust api={shell.api!} />;
     case "audit":
       return <Audit api={shell.api!} />;
+    case "onboarding":
+      // #49: the first run, ending at the Mirror once the first rules exist.
+      return <Onboarding api={shell.api!} onFinish={goToMirror} />;
     case "review":
-      return <Review api={shell.api!} connection={shell.connection} />;
+      // #49: Review, unless the daemon says this duo is empty — then its first run.
+      return <ReviewOrFirstRun api={shell.api!} connection={shell.connection} />;
   }
 }
 

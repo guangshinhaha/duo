@@ -694,3 +694,85 @@ describe("mock daemon — escalation digests, history, and rate (duo #54, mirror
     expect((await post("/escalations/digest", {})).status).toBe(404);
   });
 });
+
+describe("mock daemon — first run over HTTP (duo #49, mirroring digital-duo #176)", () => {
+  // Its own instance, started empty: the first run mutates the corpus, and
+  // every other describe here reads the seeded one.
+  let firstRun;
+  let firstBase;
+  beforeAll(async () => {
+    firstRun = createMockDaemon({ empty: true, embedTickMs: 400 }).server;
+    await new Promise((resolve) => firstRun.listen(0, "127.0.0.1", resolve));
+    firstBase = `http://127.0.0.1:${firstRun.address().port}`;
+  });
+  afterAll(async () => {
+    firstRun.closeAllConnections?.();
+    await new Promise((resolve) => firstRun.close(resolve));
+  });
+  const fget = (path) => fetch(`${firstBase}${path}`, { headers: auth });
+  const fpost = (path, body) => fetch(`${firstBase}${path}`, { method: "POST", headers: auth, body: JSON.stringify(body ?? {}) });
+
+  const TRANSCRIPT = "Me: Can you send the vendor invoice today?\nClaude: Yes, sending it now.\nMe: Thanks.";
+
+  it("starts empty when asked to: no records, no import, no rules — the daemon's own facts for a first run", async () => {
+    const knowledge = await (await fget("/knowledge")).json();
+    expect(knowledge.records.total).toBe(0);
+    expect(knowledge.lastImport).toBeNull();
+    expect(Object.values(knowledge.rules.byReviewStatus).reduce((a, b) => a + b, 0)).toBe(0);
+    expect(await (await fget("/corpus/embed")).json()).toMatchObject({ state: "idle", embedded: 0, total: 0, error: null });
+  });
+
+  it("validates the import with the daemon's own words, and refuses a transcript with no turn as the parser does", async () => {
+    const blank = await fpost("/corpus/import-paste", { transcript: "  " });
+    expect(blank.status).toBe(400);
+    expect((await blank.json()).error.message).toBe("transcript is required and must be a non-empty string");
+    const malformed = await fpost("/corpus/import-paste", { transcript: "no turns here" });
+    expect(malformed.status).toBe(400);
+    const error = (await malformed.json()).error;
+    expect(error.code).toBe("MalformedTranscriptError");
+    expect(error.message).toMatch(/Found no recognisable turn/);
+  });
+
+  it("imports a pasted transcript and returns the summary the CLI would print; the knowledge read moves with it", async () => {
+    const res = await fpost("/corpus/import-paste", { transcript: TRANSCRIPT });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ workRelevant: true, written: 3, skipped: 0, discardedAboveCeiling: 0 });
+    const knowledge = await (await fget("/knowledge")).json();
+    expect(knowledge.records.total).toBe(3);
+    expect(knowledge.lastImport.written).toBe(3);
+  });
+
+  it("a second import of the same text behaves as the CLI's second import does — it invents no dedupe", async () => {
+    const res = await fpost("/corpus/import-paste", { transcript: TRANSCRIPT });
+    expect(await res.json()).toEqual({ workRelevant: true, written: 3, skipped: 0, discardedAboveCeiling: 0 });
+    expect((await (await fget("/knowledge")).json()).records.total).toBe(6);
+  });
+
+  it("embeds as a job: 202 with the starting status, a 409 while it runs, and progress that climbs to the total", async () => {
+    const started = await fpost("/corpus/embed");
+    expect(started.status).toBe(202);
+    expect(await started.json()).toMatchObject({ state: "running", embedded: 0, error: null });
+    const again = await fpost("/corpus/embed");
+    expect(again.status).toBe(409);
+    expect((await again.json()).error.code).toBe("embed_already_running");
+
+    let status = await (await fget("/corpus/embed")).json();
+    for (let i = 0; i < 300 && status.state === "running"; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      status = await (await fget("/corpus/embed")).json();
+    }
+    expect(status).toMatchObject({ state: "done", embedded: 6, total: 6, error: null });
+    expect(status.finishedAt).not.toBeNull();
+  });
+
+  it("derivation is a terminal stage in the real daemon: there is no derive route, and the mock-only stand-in stages what `duo derive` would have produced", async () => {
+    expect((await fpost("/corpus/derive")).status).toBe(404);
+    const before = await (await fget("/mirror/rules")).json();
+    expect(before.awaitingApproval).toEqual([]);
+    expect((await fpost("/mock/derive")).status).toBe(200);
+    const after = await (await fget("/mirror/rules")).json();
+    expect(after.awaitingApproval.length).toBeGreaterThan(0);
+    const knowledge = await (await fget("/knowledge")).json();
+    expect(knowledge.rules.byReviewStatus.pending).toBeGreaterThan(0);
+  });
+});
