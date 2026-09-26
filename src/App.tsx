@@ -6,6 +6,7 @@ import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persist
 import { useApiConfig } from "./api/config.js";
 import { ApiRequestError, apiRequest, type DuoApiConfig } from "./api/client.js";
 import { useRevokedTokenGuard } from "./api/revocation.js";
+import { endedNoticeText, useEndedMarker } from "./api/lifecycle.js";
 import { useDraftReadySocket } from "./api/ws.js";
 import { SyncStatusProvider } from "./sync.js";
 import { OfflineBar } from "./components/OfflineBar.js";
@@ -495,6 +496,7 @@ interface SurfaceContext {
   signOutWorkspace: () => void;
   onPairDuo: () => void;
   onWorkspaceSignIn: () => void;
+  onDuoEnded: () => void;
 }
 
 /** The §3.1 route tree as one switch — each route's surface, exactly once. Settings also mutates the connections, through App's single choke points. A duo surface reached without a pairing (a member's URL) explains and offers instead — #62's "offered rather than demanded". */
@@ -543,6 +545,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
           onSignOut={shell.signOutWorkspace}
           onPairDuo={shell.onPairDuo}
           onWorkspaceSignIn={shell.onWorkspaceSignIn}
+          onDuoEnded={shell.onDuoEnded}
         />
       );
     case "mirror":
@@ -589,6 +592,11 @@ function AppShell() {
   // surface, the same choke point Settings' unpair uses — and `revoked`
   // is what Setup says when it appears for that reason rather than first run.
   const [revoked, setRevoked] = useState(false);
+  // #55: this device ended its duo. After a confirmed end every token is
+  // dead, so the daemon can only ever answer 401 — indistinguishable from a
+  // revocation — and this device's own memory is the one honest source for
+  // saying "ended" instead. It outranks `revoked` wherever both could show.
+  const [ended, setEnded] = useEndedMarker();
   // #46: corpus search, openable from any route. ⌘K and Ctrl+K are the
   // same gesture on the two platforms this client ships to; the overlay
   // renders above whatever surface is on screen, so opening it costs
@@ -775,9 +783,22 @@ function AppShell() {
   // After the guard unpairs, Setup carries the explanation with it; a fresh
   // pairing is a first run again and must not keep saying "no longer paired".
   useRevokedTokenGuard(() => {
+    // #55: a 401 that follows this device's own end is the ending, not a revocation.
+    if (ended) {
+      return;
+    }
     setApi(null);
     setRevoked(true);
   });
+
+  // #55: the daemon confirmed the end. The pairing leaves through the same
+  // choke point as any unpair (cache, persisted blob and stored config all
+  // go — nothing of the dead duo stays readable), and the marker says why.
+  function duoEnded(): void {
+    setRevoked(false);
+    setEnded({ endedAt: new Date().toISOString() });
+    setApi(null);
+  }
 
   // #62: the default surface follows the shell — Conversations for a
   // signed-in member (§1.5's default space), Review for the owner-only app.
@@ -786,9 +807,16 @@ function AppShell() {
   if (!api && !session) {
     return (
       <Setup
-        notice={revoked ? "This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again." : undefined}
+        notice={
+          ended
+            ? endedNoticeText(ended)
+            : revoked
+              ? "This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again."
+              : undefined
+        }
         onConnect={(config) => {
           setRevoked(false);
+          setEnded(null);
           setApi(config);
         }}
         onWorkspaceSession={setSession}
@@ -833,7 +861,18 @@ function AppShell() {
         {/* #41 meets #62: a revoked pairing drops the member into the
             member shell, and the reason must not vanish with Setup — the
             banner says what happened until a fresh pairing clears it. */}
-        {revoked && !api && (
+        {/* #55: the same banner slot for an ended duo — and the true one:
+            it outranks "no longer paired", which the same 401 would say. */}
+        {ended && !api && (
+          <p
+            className="border-b border-[var(--edge)] bg-[var(--surface-2)] px-4 py-2 text-center type-provenance text-[var(--escalate)]"
+            data-testid="ended-notice"
+            role="status"
+          >
+            {endedNoticeText(ended)}
+          </p>
+        )}
+        {revoked && !ended && !api && (
           <p
             className="border-b border-[var(--edge)] bg-[var(--surface-2)] px-4 py-2 text-center type-provenance text-[var(--escalate)]"
             data-testid="revoked-notice"
@@ -935,6 +974,7 @@ function AppShell() {
               signOutWorkspace,
               onPairDuo: openPairDuo,
               onWorkspaceSignIn: openWorkspaceSignIn,
+              onDuoEnded: duoEnded,
             })}
           </main>
           {/* #39: the app's polite live region — a draft arriving
@@ -955,6 +995,7 @@ function AppShell() {
         onOpenChange={setPairOpen}
         onConnect={(config) => {
           setRevoked(false);
+          setEnded(null);
           setPairOpen(false);
           setApi(config);
         }}

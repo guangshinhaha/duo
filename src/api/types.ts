@@ -453,3 +453,20 @@ export interface EscalationUrgencyRate {
   readonly urgent: number;
   readonly rate: number;
 }
+
+// #55: `POST /lifecycle/end`'s answer (digital-duo #181), verbatim from the
+// core's `EndDuoResult`. Without `confirmed: true` in the request it is only
+// a description — what WOULD go, with nothing deleted — and `confirmed` in
+// the answer says which of the two happened. The path lists are the
+// daemon's own relative paths: the client counts them and shows them, and
+// claims nothing the daemon did not list.
+export interface EndDuoResult {
+  /** True only when deletion actually ran. */
+  readonly confirmed: boolean;
+  readonly storeDataDir: string;
+  /** Files under the store's data directory — what the duo knows. */
+  readonly storePaths: readonly string[];
+  readonly duoDir: string;
+  /** Files derived from it — rules, voice, refusals, lifecycle records. */
+  readonly duoDirPaths: readonly string[];
+}

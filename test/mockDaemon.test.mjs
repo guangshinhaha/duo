@@ -776,3 +776,86 @@ describe("mock daemon — first run over HTTP (duo #49, mirroring digital-duo #1
     expect(knowledge.rules.byReviewStatus.pending).toBeGreaterThan(0);
   });
 });
+
+describe("mock daemon — lifecycle (duo #55, mirroring digital-duo #181)", () => {
+  // Ending kills the daemon's tokens, so these run against their own
+  // instances — the shared one above must stay alive for every other test.
+  async function withOwnDaemon(run) {
+    const own = createMockDaemon().server;
+    await new Promise((resolve) => own.listen(0, "127.0.0.1", resolve));
+    const ownBase = `http://127.0.0.1:${own.address().port}`;
+    try {
+      await run({
+        get: (path) => fetch(`${ownBase}${path}`, { headers: auth }),
+        post: (path, body) => fetch(`${ownBase}${path}`, { method: "POST", headers: auth, body: JSON.stringify(body) }),
+        health: () => fetch(`${ownBase}/health`),
+      });
+    } finally {
+      own.closeAllConnections?.();
+      await new Promise((resolve) => own.close(resolve));
+    }
+  }
+
+  it("GET /lifecycle is the record plus every transfer's state, in the core's shapes", async () => {
+    const res = await get("/lifecycle");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.lifecycle).toEqual({
+      status: "active",
+      archivedBy: null,
+      archivedAt: null,
+      orphanedBy: null,
+      orphanedAt: null,
+      orphanReason: null,
+      transferredFrom: null,
+      transferredTo: null,
+      transferredAt: null,
+    });
+    expect(body.transfers).toEqual([]);
+  });
+
+  it("POST /lifecycle/end refuses an unnamed decider, in the daemon's words", async () => {
+    for (const body of [{}, { confirmed: true }, { decidedBy: "  ", confirmed: true }, { decidedBy: 7 }]) {
+      const res = await post("/lifecycle/end", body);
+      expect(res.status).toBe(400);
+      const error = (await res.json()).error;
+      expect(error.code).toBe("bad_request");
+      expect(error.message).toContain("requires naming who decided it");
+    }
+  });
+
+  it("without confirmed it only describes — and describes the same again, because nothing went", async () => {
+    await withOwnDaemon(async ({ get: ownGet, post: ownPost }) => {
+      const first = await (await ownPost("/lifecycle/end", { decidedBy: "river" })).json();
+      const second = await (await ownPost("/lifecycle/end", { decidedBy: "river", confirmed: false })).json();
+      expect(first.confirmed).toBe(false);
+      expect(first.storePaths.length).toBeGreaterThan(0);
+      expect(first.duoDirPaths.length).toBeGreaterThan(0);
+      expect(typeof first.storeDataDir).toBe("string");
+      expect(typeof first.duoDir).toBe("string");
+      expect(second).toEqual(first);
+      // Still alive.
+      expect((await ownGet("/drafts")).status).toBe(200);
+    });
+  });
+
+  it("only `confirmed: true` (literally) ends it — and every token dies with it, a clean 401, not a 500", async () => {
+    await withOwnDaemon(async ({ get: ownGet, post: ownPost, health }) => {
+      for (const looseTruth of ["true", 1, "yes"]) {
+        expect((await (await ownPost("/lifecycle/end", { decidedBy: "river", confirmed: looseTruth })).json()).confirmed).toBe(false);
+      }
+      expect((await ownGet("/drafts")).status).toBe(200);
+
+      const result = await (await ownPost("/lifecycle/end", { decidedBy: "river", confirmed: true })).json();
+      expect(result.confirmed).toBe(true);
+
+      for (const res of [await ownGet("/drafts"), await ownGet("/lifecycle"), await ownPost("/lifecycle/end", { decidedBy: "river", confirmed: true })]) {
+        expect(res.status).toBe(401);
+        expect((await res.json()).error.code).toBe("unauthorized");
+        expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      }
+      // The process itself is still up — only its store and tokens are gone.
+      expect((await health()).status).toBe(200);
+    });
+  });
+});

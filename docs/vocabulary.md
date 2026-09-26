@@ -229,6 +229,21 @@ device by the name it was paired under, says when it was paired and last seen,
 and marks "This device" — a label the owner places once, because the daemon
 does not say which row is the caller. Pairing stays at the Mac: `duo pair new`.
 
+### end this duo
+
+The kill switch, under exactly this name: Settings' "End this duo…" and its
+confirmation ("End this duo?", "End this duo for good"). It is the only
+control in the client that acts on the daemon itself rather than on this
+device, which is why it is never confused with "forget this device": that
+one removes this device's stored connection and leaves the daemon's record;
+this one deletes the duo — what it knows and everything derived from it —
+and every paired device loses it. The confirmation states what ends, what is
+kept, and what cannot be undone before anything proceeds, and takes a typed
+"END"; it never says "revoke" or "wipe", and states no deletion the daemon
+did not itself list. Once done, the app says "Your duo was ended" — the
+true reason — and never "no longer paired", which is what a revoked token
+says.
+
 ### sign in / sign out
 
 The workspace connection's begin and end, under exactly these names. Signing

@@ -10,6 +10,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "../components/primitives/AlertDialog.js";
+import { EndDuoSection } from "../components/EndDuoSection.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { PairedDevices } from "../components/PairedDevices.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
@@ -48,6 +49,7 @@ export function Settings({
   onSignOut,
   onPairDuo,
   onWorkspaceSignIn,
+  onDuoEnded,
 }: {
   api: DuoApiConfig | null;
   session: WorkspaceSession | null;
@@ -55,6 +57,8 @@ export function Settings({
   onSignOut: () => void;
   onPairDuo: () => void;
   onWorkspaceSignIn: () => void;
+  /** #55: the daemon confirmed the duo's end — App answers by leaving the pairing and saying so. */
+  onDuoEnded?: () => void;
 }) {
   const [addressInput, setAddressInput] = useState(api?.baseUrl ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -339,6 +343,9 @@ export function Settings({
           </AlertDialog>
         </section>
       )}
+      {/* #55: the kill switch — the one Settings control that acts on the
+          daemon itself, not on this device. Last, and its own section. */}
+      {api && <EndDuoSection api={api} session={session} onEnded={onDuoEnded} />}
     </div>
   );
 }
