@@ -12,6 +12,7 @@ import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
 import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
 import { wireTrayReview } from "./tray.js";
+import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
 import { shouldPersistQuery } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
@@ -476,6 +477,32 @@ function AppShell() {
       unwire = dispose;
     });
     return () => unwire?.();
+  }, []);
+
+  // #151: the Mac shell's other doors into the app — what the menu-bar tray
+  // sends here ("open this chat"), the native menu's actions, and a decision
+  // made in the tray that this window's lists have not seen yet. All null
+  // outside the shell.
+  useEffect(() => {
+    const unwires: Array<() => void> = [];
+    let live = true;
+    const keep = (dispose: (() => void) | null): void => {
+      if (dispose === null) {
+        return;
+      }
+      if (live) {
+        unwires.push(dispose);
+      } else {
+        dispose();
+      }
+    };
+    void wireOpenHash().then(keep);
+    void wireMenu().then(keep);
+    void onDraftsChanged(() => void queryClient.invalidateQueries()).then(keep);
+    return () => {
+      live = false;
+      unwires.forEach((dispose) => dispose());
+    };
   }, []);
 
   // Wraps the raw setter so the cache is cleared *before* the next
