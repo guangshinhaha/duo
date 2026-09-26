@@ -56,7 +56,16 @@ describe("the chat-first address grammar (#141)", () => {
     expect(routeFromHash("#draft/abc")).toEqual({ draft: "abc" });
     expect(routeFromHash("#admin")).toBe("admin");
     expect(routeFromHash("#admin/plat1")).toEqual({ adminOrg: "plat1" });
-    expect(routeFromHash("#settings/notifications")).toBe("settings");
+    expect(routeFromHash("#settings")).toBe("settings");
+  });
+
+  it("settings is an index and one address per section; an unknown section is the index", () => {
+    for (const id of ["notifications", "appearance", "devices", "links", "claude", "advanced", "end"] as const) {
+      expect(routeFromHash(`#settings/${id}`)).toEqual({ settings: id });
+      expect(routeFromHash(canonicalHash({ settings: id }))).toEqual({ settings: id });
+    }
+    expect(routeFromHash("#settings/nonsense")).toBe("settings");
+    expect(routeFromHash("#settings/")).toBe("settings");
   });
 
   it("only retired addresses are marked for in-place rewriting", () => {

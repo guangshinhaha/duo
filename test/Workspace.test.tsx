@@ -551,7 +551,7 @@ describe("#62 AC3 — both credentials are managed", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
     window.dispatchEvent(new Event("hashchange"));
 
     const workspace = await screen.findByTestId("settings-workspace");
@@ -578,7 +578,7 @@ describe("#62 AC3 — both credentials are managed", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
     window.dispatchEvent(new Event("hashchange"));
     fireEvent.click((await screen.findAllByTestId("settings-unpair"))[0]);
     fireEvent.click(screen.getByTestId("settings-unpair-confirm"));
@@ -607,7 +607,7 @@ describe("#62 AC4 — signing out leaves nothing behind", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
     window.dispatchEvent(new Event("hashchange"));
     fireEvent.click(await screen.findByTestId("settings-sign-out"));
 
@@ -1475,7 +1475,7 @@ describe("#69 AC2 — do not disturb holds everything back, visibly", () => {
     expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
 
     // What was missed is visible afterwards, in the place the member set the rule.
-    navigate("#settings");
+    navigate("#settings/notifications");
     const missed = await screen.findByTestId("missed-list");
     const entry = within(missed).getByTestId("missed-entry");
     expect(entry).toHaveTextContent("Bose in project-x: held words");
@@ -1495,7 +1495,7 @@ describe("#69 AC2 — do not disturb holds everything back, visibly", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#settings");
+    navigate("#settings/notifications");
 
     expect(await screen.findByTestId("dnd-toggle")).toHaveTextContent("Turn on do not disturb");
     fireEvent.click(screen.getByTestId("dnd-toggle"));
@@ -1675,7 +1675,7 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     });
     expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
 
-    navigate("#settings");
+    navigate("#settings/notifications");
     const entry = within(await screen.findByTestId("missed-list")).getByTestId("missed-entry");
     expect(entry).toHaveTextContent("Your duo answered on your behalf in project-x.");
     expect(entry.getAttribute("href")).toBe("#chat/!project-x%3Aworkspace.example");
@@ -1708,7 +1708,7 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem("duo.missed") ?? "[]")).toHaveLength(1));
     expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
 
-    navigate("#settings");
+    navigate("#settings/notifications");
     const entry = within(await screen.findByTestId("missed-list")).getByTestId("missed-entry");
     expect(entry).toHaveTextContent("Your duo refused to answer for you.");
     expect(entry.getAttribute("href")).toBe("#draft/d2");
@@ -1720,7 +1720,7 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#settings");
+    navigate("#settings/notifications");
     const section = await screen.findByTestId("settings-notifications");
 
     // The only switches are this device's do-not-disturb and its window; the
@@ -2063,7 +2063,7 @@ describe("#127 — hosted builds never show the homeserver form", () => {
     seedPairing();
     seedHostedAccount();
     stubDaemonFetch();
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
 
     await renderApp();
 
@@ -2121,7 +2121,7 @@ describe("#127 — hosted builds never show the homeserver form", () => {
     fireEvent.change(screen.getByLabelText("Token"), { target: { value: "tok" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
     window.dispatchEvent(new Event("hashchange"));
     expect(await screen.findByTestId("settings-workspace-signin")).toBeInTheDocument();
     expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
@@ -2165,7 +2165,7 @@ describe("#127 — hosted builds never show the homeserver form", () => {
     expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
 
     fireEvent.keyDown(screen.getByTestId("workspace-signin-dialog"), { key: "Escape" });
-    await goTo("#settings");
+    await goTo("#settings/advanced");
     expect(await screen.findByTestId("settings-workspace-signin")).toHaveTextContent("Sign in to a workspace");
   });
 });

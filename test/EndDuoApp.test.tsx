@@ -60,7 +60,7 @@ function goHash(hash: string): void {
 }
 
 async function endTheDuo() {
-  goHash("#settings");
+  goHash("#settings/end");
   fireEvent.click(await screen.findByTestId("settings-end-duo"));
   await screen.findByTestId("end-duo-ends");
   fireEvent.change(screen.getByTestId("settings-end-duo-phrase"), { target: { value: "END" } });
@@ -158,8 +158,13 @@ describe("#55 AC3 — the app continues running, and says the duo has ended", ()
     expect(screen.queryByTestId("revoked-notice")).toBeNull();
     // The workspace sign-in was never the duo's to end: it stands.
     expect(JSON.parse(localStorage.getItem("duo.workspace-session") ?? "null")).toEqual(SESSION);
+    // The way to pair is offered where the connection lives, and pointed at from the index.
+    goHash("#settings");
+    expect(await screen.findByTestId("settings-index-no-duo")).toHaveTextContent("No duo is connected on this device.");
+    expect(screen.queryByTestId("settings-link-end")).toBeNull();
+    goHash("#settings/advanced");
+    expect(await screen.findByTestId("settings-no-duo")).toBeInTheDocument();
     expect(screen.queryByTestId("settings-end-duo")).toBeNull();
-    expect(screen.getByTestId("settings-no-duo")).toBeInTheDocument();
   });
 
   it("an ordinary revoked token still says 'no longer paired' — the two 401s are told apart only by what this device knows", async () => {

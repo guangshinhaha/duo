@@ -379,7 +379,7 @@ describe("App — hash routing between the surfaces", () => {
     await waitFor(() => expect(screen.getByText(/question from A's daemon/)).toBeInTheDocument());
     await waitFor(() => expect(localStorage.getItem("duo-cache")).toContain("question from A's daemon"), { timeout: 3000 });
 
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByTestId("settings")).toBeInTheDocument());
 

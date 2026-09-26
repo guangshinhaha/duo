@@ -29,11 +29,31 @@ export type NamedRoute = (typeof NAMED_ROUTES)[number];
 export const PROFILE_TABS = ["portrait", "knows", "may", "rules", "activity"] as const;
 export type ProfileTab = (typeof PROFILE_TABS)[number];
 
+/**
+ * The parts of Settings, in the order they are listed. They read like
+ * preferences, not plumbing (docs/design-language.md §6.2): the daemon's
+ * address and token, and signing out of a workspace, live only under
+ * Advanced, and ending your duo is a section of its own, last. `needsDuo`
+ * marks the ones that mean nothing without a paired duo.
+ */
+export const SETTINGS_SECTIONS = [
+  { id: "notifications", label: "Notifications", about: "Do not disturb, quiet hours, and what was held back.", needsDuo: false },
+  { id: "appearance", label: "Appearance", about: "Light or dark, and the keyboard shortcuts.", needsDuo: false },
+  { id: "devices", label: "Devices", about: "The devices that can reach your duo. Pair another, or cut one off.", needsDuo: true },
+  { id: "links", label: "Ask links", about: "Links that let a colleague ask your duo something.", needsDuo: true },
+  { id: "claude", label: "Connect to Claude", about: "Use your duo from claude.ai.", needsDuo: true },
+  { id: "advanced", label: "Advanced", about: "Workspace sign-in, this device's connection, and your account.", needsDuo: false },
+  { id: "end", label: "End this duo", about: "Delete your duo and everything it learned.", needsDuo: true },
+] as const;
+
+export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]["id"];
+
 export type Route =
   | NamedRoute
   | { draft: string }
   | { adminOrg: string }
   | { profile: ProfileTab }
+  | { settings: SettingsSectionId }
   | { chat: string; at?: string }
   | { thread: { roomId: string; rootEventId: string; at?: string } };
 
@@ -115,7 +135,9 @@ export function routeFromHash(hash: string, fallback: Route = "chats"): Route {
     return named;
   }
   if (hash.startsWith("#settings/")) {
-    return "settings";
+    const id = decode(hash.slice("#settings/".length).split("/")[0]);
+    const section = SETTINGS_SECTIONS.find((entry) => entry.id === id);
+    return section ? { settings: section.id } : "settings";
   }
   return fallback;
 }
@@ -133,6 +155,9 @@ export function canonicalHash(route: Route): string {
   }
   if ("profile" in route) {
     return route.profile === "portrait" ? "#duo/profile" : `#duo/profile/${route.profile}`;
+  }
+  if ("settings" in route) {
+    return `#settings/${route.settings}`;
   }
   if ("chat" in route) {
     const room = encodeURIComponent(route.chat);
