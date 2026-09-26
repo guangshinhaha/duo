@@ -4,6 +4,7 @@ import { useDraft } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
 import { DraftCard } from "../components/DraftCard.js";
 import { MutationError } from "../components/MutationError.js";
+import { bridgedHref, bridgedIdOf } from "../shell/bridged.js";
 import { isOwnTurn, useConversationLink } from "../workspace/drafts.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 
@@ -52,8 +53,16 @@ export function Draft({
   // Chat-first (#142, #144): a draft for a message that arrived in a
   // conversation the member holds belongs in that chat's tray, and a question
   // you asked your own duo in Your duo's — so its old address opens the chat.
-  // A draft with neither (a bridged Slack question) keeps this page.
-  const chatHref = draft.data ? (isOwnTurn(draft.data) ? "#duo" : conversationLink(draft.data.provenance)) : undefined;
+  // A question bridged from another platform (#150) is a chat of its own. A
+  // draft with none of these keeps this page.
+  const bridgedId = draft.data ? bridgedIdOf(draft.data) : null;
+  const chatHref = draft.data
+    ? isOwnTurn(draft.data)
+      ? "#duo"
+      : bridgedId !== null
+        ? bridgedHref(bridgedId)
+        : conversationLink(draft.data.provenance)
+    : undefined;
   useEffect(() => {
     if (chatHref !== undefined && draft.data?.outcome == null) {
       // In place, no history entry: the old address never becomes a back-button trap.

@@ -5,6 +5,7 @@ import type { DraftRecord, PendingT4RequestForJudgement } from "../api/types.js"
 import { hairlineState, type HairlineState } from "../components/ConfidenceHairline.js";
 import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { conversationOf, isOwnTurn } from "../workspace/drafts.js";
+import { bridgedHref, bridgedIdOf, isBridgedId, bridgedTitle, groupBridged, sourceLabel } from "./bridged.js";
 import { roomHref } from "../workspace/links.js";
 import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
 
@@ -15,12 +16,14 @@ import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
  *   holds — decided in that chat's tray.
  * - `duo`: an answer to a question the owner asked their own duo — decided
  *   in Your duo.
- * - `draft`: a draft with no chat of its own (a question bridged from
- *   Slack, or a row that predates provenance) — decided on its own page
- *   until bridged questions become chats (#150).
+ * - `bridged`: a question someone asked on another platform (Slack), read
+ *   as a chat with them (#150) — decided in that chat's tray.
+ * - `draft`: a draft with no chat of its own (a row that predates
+ *   provenance, or one addressed to a conversation this member does not
+ *   hold) — decided on its own page.
  * - `confirmations`: an action staged for the owner's explicit yes.
  */
-export type WaitingKind = "chat" | "duo" | "draft" | "confirmations";
+export type WaitingKind = "chat" | "duo" | "bridged" | "draft" | "confirmations";
 
 export interface WaitingItem {
   /** Stable across refreshes: the room id, the draft id, or the kind. */
@@ -37,6 +40,8 @@ export interface WaitingItem {
   readonly state: HairlineState | null;
   /** Whose question or what work, when there is no room to name it (a bridged asker, a channel). */
   readonly label: string | null;
+  /** Where a bridged question came from, in the words a row shows ("Slack"). */
+  readonly source: string | null;
   /** The question, for a draft row that has no chat above it to hold it. */
   readonly question: string | null;
 }
@@ -91,6 +96,8 @@ export function buildWaitingItems(
       add(`chat:${conversation.roomId}`, draft);
     } else if (isOwnTurn(draft)) {
       add("duo", draft);
+    } else if (bridgedIdOf(draft) !== null) {
+      add(bridgedIdOf(draft)!, draft);
     } else {
       single.push(draft);
     }
@@ -100,16 +107,19 @@ export function buildWaitingItems(
   for (const [key, list] of groups) {
     const first = oldest(list);
     const chat = key.startsWith("chat:");
+    const bridged = isBridgedId(key);
     const roomId = chat ? key.slice("chat:".length) : null;
+    const bridge = bridged ? groupBridged(list)[0]! : null;
     items.push({
-      key: chat ? roomId! : "duo",
-      kind: chat ? "chat" : "duo",
-      href: chat ? roomHref(roomId!) : "#duo",
+      key: chat ? roomId! : bridged ? key : "duo",
+      kind: chat ? "chat" : bridged ? "bridged" : "duo",
+      href: chat ? roomHref(roomId!) : bridged ? bridgedHref(key) : "#duo",
       roomId,
       count: list.length,
       oldestAt: first.createdAt,
       state: hairlineState(toDraftPipelineResult(first)),
-      label: null,
+      label: bridge ? bridgedTitle(bridge) : null,
+      source: bridge ? sourceLabel(bridge.channelKind) : null,
       question: null,
     });
   }
@@ -123,6 +133,7 @@ export function buildWaitingItems(
       oldestAt: draft.createdAt,
       state: hairlineState(toDraftPipelineResult(draft)),
       label: askerOf(draft),
+      source: null,
       question: draft.question,
     });
   }
@@ -136,6 +147,7 @@ export function buildWaitingItems(
       oldestAt: [...confirmations].map((c) => c.createdAt).sort()[0]!,
       state: null,
       label: null,
+      source: null,
       question: null,
     });
   }

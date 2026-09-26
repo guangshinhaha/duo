@@ -23,6 +23,8 @@ import { Settings } from "./routes/Settings.js";
 import { Onboarding } from "./routes/Onboarding.js";
 import { WaitingHome } from "./shell/WaitingHome.js";
 import { Draft } from "./routes/Draft.js";
+import { BridgedChat } from "./shell/BridgedChat.js";
+import { isBridgedId } from "./shell/bridged.js";
 import { ChatShell } from "./shell/ChatShell.js";
 import { canonicalHash, isLegacyHash, roomOfRoute, routeFromHash, type Route, type SettingsSectionId } from "./shell/routes.js";
 import { roomTitle } from "./shell/roomTitle.js";
@@ -240,6 +242,9 @@ function routeSurface(route: Route, shell: SurfaceContext) {
   if (typeof route === "object") {
     if ("adminOrg" in route) {
       return shell.api ? <Admin api={shell.api} origin={adminAccount(shell.api)?.origin ?? null} orgId={route.adminOrg} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
+    }
+    if ("chat" in route && isBridgedId(route.chat)) {
+      return shell.api ? <BridgedChat api={shell.api} chatId={route.chat} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
     }
     if ("chat" in route) {
       return (

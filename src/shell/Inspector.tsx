@@ -9,6 +9,7 @@ import { ProvenanceLine } from "../components/ProvenanceLine.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { conversationOf, isOwnTurn } from "../workspace/drafts.js";
 import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
+import { bridgedIdOf, isBridgedId } from "./bridged.js";
 import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
 import { PROFILE_TABS, type ProfileTab, type Route } from "./routes.js";
 import { useHeldRooms } from "./waiting.js";
@@ -191,7 +192,9 @@ export function useInspectorTarget(api: DuoApiConfig | null, connection: Workspa
 
   if (typeof route === "object" && ("chat" in route || "thread" in route)) {
     const roomId = "chat" in route ? route.chat : route.thread.roomId;
-    const draft = oldest(waiting.filter((candidate) => conversationOf(candidate.provenance)?.roomId === roomId));
+    const draft = oldest(
+      waiting.filter((candidate) => (isBridgedId(roomId) ? bridgedIdOf(candidate) === roomId : conversationOf(candidate.provenance)?.roomId === roomId)),
+    );
     if (draft) {
       return { kind: "draft", draft };
     }

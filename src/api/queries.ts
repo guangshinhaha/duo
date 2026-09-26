@@ -150,12 +150,13 @@ export function useDraft(api: DuoApiConfig, id: string) {
  * so new drafts arriving above a loaded walk shift the windows without
  * leaving a gap at the seam.
  */
-export function useDraftsFeed(api: DuoApiConfig) {
+export function useDraftsFeed(api: DuoApiConfig | null) {
   return useInfiniteQuery({
     queryKey: queryKeys.draftsFeed,
+    enabled: api !== null,
     queryFn: ({ pageParam }) =>
       apiRequest<DraftRecord[]>(
-        api,
+        api!,
         pageParam === undefined
           ? `/drafts?limit=${DRAFTS_PAGE_SIZE}`
           : `/drafts?limit=${DRAFTS_PAGE_SIZE}&before=${encodeURIComponent(pageParam)}`,

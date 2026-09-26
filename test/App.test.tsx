@@ -79,6 +79,10 @@ describe("App — the query cache never leaks across a reconnect to a different 
       if (url.includes("/actions/t4/pending")) {
         return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
       }
+      // #150: the chat list also reads the recent draft log (bridged chats are made of it) — answered on its own for the same reason.
+      if (url.includes("/drafts?limit=")) {
+        return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+      }
       if (url.includes("daemon-a")) {
         return Promise.resolve(new Response(JSON.stringify([draftFor("A")]), { status: 200 }));
       }
