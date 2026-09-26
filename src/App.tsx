@@ -647,6 +647,21 @@ function routeSurface(route: Route, shell: SurfaceContext) {
   }
 }
 
+/** The static landing page (`public/welcome.html`); its Sign in links come back to `/#signin`. */
+export const WELCOME_PATH = "/welcome.html";
+
+/** A visitor opened the bare root: no route, no invite, no query. Anything else is somewhere they meant to go. */
+export function opensOnWelcome(location: Pick<Location, "pathname" | "hash" | "search">): boolean {
+  return location.pathname === "/" && location.hash === "" && location.search === "";
+}
+
+function GoToWelcome() {
+  useEffect(() => {
+    window.location.replace(WELCOME_PATH);
+  }, []);
+  return null;
+}
+
 function AppShell() {
   const [api, setApiRaw] = useApiConfig();
   // #62: the second credential — the workspace session (who the member is,
@@ -671,6 +686,15 @@ function AppShell() {
   // revocation — and this device's own memory is the one honest source for
   // saying "ended" instead. It outranks `revoked` wherever both could show.
   const [ended, setEnded] = useEndedMarker();
+  // The public front door: a signed-out visitor who arrives at the bare
+  // root of a hosted build sees the landing page, not the sign-in card.
+  // Decided once, at arrival — signing out later returns to sign-in, never
+  // to marketing.
+  // A ref, not state: clearing it must never re-render the shell.
+  const arrivedAtFrontDoor = useRef(opensOnWelcome(window.location));
+  if (api || session) {
+    arrivedAtFrontDoor.current = false;
+  }
   // #46: corpus search, openable from any route. ⌘K and Ctrl+K are the
   // same gesture on the two platforms this client ships to; the overlay
   // renders above whatever surface is on screen, so opening it costs
@@ -925,6 +949,9 @@ function AppShell() {
           ? "This browser was signed out — its device was revoked. Sign in again to continue."
           : "This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again."
         : undefined;
+    if (hostedOrigin && arrivedAtFrontDoor.current && !notice) {
+      return <GoToWelcome />;
+    }
     if (hostedOrigin) {
       return (
         <Landing

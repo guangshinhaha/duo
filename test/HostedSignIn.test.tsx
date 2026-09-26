@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { App } from "../src/App.js";
+import { App, opensOnWelcome } from "../src/App.js";
 import { Landing } from "../src/routes/Landing.js";
 import { Join } from "../src/routes/Join.js";
 import { Settings } from "../src/routes/Settings.js";
@@ -101,6 +101,7 @@ describe("App's front door", () => {
 
   it("with it, opens on Sign in with Google — no address field", async () => {
     vi.stubEnv("VITE_DUO_DAEMON_URL", ORIGIN);
+    window.location.hash = "#signin";
     installFakeGoogle();
     routeFetch({ "GET /hosted/config": () => json({ googleClientId: CLIENT_ID }) });
     render(<App />);
@@ -111,6 +112,7 @@ describe("App's front door", () => {
 
   it("signing in pairs the browser to the account's duo and remembers who it is", async () => {
     vi.stubEnv("VITE_DUO_DAEMON_URL", ORIGIN);
+    window.location.hash = "#signin";
     installFakeGoogle("the-id-token");
     const fetchMock = routeFetch({
       "GET /hosted/config": () => json({ googleClientId: CLIENT_ID }),
@@ -138,6 +140,16 @@ describe("App's front door", () => {
     expect(await screen.findByRole("button", { name: "Sign in with Google" })).toBeInTheDocument();
     expect(readHostedAccount()).toBeNull();
     expect(localStorage.getItem("duo.api-config")).toBeNull();
+  });
+});
+
+describe("opensOnWelcome", () => {
+  it("sends only a bare-root arrival to the landing page", () => {
+    expect(opensOnWelcome({ pathname: "/", hash: "", search: "" })).toBe(true);
+    expect(opensOnWelcome({ pathname: "/", hash: "#signin", search: "" })).toBe(false);
+    expect(opensOnWelcome({ pathname: "/", hash: "#join?host=x&invite=y", search: "" })).toBe(false);
+    expect(opensOnWelcome({ pathname: "/", hash: "", search: "?x=1" })).toBe(false);
+    expect(opensOnWelcome({ pathname: "/ask.html", hash: "", search: "" })).toBe(false);
   });
 });
 

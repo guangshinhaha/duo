@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Hairline — Digital Duo design language</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;1,6..72,400&display=swap">
+<style>
+  :root {
+    --bg: #0b0c0e; --surface: #141619; --surface-2: #1c1f24; --edge: #24282e;
+    --text: #e8eaed; --muted: #a6acb2; --faint: #5f6469;
+    --accent: #7c8cff; --accent-ink: #0b0c0e;
+    --confident: #4b9e6a; --escalate: #d9a441; --refused: #6b7280;
+    --paper-warm: #edeae4; --signal-glow: rgba(124,140,255,0.14); --hatch: rgba(166,172,178,0.10);
+    --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --t: 150ms cubic-bezier(0.2,0,0,1);
+    --serif: "Newsreader", Georgia, serif;
+    --sans: "Inter", -apple-system, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg: #f7f7f8; --surface: #ffffff; --surface-2: #f0f0f2; --edge: #e2e3e6;
+    --text: #17181a; --muted: #4d5055; --faint: #8a8d93; --accent: #4d5fe0; --accent-ink: #fff;
+    --confident: #23703f; --escalate: #9a6b12; --paper-warm: #1d1c1a;
+    --signal-glow: rgba(77,95,224,0.10); --hatch: rgba(77,80,85,0.08); color-scheme: light;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f7f7f8; --surface: #ffffff; --surface-2: #f0f0f2; --edge: #e2e3e6;
+      --text: #17181a; --muted: #4d5055; --faint: #8a8d93; --accent: #4d5fe0; --accent-ink: #fff;
+      --confident: #23703f; --escalate: #9a6b12; --paper-warm: #1d1c1a;
+      --signal-glow: rgba(77,95,224,0.10); --hatch: rgba(77,80,85,0.08); color-scheme: light;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); font-feature-settings: "cv11","ss03"; -webkit-font-smoothing: antialiased; }
+  .page { max-width: 1080px; margin: 0 auto; padding-inline: 24px; padding-block: 0 96px; display: grid; grid-template-columns: 180px minmax(0,1fr); gap: 48px; }
+  @media (max-width: 860px) { .page { grid-template-columns: 1fr; gap: 0; padding-inline: 16px; } .toc { display: none; } }
+  .toc { position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; padding-top: 48px; display: grid; gap: 4px; font-size: 13px; }
+  .toc a { color: var(--muted); text-decoration: none; padding: 3px 0; }
+  .toc a:hover { color: var(--text); }
+  .toc .brand { display: flex; gap: 8px; align-items: center; font-weight: 600; color: var(--text); margin-bottom: 16px; font-size: 16px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  h1, h2, h3 { margin: 0; text-wrap: balance; }
+  p { margin: 0; }
+  .eyebrow { font: 500 11px/1.4 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
+  header.intro { padding-block: 56px 40px; border-bottom: 1px solid var(--edge); display: grid; gap: 16px; }
+  header.intro h1 { font: 400 clamp(40px,6vw,64px)/1 var(--serif); letter-spacing: -.03em; color: var(--paper-warm); }
+  header.intro h1 em { color: var(--text); }
+  .lede { color: var(--muted); max-width: 64ch; font-size: 16px; }
+  section { padding-block: 56px; border-bottom: 1px solid var(--edge); display: grid; gap: 24px; }
+  section > h2 { font: 400 32px/1.15 var(--serif); letter-spacing: -.02em; color: var(--paper-warm); }
+  h3 { font-size: 15px; font-weight: 600; letter-spacing: -.011em; }
+  .muted { color: var(--muted); }
+  code, kbd { font-family: var(--mono); font-size: 12px; }
+  kbd { padding: 2px 5px; border: 1px solid var(--edge); border-radius: 4px; color: var(--muted); }
+  code { color: var(--muted); }
+
+  .mark { display: inline-flex; gap: 3px; height: 16px; }
+  .mark i { display: block; background: var(--text); border-radius: 1px; }
+  .mark i:first-child { width: 4px; } .mark i:last-child { width: 1.5px; background: var(--accent); }
+
+  /* principles */
+  .plist { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1px; background: var(--edge); border: 1px solid var(--edge); border-radius: var(--r-lg); overflow: hidden; }
+  @media (max-width: 640px) { .plist { grid-template-columns: 1fr; } }
+  .plist div { background: var(--surface); padding: 20px; display: grid; gap: 6px; align-content: start; }
+  .plist .n { font: 500 12px var(--mono); color: var(--faint); }
+  .plist p { color: var(--muted); font-size: 14px; }
+  .plist .check { font-size: 13px; color: var(--text); border-top: 1px dashed var(--edge); padding-top: 8px; margin-top: 4px; }
+
+  /* tables */
+  .scroll { overflow-x: auto; border: 1px solid var(--edge); border-radius: var(--r-lg); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 640px; }
+  th, td { text-align: left; vertical-align: top; padding: 12px 14px; border-bottom: 1px solid var(--edge); }
+  tr:last-child td { border-bottom: 0; }
+  thead th { font: 500 11px/1.4 var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--faint); background: var(--surface); }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  td { color: var(--muted); } td:first-child { color: var(--text); }
+
+  /* swatches */
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .sw { border: 1px solid var(--edge); border-radius: var(--r-md); overflow: hidden; background: var(--surface); }
+  .sw .chip { height: 64px; background: var(--c); border-bottom: 1px solid var(--edge); }
+  .sw .meta { padding: 10px 12px; display: grid; gap: 2px; }
+  .sw .meta b { font-size: 13px; font-weight: 600; }
+  .sw .meta span { font: 11px/1.4 var(--mono); color: var(--faint); }
+  .sw .meta em { font-style: normal; font-size: 12px; color: var(--muted); }
+  .sw.signal { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+  /* type */
+  .type { display: grid; gap: 0; border: 1px solid var(--edge); border-radius: var(--r-lg); overflow: hidden; }
+  .type > div { display: grid; grid-template-columns: 150px minmax(0,1fr); gap: 20px; padding: 20px; border-bottom: 1px solid var(--edge); align-items: baseline; }
+  .type > div:last-child { border-bottom: 0; }
+  @media (max-width: 600px) { .type > div { grid-template-columns: 1fr; gap: 8px; } }
+  .type .spec { font: 11px/1.5 var(--mono); color: var(--faint); }
+  .t-reflect { font: 400 34px/1.2 var(--serif); letter-spacing: -.02em; color: var(--paper-warm); }
+  .t-reflect em { color: var(--text); }
+  .t-head { font-size: 16px; line-height: 22px; font-weight: 560; letter-spacing: -.011em; }
+  .t-body { font-size: 14px; line-height: 22px; }
+  .t-prov { font-size: 12px; line-height: 18px; color: var(--muted); }
+  .t-rec { font: 400 12px/18px var(--mono); color: var(--muted); }
+
+  /* components */
+  .stage { border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--bg); padding: 24px; display: grid; gap: 20px; }
+  .stage.split { grid-template-columns: minmax(0,1fr) 240px; }
+  @media (max-width: 720px) { .stage.split { grid-template-columns: 1fr; } }
+  .caption { font-size: 13px; color: var(--muted); }
+  .attrib { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .attrib .mark { height: 11px; } .attrib .mark i:first-child { width: 3px; } .attrib .mark i:last-child { width: 1px; }
+  .draft { position: relative; background: var(--surface); border: 1px solid var(--edge); border-left: 0; border-radius: 0 var(--r-md) var(--r-md) 0; padding: 12px 16px 12px 18px; font-size: 14px; line-height: 22px; }
+  .draft::before { content: ""; position: absolute; left: 0; top: -1px; bottom: -1px; width: 2px; background: var(--line); }
+  .d-conf { --line: var(--confident); } .d-hedge { --line: color-mix(in srgb, var(--escalate) 45%, transparent); }
+  .d-esc { --line: var(--escalate); } .d-ref { --line: var(--refused); }
+  .draft .why { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .draft del { color: var(--faint); } .draft ins { text-decoration: none; background: var(--signal-glow); border-radius: 3px; padding: 0 2px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--edge); background: transparent; color: var(--text); font: 500 13px/1 var(--sans); cursor: pointer; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn.primary kbd { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent-ink) 30%, transparent); }
+  .btn[disabled] { opacity: .45; cursor: not-allowed; }
+  .rail { border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--surface); padding: 14px; display: grid; gap: 12px; align-content: start; }
+  .rail h4 { margin: 0 0 2px; font: 500 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  .rail p { font-size: 12px; line-height: 18px; color: var(--muted); }
+  .rail .src { display: block; font: 11px/1.5 var(--mono); color: var(--faint); }
+  .hairlines { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .offer { border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--surface); padding: 16px; display: grid; gap: 8px; }
+  .offer .eyebrow { color: var(--accent); }
+  .demote { font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .demote i { width: 2px; height: 14px; background: var(--escalate); display: inline-block; }
+  .confirm { border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--surface); padding: 16px; display: grid; gap: 10px; }
+  .confirm dl { margin: 0; display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; font-size: 13px; }
+  .confirm dt { color: var(--faint); font: 11px/1.8 var(--mono); text-transform: uppercase; letter-spacing: .05em; }
+  .confirm dd { margin: 0; }
+  .grid-cell { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
+  .cell { border: 1px solid var(--edge); border-radius: var(--r-sm); padding: 10px; font-size: 12px; color: var(--muted); background: var(--surface); }
+  .cell b { display: block; color: var(--text); font-weight: 500; font-size: 13px; }
+  .cell.never { background: repeating-linear-gradient(135deg, var(--hatch) 0 6px, transparent 6px 12px); font-style: italic; }
+  .two { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
+  @media (max-width: 720px) { .two { grid-template-columns: 1fr; } }
+
+  /* patterns */
+  .patterns { display: grid; gap: 12px; }
+  details { border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--surface); }
+  summary { cursor: pointer; padding: 14px 16px; display: flex; gap: 12px; align-items: baseline; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary .n { font: 12px var(--mono); color: var(--faint); min-width: 28px; }
+  summary b { font-weight: 600; }
+  summary span.from { margin-left: auto; font: 11px var(--mono); color: var(--faint); text-align: right; }
+  details[open] summary { border-bottom: 1px solid var(--edge); }
+  details .body { padding: 14px 16px 16px 56px; display: grid; gap: 8px; font-size: 14px; color: var(--muted); }
+  details .body b { color: var(--text); font-weight: 500; }
+  @media (max-width: 560px) { details .body { padding-left: 16px; } summary span.from { display: none; } }
+
+  /* IA */
+  .ia { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 24px; align-items: start; }
+  @media (max-width: 760px) { .ia { grid-template-columns: 1fr; } }
+  .side { border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--surface); padding: 14px; display: grid; gap: 2px; font-size: 13.5px; }
+  .side .roster { display: flex; align-items: center; gap: 8px; font-weight: 600; padding: 4px 8px 12px; border-bottom: 1px solid var(--edge); margin-bottom: 8px; }
+  .side .roster small { margin-left: auto; font-weight: 400; color: var(--faint); font-size: 12px; }
+  .side .grp { font: 500 10.5px/1.4 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--faint); padding: 14px 8px 4px; }
+  .side a { display: flex; justify-content: space-between; padding: 6px 8px; border-radius: var(--r-sm); color: var(--muted); text-decoration: none; }
+  .side a.on { background: var(--surface-2); color: var(--text); }
+  .side a .ct { font: 12px var(--mono); color: var(--accent); }
+  .side a .ct.ash { color: var(--refused); }
+  .side .dim { color: var(--faint); font-size: 12px; font-style: italic; padding: 2px 8px; }
+  .side .foot { display: flex; gap: 12px; padding: 14px 8px 4px; border-top: 1px solid var(--edge); margin-top: 10px; font-size: 12px; color: var(--faint); }
+  .changes { display: grid; gap: 12px; }
+  .changes div { display: grid; grid-template-columns: 28px 1fr; gap: 8px; font-size: 14px; }
+  .changes .n { font: 12px var(--mono); color: var(--faint); padding-top: 2px; }
+  .changes p { color: var(--muted); }
+  .changes b { color: var(--text); font-weight: 600; }
+  pre { margin: 0; font: 12px/1.7 var(--mono); color: var(--muted); background: var(--surface); border: 1px solid var(--edge); border-radius: var(--r-lg); padding: 18px; overflow-x: auto; }
+  pre b { color: var(--text); font-weight: 500; }
+  footer { padding-top: 40px; font-size: 13px; color: var(--faint); }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav class="toc" aria-label="Contents">
+    <span class="brand"><span class="mark" aria-hidden="true"><i></i><i></i></span>Hairline</span>
+    <a href="#principles">Principles</a>
+    <a href="#references">References</a>
+    <a href="#colour">Colour</a>
+    <a href="#type">Type</a>
+    <a href="#components">Components</a>
+    <a href="#patterns">Interaction patterns</a>
+    <a href="#keys">Keyboard</a>
+    <a href="#ia">Information architecture</a>
+    <a href="#voice">Voice</a>
+  </nav>
+
+  <main>
+    <header class="intro">
+      <p class="eyebrow">Digital Duo · design language · proposed 26 Sep 2026</p>
+      <h1>The duo always writes <em>behind a line.</em></h1>
+      <p class="lede">Every screen in Digital Duo carries two voices: a person, and that person's duo. Hairline exists to keep those voices impossible to confuse, and to keep the evidence that connects them one glance away. It takes its name from the confidence hairline, the 2px line on a draft's leading edge. That line is the one element the product already ships that nobody else has, so Hairline makes it the signature.</p>
+      <p class="caption">Source of truth: <code>duo/docs/design-language.md</code>. It extends <code>client-design.md</code>, the Part 4 tokens and <code>vocabulary.md</code>, and never overrides them.</p>
+    </header>
+
+    <section id="principles">
+      <p class="eyebrow">01 · Principles</p>
+      <h2>Six principles, each with a test</h2>
+      <div class="plist">
+        <div><span class="n">P1</span><h3>Attributed, always</h3><p>Generated text sits behind the hairline and under an attribution line. Nothing else uses a leading line.</p><p class="check">Test: cover the words. You can still tell which blocks the duo wrote.</p></div>
+        <div><span class="n">P2</span><h3>Why costs zero clicks</h3><p>Provenance sits on screen by default, in a rail on desktop and a drawer on phone. It is never a disclosure triangle.</p><p class="check">Test: a screenshot of any draft answers "why did it say that?"</p></div>
+        <div><span class="n">P3</span><h3>Quiet until it matters</h3><p>Greyscale, plus one accent that means action available. There is one count, and attention is batched.</p><p class="check">Test: squint. The only colour is what's waiting on you.</p></div>
+        <div><span class="n">P4</span><h3>Decisions, not settings</h3><p>Trust changes only when the owner answers a concrete example: an offer, a rule, a grant in plain words.</p><p class="check">Test: no switch anywhere changes what the duo may do.</p></div>
+        <div><span class="n">P5</span><h3>Cautious by design</h3><p>Promotions are offers and demotions are announcements. Irreversible acts take two steps, with Cancel focused.</p><p class="check">Test: every T4 path has two screens and no focused primary.</p></div>
+        <div><span class="n">P6</span><h3>Keyboard-first, touch-complete</h3><p>One key per verb in every queue. Every verb also has a 44px control on phone.</p><p class="check">Test: clear Review without a mouse, then clear it one-handed.</p></div>
+      </div>
+    </section>
+
+    <section id="references">
+      <p class="eyebrow">02 · References</p>
+      <h2>Borrow the mechanism, never the look</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Reference</th><th>What they got right</th><th>What we take</th><th>What we leave</th></tr></thead>
+        <tbody>
+          <tr><td>Granola</td><td>Your notes in black, AI text in grey. Authorship you can see at a glance.</td><td>Authorship as a visual register (P1, the hairline)</td><td>Colour as the only signal. Ours is structural.</td></tr>
+          <tr><td>Superhuman</td><td>Single-key triage, and inbox zero as a reward.</td><td>J/K, one key per verb, "Review is clear."</td><td>Undo-send. A send reaches a real person.</td></tr>
+          <tr><td>Linear</td><td>One accent, Triage kept separate from the work, ⌘K for everything.</td><td>Review above Conversations, the single accent</td><td>The density. We show a handful of considered drafts.</td></tr>
+          <tr><td>GitHub</td><td>A reviewer's edit as a diff you accept in one click.</td><td>Edit-to-teach, diffs in Corrections</td><td>Code chrome: line numbers, file trees</td></tr>
+          <tr><td>Stripe</td><td>An unmissable test-mode banner, and an id plus a log behind every object.</td><td>The attribution line as a mode ribbon, and Audit</td><td>The palette</td></tr>
+          <tr><td>Perplexity</td><td>Sources always visible beside the answer.</td><td>The provenance rail, and the trust reading on the asker page</td><td>Inline [2] footnotes inside a message</td></tr>
+          <tr><td>Spotify Wrapped</td><td>Your own data reflected back as a portrait worth sharing.</td><td>The Mirror portrait, set in serif</td><td>Superlatives and gamification</td></tr>
+          <tr><td>Things 3</td><td>Warmth through type and space rather than colour.</td><td>The global type rhythm</td><td>—</td></tr>
+          <tr><td>Apple permissions</td><td>Asking in context, at the moment it matters.</td><td>Trust offers placed beside the draft that earned them</td><td>"Allow always"</td></tr>
+          <tr><td>Raycast</td><td>A command bar that acts on results as well as finding them.</td><td>⌘K "Search what your duo knows"</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="colour">
+      <p class="eyebrow">03 · Colour</p>
+      <h2>Greyscale, one Signal, three hairline states</h2>
+      <p class="lede">These are the tokens that already ship in <code>tokens.css</code>, now with names. Signal means action available and nothing else. Moss, Amber and Ash appear only on hairlines and trust readings. The swatches follow your theme.</p>
+      <div class="swatches">
+        <div class="sw"><div class="chip" style="--c: var(--bg)"></div><div class="meta"><b>Ink</b><span>--bg · #0B0C0E</span><em>Ground</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--surface)"></div><div class="meta"><b>Graphite</b><span>--surface · #141619</span><em>Cards, drafts</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--surface-2)"></div><div class="meta"><b>Slate</b><span>--surface-2 · #1C1F24</span><em>Rails, inputs</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--edge)"></div><div class="meta"><b>Edge</b><span>--edge · #24282E</span><em>Borders</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--text)"></div><div class="meta"><b>Paper</b><span>--text · #E8EAED</span><em>Primary text</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--muted)"></div><div class="meta"><b>Fog</b><span>--muted · #A6ACB2</span><em>Provenance, AAA</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--faint)"></div><div class="meta"><b>Dust</b><span>--faint · #5F6469</span><em>Timestamps, disabled</em></div></div>
+        <div class="sw signal"><div class="chip" style="--c: var(--accent)"></div><div class="meta"><b>Signal</b><span>--accent · #7C8CFF</span><em>Action available. Only.</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--confident)"></div><div class="meta"><b>Moss</b><span>--confident · #4B9E6A</span><em>Hairline: confident</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--escalate)"></div><div class="meta"><b>Amber</b><span>--escalate · #D9A441</span><em>Hairline: escalated, hedged at 40%</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--refused)"></div><div class="meta"><b>Ash</b><span>--refused · #6B7280</span><em>Hairline: refused</em></div></div>
+        <div class="sw"><div class="chip" style="--c: var(--paper-warm)"></div><div class="meta"><b>Paper-warm</b><span>--paper-warm · #EDEAE4</span><em>Serif display on editorial surfaces only</em></div></div>
+      </div>
+    </section>
+
+    <section id="type">
+      <p class="eyebrow">04 · Type</p>
+      <h2>Three faces, three jobs</h2>
+      <div class="type">
+        <div><span class="spec">Reflection<br>Newsreader 400<br>20 / 28 / 40 / 64</span><p class="t-reflect">You were asked about deployment access 23 times <em>in six months.</em></p></div>
+        <div><span class="spec">Heading<br>Inter 560 · 16/22<br>−0.011em</span><p class="t-head">Waiting on you in Review</p></div>
+        <div><span class="spec">Body<br>Inter 400 · 14/22</span><p class="t-body">Request read-only through the deploy-access runbook. It's auto-approved for platform members, usually within the hour.</p></div>
+        <div><span class="spec">Provenance<br>Inter 400 · 12/18<br>Fog, AAA</span><p class="t-prov">Drew on 3 sources · standing order "Deploy access" · 2m</p></div>
+        <div><span class="spec">Record<br>JetBrains Mono 400 · 12/18</span><p class="t-rec">thread 1727331842.009 · asker ask_7f3c · channel slack</p></div>
+      </div>
+      <p class="caption">Newsreader belongs to the Mirror and to editorial pages, the places where the product speaks <em>about you</em>. It is never used for the duo's own words. JetBrains Mono replaces the current 560-weight sans in the identifier role.</p>
+    </section>
+
+    <section id="components">
+      <p class="eyebrow">05 · Signature components</p>
+      <h2>The five that define the product</h2>
+
+      <h3>Draft card and provenance rail</h3>
+      <div class="stage split">
+        <div>
+          <div class="attrib"><span class="mark" aria-hidden="true"><i></i><i></i></span>Your duo · draft · 2m</div>
+          <div class="draft d-conf">Request read-only through the deploy-access runbook. It's auto-approved for platform members, usually within the hour. Write access still comes through me.</div>
+          <div class="row"><button class="btn primary" type="button">Send <kbd>⏎</kbd></button><button class="btn" type="button">Edit <kbd>E</kbd></button><button class="btn" type="button">Ignore <kbd>X</kbd></button></div>
+          <p class="caption" style="margin-top: 14px">The leading corners are square: the hairline runs flush and only the trailing corners are rounded. There is no avatar, ever. Signal appears on the primary verb only.</p>
+        </div>
+        <aside class="rail" aria-label="Provenance rail example">
+          <div><h4>Trust reading</h4><p>You've trusted your duo with deploy access, and it's sure of this answer.</p></div>
+          <div><h4>Standing order</h4><p>Deploy access: point to the runbook, grant read-only, don't ask me.</p></div>
+          <div><h4>Drew on</h4><p>3 sources<span class="src">#platform-help · 14 Aug</span><span class="src">runbook.md</span></p></div>
+        </aside>
+      </div>
+
+      <h3>Hairline states</h3>
+      <div class="stage">
+        <div class="hairlines">
+          <div><div class="attrib"><span class="mark"><i></i><i></i></span>Confident</div><div class="draft d-conf">Trusted with this topic, and sure of this answer.</div></div>
+          <div><div class="attrib"><span class="mark"><i></i><i></i></span>Hedging · Amber 40%</div><div class="draft d-hedge">Score under threshold + 0.15. Treat as a starting point.</div></div>
+          <div><div class="attrib"><span class="mark"><i></i><i></i></span>Escalated</div><div class="draft d-esc">Your duo escalated a question to you.<p class="why">Reason shown. The owner answers it as a question.</p></div></div>
+          <div><div class="attrib"><span class="mark"><i></i><i></i></span>Refused</div><div class="draft d-ref">Your duo refused this one.<p class="why">No actions offered.</p></div></div>
+        </div>
+        <p class="caption">Confidence is never a percentage. The score is a composite against a threshold, so a number would claim precision it doesn't have.</p>
+      </div>
+
+      <div class="two">
+        <div>
+          <h3 style="margin-bottom: 12px">Edit to teach</h3>
+          <div class="stage">
+            <div class="draft d-conf">…auto-approved for platform members, usually <del>within the hour</del><ins>in about ten minutes</ins>.</div>
+            <p class="caption">Sent (edited). Queued as a correction candidate. <a href="#patterns" style="color: var(--accent)">Open Corrections</a></p>
+          </div>
+        </div>
+        <div>
+          <h3 style="margin-bottom: 12px">Offer and announce</h3>
+          <div class="stage">
+            <div class="offer"><span class="eyebrow">Offer</span><p style="font-size: 14px">Your duo has answered 12 deploy-access questions without an edit. Let it answer these on its own?</p><div class="row" style="margin-top: 2px"><button class="btn primary" type="button">Let it answer</button><button class="btn" type="button">Keep asking me</button></div></div>
+            <p class="demote"><i></i>"I got that wrong, so I've gone back to asking you first."</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="two">
+        <div>
+          <h3 style="margin-bottom: 12px">Deliberate confirm (T4)</h3>
+          <div class="stage">
+            <div class="confirm">
+              <dl><dt>What</dt><dd>Send the vendor contract to Acme Pte Ltd</dd><dt>To what</dt><dd>contract-v3.pdf</dd><dt>Undo</dt><dd>Can't be undone</dd></dl>
+              <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Confirm</button></div>
+            </div>
+            <p class="caption">Cancel holds the focus, Confirm has no key, and it is disabled rather than queued while offline.</p>
+          </div>
+        </div>
+        <div>
+          <h3 style="margin-bottom: 12px">Trust cells</h3>
+          <div class="stage">
+            <div class="grid-cell">
+              <div class="cell"><b>On its own</b>Deploy · T0</div>
+              <div class="cell"><b>Asks you</b>Hiring · T0</div>
+              <div class="cell"><b>Not yet</b>Hiring · T2</div>
+              <div class="cell never" style="grid-column: 1 / -1"><b>Never on its own</b>T4 is a hatched, empty cell. It isn't a disabled switch, because no switch exists there.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="patterns">
+      <p class="eyebrow">06 · Interaction patterns</p>
+      <h2>Eleven patterns</h2>
+      <div class="patterns">
+        <details open><summary><span class="n">5.1</span><b>Triage</b><span class="from">Superhuman · Linear Triage</span></summary><div class="body"><p>Review is a queue with a count, and it opens on the oldest undecided item. <b>J/K</b> moves, <b>⏎</b> sends, <b>E</b> edits, <b>X</b> ignores, and <b>O</b> opens the conversation.</p><p>Ignore can be undone for 5s because nothing has left the machine. Send can't be undone, and the UI doesn't pretend otherwise. The empty state is "Review is clear.", with no confetti.</p></div></details>
+        <details><summary><span class="n">5.2</span><b>Edit to teach</b><span class="from">GitHub suggested changes</span></summary><div class="body"><p>Editing happens in place with the hairline kept. <b>Send edited</b> (⌘⏎) shows a toast that links to Corrections, where the edit renders as a diff with the proposed rule beneath it.</p></div></details>
+        <details><summary><span class="n">5.3</span><b>Approve a draft of yourself</b><span class="from">Spotify Wrapped</span></summary><div class="body"><p>The Mirror opens on a portrait of three to five serif sentences built from the owner's own counts. Rule cards follow one at a time, with evidence. <b>A</b> approves and <b>R</b> rejects. Progress reads "4 of 12", never a percentage.</p></div></details>
+        <details><summary><span class="n">5.4</span><b>Offer and announce</b><span class="from">Apple permission prompts</span></summary><div class="body"><p>A promotion is an offer card in Review, beside the draft that earned it. A demotion is a sentence with no buttons, in the attribution line and in Audit.</p></div></details>
+        <details><summary><span class="n">5.5</span><b>Deliberate confirm</b></summary><div class="body"><p>The card states what, to what, and whether it can be undone. <b>Review and confirm…</b> opens a dialog that restates it with Cancel focused. It is disabled offline and never queued.</p></div></details>
+        <details><summary><span class="n">5.6</span><b>Escalation as a question</b></summary><div class="body"><p>An escalation shows the question, its reason, and a composer. The answer becomes a standing-order candidate. A refusal has no actions.</p></div></details>
+        <details><summary><span class="n">5.7</span><b>Two searches, never merged</b><span class="from">Raycast</span></summary><div class="body"><p><b>/</b> is Search what was said, across the workspace. <b>⌘K</b> is Search what your duo knows, which is private. Neither one falls back to the other.</p></div></details>
+        <details><summary><span class="n">5.8</span><b>Offline honesty</b></summary><div class="body"><p>Messages queue while offline. Decisions (Send, Keep, Confirm) are disabled, with the reason shown, and never queued.</p></div></details>
+        <details><summary><span class="n">5.9</span><b>Batched attention</b></summary><div class="body"><p>The badge shows the Review count only. Only urgent escalations interrupt. Do not disturb holds the duo's acts too, and they collect in "what was missed".</p></div></details>
+        <details><summary><span class="n">5.10</span><b>Ending things</b></summary><div class="body"><p>Forget this device, Revoke, and End this duo (typed END) are three verbs for three acts. Each one says what ends, what is kept, and what can't be undone.</p></div></details>
+        <details><summary><span class="n">5.11</span><b>Empty states teach</b></summary><div class="body"><p>Every empty state says what will fill it and how, and never offers a fake action. For example: "Nothing earned yet. As your duo answers and you correct it, topics it handles well will show up here."</p></div></details>
+      </div>
+    </section>
+
+    <section id="keys">
+      <p class="eyebrow">07 · Keyboard</p>
+      <h2>One key per verb</h2>
+      <div class="scroll"><table style="min-width: 420px">
+        <thead><tr><th>Scope</th><th>Key</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>Global</td><td><kbd>⌘K</kbd></td><td>Search what your duo knows</td></tr>
+          <tr><td>Global</td><td><kbd>G</kbd> then <kbd>R</kbd> <kbd>C</kbd> <kbd>M</kbd> <kbd>T</kbd></td><td>Go to Review, Conversations, Mirror, Trust</td></tr>
+          <tr><td>Global</td><td><kbd>?</kbd></td><td>Show the keyboard map</td></tr>
+          <tr><td>Review</td><td><kbd>J</kbd> <kbd>K</kbd></td><td>Next, previous</td></tr>
+          <tr><td>Review</td><td><kbd>⏎</kbd> · <kbd>E</kbd> · <kbd>X</kbd> · <kbd>O</kbd></td><td>Send · Edit (⌘⏎ Send edited) · Ignore (⌘Z within 5s) · Open the conversation</td></tr>
+          <tr><td>Mirror, Corrections</td><td><kbd>A</kbd> <kbd>R</kbd> <kbd>E</kbd></td><td>Approve, Reject, Edit</td></tr>
+          <tr><td>Conversation</td><td><kbd>/</kbd></td><td>Search what was said</td></tr>
+          <tr><td>Confirmations</td><td>none</td><td>By design</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="ia">
+      <p class="eyebrow">08 · Information architecture</p>
+      <h2>Three groups, one spine</h2>
+      <p class="lede">The shipped sidebar lists twelve surfaces as peers. The proposal groups them in the order of the owner's morning: decide, talk, tune.</p>
+      <div class="ia">
+        <nav class="side" aria-label="Proposed sidebar">
+          <div class="roster"><span class="mark" aria-hidden="true"><i></i><i></i></span>duo<small>Your duo ▾</small></div>
+          <a class="on" href="#ia">Review <span class="ct">3</span></a>
+          <a href="#ia">Corrections <span class="ct">2</span></a>
+          <a href="#ia">Confirmations <span class="ct ash">1</span></a>
+          <span class="grp">Conversations</span>
+          <a href="#ia">Ana</a><a href="#ia">project-x</a><a href="#ia">Bose's duo</a>
+          <span class="grp">Your duo</span>
+          <a href="#ia">Ask</a><a href="#ia">Mirror</a><a href="#ia">Knowledge</a><a href="#ia">Trust</a><a href="#ia">Escalations</a>
+          <div class="foot"><span>Audit</span><span>Channels</span><span>Settings</span></div>
+        </nav>
+        <div class="changes">
+          <div><span class="n">1</span><p><b>Group into Inbox, Conversations, Your duo and a footer.</b> Group headings are labels, not links.</p></div>
+          <div><span class="n">2</span><p><b>Rename "Duo" to "Ask".</b> The vocabulary already owns the verb ("Ask your duo…"), and "Duo" collides with the roster above it. Keep the <code>#duo</code> hash.</p></div>
+          <div><span class="n">3</span><p><b>Hide Confirmations at zero.</b> It's a queue, not a place.</p></div>
+          <div><span class="n">4</span><p><b>Move Channels to the footer.</b> Connecting happens elsewhere, and the owner visits only to learn why something is quiet.</p></div>
+          <div><span class="n">5</span><p><b>Keep Mirror and Knowledge apart.</b> Mirror is who it thinks you are. Knowledge is what it has read.</p></div>
+          <div><span class="n">6</span><p><b>The phone folds the same map.</b> Review stays on top, the rail becomes a half-open drawer, and there is no tab bar.</p></div>
+        </div>
+      </div>
+      <h3>Object model</h3>
+<pre><b>Owner</b> ─owns─▶ <b>Duo</b> ─drafts─▶ <b>Draft</b> ─send / edit / ignore─▶ Outcome
+                │              └─edit─▶ <b>Correction candidate</b> ─approve─▶ <b>Standing order</b>
+                ├─raises─▶ <b>Escalation</b> ─keep─▶ Standing-order candidate ─────────┘
+                ├─stages─▶ <b>T4 action</b> ─confirm─▶ Audit event
+                ├─learns from─▶ Channel / Import ─▶ Source ─derive─▶ <b>Rule</b> (Mirror)
+                └─holds─▶ <b>Trust cell</b> (topic × tier) ◀─ offer / grant / demote
+<b>Member</b> ─in─▶ <b>Conversation</b> ◀─in─ Person | Colleague's duo</pre>
+    </section>
+
+    <section id="voice" style="border-bottom: 0">
+      <p class="eyebrow">09 · Voice</p>
+      <h2>Plain, exact, attributed</h2>
+      <div class="plist">
+        <div><h3>Plain and exact</h3><p>"Your duo refused this one." No "Oops!", no apologies, no exclamation marks.</p></div>
+        <div><h3>First person about itself only</h3><p>"I got that wrong, so I've gone back to asking you first." The duo never speaks in the first person as the owner.</p></div>
+        <div><h3>The daemon's own counts</h3><p>"23 times in six months", never "a lot". Proportions are shown as bar widths, never percentages.</p></div>
+        <div><h3>Never a person</h3><p>Never an employee, assistant, teammate or clone. The nouns and verbs are in <code>vocabulary.md</code>.</p></div>
+      </div>
+      <footer>Hairline · proposed for Digital Duo · the reference implementation is <code>public/welcome.html</code></footer>
+    </section>
+  </main>
+</div>
+</body>
+</html>
