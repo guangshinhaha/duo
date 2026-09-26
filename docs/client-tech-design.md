@@ -433,6 +433,42 @@ reach; opened on a duo that already has rules it points at the Mirror instead of
 Whether core should expose a derive job, as it did for embedding, is core's question; until it
 does, that step stays a terminal step the app observes.
 
+#67 is the part of the product that exists nowhere else — an asker judging a colleague's duo
+rather than taking it on faith — and it is built on what the wire actually carries, which is
+narrower than what the core knows. An answer travels as its words and nothing else (digital-duo
+`workspace/org-read.md` §5, #191): the confidence result, the source list and the grounding
+chunks stay on the owner's machine beside the corpus, because a citation list is a fingerprint of
+it. So the daemon composes the asker-facing basis INTO the words (`withPublicAttribution`, #44):
+the answer, a "Sources:" block naming each source as the owner's standing order or a retrieved
+past exchange, and an identity line carrying the confidence and the evidence's age. The client
+adds no channel for evidence and asks for none; `workspace/duoAnswer.ts` reads that composition
+back, whole or not at all — anything that is not the daemon's composition (a plain message, a
+failure notice, a paraphrase of a fixed message) reads as plain words, and only a duo-shaped
+sender, by the id grammar, is read at all, so a person typing the same words borrows nothing.
+`RoomDuoAnswer` renders the reading inside the duo's message, in `MessageBody`, so the
+conversation and the thread read identically:
+
+- **Provenance at zero clicks.** The sources the words named, told apart by kind ("{owner}'s own
+  standing order" / "a past exchange, not {owner} speaking now"), and the evidence's age, sit on
+  the answer — no disclosure, no control. An answer that named nothing says so. Nothing offers
+  more, because there is no more to fetch.
+- **Trust in words, never a number.** The reading never carries the confidence: only which side
+  of the owner's own hedging rule it fell on (the hairline's threshold-plus-margin, one constant
+  for owner and asker; the threshold is owner-side configuration that does not travel, so the
+  core's default stands in, and the source says so). Four sentences, each its own state —
+  confident, hedging, outside what the duo answers on its own (passed on), a boundary its owner
+  set (refused) — so nothing rests on colour, and the number is stripped from every surface that
+  shows the words, previews included.
+- **Escalation as a state.** A passed-on message reads "Waiting on {owner}" until the owner —
+  the id the duo's id derives from, never a display name — speaks in the conversation after it,
+  in the main flow or in the message's own thread; then it reads as replied. The owner's answer
+  is an ordinary message of a person and arrives through the room like any other, rendered as
+  the person: AR-13 holds at the moment it matters most. Nothing is shown before the duo has
+  said it passed the question on.
+- **A refusal is the system working.** The fixed message renders byte for byte in an element of
+  its own; the client's framing sits beside it, never in place of it, in the vocabulary of a
+  boundary — no alert semantics, no retry, no error words, no waiting state.
+
 ## 3.3 Offline
 
 The query cache persists to storage and rehydrates at launch. Two connections fail for

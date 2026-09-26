@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Paperclip, X } from "lucide-react";
+import { RoomDuoAnswer } from "../components/RoomDuoAnswer.js";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -10,6 +11,7 @@ import { Timestamp } from "../components/Timestamp.js";
 import { roomTitle } from "./Conversations.js";
 import { addressed, mentionLabelOf, type MessageMention } from "../workspace/mentions.js";
 import type { RoomMemberRef, RoomMessage, SharedFile, WorkspaceConnection } from "../workspace/matrix.js";
+import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
@@ -225,6 +227,7 @@ export function Room({
                 connection={connection}
                 roomId={roomId}
                 refresh={refresh}
+                conversation={timeline.data}
                 onDelete={(message) => {
                   setDeleteError(null);
                   setDeleteTarget(message);
@@ -318,14 +321,22 @@ export function Room({
 export function MessageBody({
   message,
   loadMedia,
+  conversation = [],
   onToggleReaction,
 }: {
   message: RoomMessage;
   /** The member's own authenticated fetch of a shared file's bytes — the connection's, passed down so this stays a pure render. */
   loadMedia: (url: string) => Promise<Blob | null>;
+  /** The room's timeline, in order — what a passed-on question reads to see whether its owner has answered (#67). */
+  conversation?: readonly RoomMessage[];
   onToggleReaction?: (message: RoomMessage, key: string, mine: boolean) => void;
 }) {
   const fromDuo = isDuoUserId(message.senderId);
+  // #67: a duo's composed words read back as an answer, an outcome, or
+  // nothing special — by the sender's id, never by what the words claim
+  // (a person typing the same composition gets plain words). Words that
+  // carry mention pills stay as they are: the daemon composes plain text.
+  const duoReading = fromDuo && message.parts === null ? readDuoAnswer(message.body) : null;
   if (message.redacted) {
     // A struck message keeps its place and says so — the timeline never
     // reshuffles to hide that something was said.
@@ -345,7 +356,15 @@ export function MessageBody({
   }
   const content =
     message.file === undefined ? (
-      messageWords(message)
+      duoReading ? (
+        <RoomDuoAnswer
+          escalation={escalationOf(message, conversation)}
+          ownerLabel={duoOwnerLabel(message.senderId) ?? message.senderName}
+          reading={duoReading}
+        />
+      ) : (
+        messageWords(message)
+      )
     ) : (
       <SharedFileCard file={message.file} loadMedia={loadMedia} />
     );
@@ -402,12 +421,14 @@ function RoomEntry({
   connection,
   roomId,
   refresh,
+  conversation,
   onDelete,
 }: {
   message: RoomMessage;
   connection: WorkspaceConnection;
   roomId: string;
   refresh: () => void;
+  conversation: readonly RoomMessage[];
   onDelete: (message: RoomMessage) => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -436,13 +457,14 @@ function RoomEntry({
       <MessageBody
         message={message}
         loadMedia={connection.loadMedia}
+        conversation={conversation}
         onToggleReaction={(target, key, mine) =>
           run(mine ? connection.unreact(roomId, target.eventId, key) : connection.react(roomId, target.eventId, key))
         }
       />
       {message.thread !== null && message.thread.replyCount > 0 && message.thread.latestReply !== null && (
         <p className="type-provenance text-[var(--muted)]" data-testid="room-thread-preview">
-          {threadPreviewLabel(message.thread.latestReply)}: {message.thread.latestReply.body} ·{" "}
+          {threadPreviewLabel(message.thread.latestReply)}: {plainPreview(message.thread.latestReply.body)} ·{" "}
           {message.thread.replyCount} {message.thread.replyCount === 1 ? "reply" : "replies"}{" "}
           <a className="underline" data-testid="open-thread" href={threadHref(roomId, message.eventId)}>
             Open thread

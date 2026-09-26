@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../compon
 import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
+import { plainPreview } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { type NotificationMode, type RoomSummary, type WorkspaceConnection } from "../workspace/matrix.js";
 
@@ -314,7 +315,7 @@ function ConversationEntry({
         </div>
         <div className="mt-1 flex items-baseline justify-between gap-2">
           <span className="truncate type-body text-[var(--muted)]" data-testid="room-preview">
-            {room.latest ? room.latest.body : "No messages yet."}
+            {room.latest ? plainPreview(room.latest.body) : "No messages yet."}
           </span>
           {room.latest && <Timestamp iso={new Date(room.latest.at).toISOString()} />}
         </div>
