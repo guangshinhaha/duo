@@ -50,11 +50,14 @@ export function roomTitle(room: RoomSummary): string {
  */
 export function Conversations({
   connection,
+  hasSession,
   error,
   onSignIn,
   onSignOut,
 }: {
   connection: WorkspaceConnection | null;
+  /** A stored session exists — the connection is null only while it connects. */
+  hasSession: boolean;
   error: string | null;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -92,8 +95,10 @@ export function Conversations({
     // Reached by URL without a session (the owner-only app has no link
     // here): say what's missing and offer the way in — never a dead end.
     // A hosted build has no way in to offer (#127): it says the workspace
-    // isn't set up, with no sign-in button.
-    if (workspaceAccess.kind === "hosted-pending") {
+    // isn't set up, with no sign-in button — but only when there is no
+    // session: a stored one is still connecting, and "nothing to do" would
+    // be false for it.
+    if (workspaceAccess.kind === "hosted-pending" && !hasSession) {
       return (
         <div className="p-6">
           <h1 className="type-heading sr-only">Conversations</h1>

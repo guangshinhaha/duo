@@ -1,14 +1,21 @@
-import { configuredDaemonOrigin } from "../api/hosted.js";
+import { configuredDaemonOrigin, readHostedAccount } from "../api/hosted.js";
 
 /**
  * #127: how this device gets its workspace session.
  *
  * - `manual`: a personal daemon. The member types a homeserver, username and
  *   password (`WorkspaceSignInForm`) — the door that has always been here.
- * - `hosted-pending`: a hosted build (`VITE_DUO_DAEMON_URL` set). The
- *   homeserver is the operator's business, so the form is never shown; the
- *   workspace is meant to connect by itself after Google sign-in, which
- *   isn't wired yet — until then the surfaces say it isn't set up.
+ * - `hosted-pending`: a hosted build (`VITE_DUO_DAEMON_URL` set) whose
+ *   device is signed in to a hosted account. The homeserver is the
+ *   operator's business, so the form is never shown; the workspace is meant
+ *   to connect by itself after Google sign-in, which isn't wired yet — until
+ *   then the surfaces say it isn't set up.
+ *
+ * A hosted build's Advanced "connect by address" door pairs a personal
+ * daemon and clears the hosted account (`connectManually`); that device is
+ * `manual` again, form and all (#127 AC4). So Conversations and Settings
+ * read the account as well as the build flag. The front door (`Setup`)
+ * reads the flag alone (`isHostedBuild`): nobody has signed in there yet.
  *
  * SEAM for the auto-connect half of #127 (blocked on digital-duo#233, the
  * daemon route that hands a signed-in duo its Matrix session): this is where
@@ -21,5 +28,10 @@ export type WorkspaceAccess = { kind: "manual" } | { kind: "hosted-pending" };
 
 /** Read per call, not at module load, so a test can stub the env. */
 export function useWorkspaceAccess(): WorkspaceAccess {
-  return configuredDaemonOrigin() ? { kind: "hosted-pending" } : { kind: "manual" };
+  return isHostedBuild() && readHostedAccount() ? { kind: "hosted-pending" } : { kind: "manual" };
+}
+
+/** True when this build was made for a hosted server, signed in or not. */
+export function isHostedBuild(): boolean {
+  return configuredDaemonOrigin() !== null;
 }

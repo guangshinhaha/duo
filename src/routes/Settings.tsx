@@ -105,22 +105,18 @@ export function Settings({
               Sign out
             </button>
           </>
+        ) : workspaceAccess.kind === "hosted-pending" ? (
+          <WorkspaceNotSetUp className="flex flex-col gap-1" />
         ) : (
           <>
-            {workspaceAccess.kind === "hosted-pending" ? (
-              <WorkspaceNotSetUp className="flex flex-col gap-1" />
-            ) : (
-              <>
-                <p className="type-provenance text-[var(--muted)]">No workspace signed in on this device.</p>
-                <button
-                  className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
-                  data-testid="settings-workspace-signin"
-                  onClick={onWorkspaceSignIn}
-                >
-                  Sign in to a workspace
-                </button>
-              </>
-            )}
+            <p className="type-provenance text-[var(--muted)]">No workspace signed in on this device.</p>
+            <button
+              className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+              data-testid="settings-workspace-signin"
+              onClick={onWorkspaceSignIn}
+            >
+              Sign in to a workspace
+            </button>
           </>
         )}
       </section>
