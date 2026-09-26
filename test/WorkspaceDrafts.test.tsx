@@ -195,7 +195,7 @@ function navigate(hash: string): void {
   window.dispatchEvent(new Event("hashchange"));
 }
 
-const ROOM_HASH = `#room/${encodeURIComponent(PROJECT)}`;
+const ROOM_HASH = `#chat/${encodeURIComponent(PROJECT)}`;
 
 function seed({ paired = true }: { paired?: boolean } = {}) {
   localStorage.setItem("duo.workspace-session", JSON.stringify(SESSION));
@@ -223,7 +223,7 @@ describe("#68 AC1 — a message here produces a draft, and it appears in Review"
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
 
     await renderApp();
-    navigate("#review");
+    navigate("#waiting");
 
     const entry = await screen.findByTestId("review-entry");
     expect(within(entry).getByTestId("duo-message")).toHaveTextContent(DRAFT_TEXT);
@@ -243,7 +243,7 @@ describe("#68 AC1 — a message here produces a draft, and it appears in Review"
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
 
     await renderApp();
-    navigate("#review");
+    navigate("#waiting");
 
     const link = await screen.findByTestId("open-conversation");
     expect(link).toHaveAttribute("href", ROOM_HASH);
@@ -257,21 +257,21 @@ describe("#68 AC1 — a message here produces a draft, and it appears in Review"
     vi.mocked(connect).mockResolvedValue(fakeConnection({}).connection);
 
     await renderApp();
-    navigate("#review");
+    navigate("#waiting");
     await screen.findByTestId("draft-origin");
     // Let the rooms read settle before asserting an absence.
     await waitFor(() => expect(vi.mocked(connect)).toHaveBeenCalled());
     expect(screen.queryByTestId("open-conversation")).toBeNull();
   });
 
-  it("the sidebar's Review count follows the draft, like any draft", async () => {
+  it("the Waiting on you count follows the draft, like any draft", async () => {
     seed();
     vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" }), draftFor({ id: "d2" })]).fetchMock);
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
 
     await renderApp();
 
-    expect((await screen.findAllByTestId("review-badge"))[0]).toHaveTextContent("2");
+    expect(await screen.findByTestId("waiting-badge")).toHaveTextContent("2");
   });
 });
 
@@ -520,7 +520,7 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
     await within(await screen.findByTestId("room-drafts")).findByTestId("draft-card");
     expect(daemon.outcomes).toEqual([]);
 
-    navigate("#review");
+    navigate("#waiting");
     const entry = await screen.findByTestId("review-entry");
     expect(within(entry).getByTestId("duo-message")).toHaveTextContent(DRAFT_TEXT);
     // Reading is not deciding — nothing in the daemon moved.
@@ -539,7 +539,7 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
     fireEvent.click(await within(drafts).findByRole("button", { name: "Send" }));
     await waitFor(() => expect(daemon.outcomes).toHaveLength(1));
 
-    navigate("#review");
+    navigate("#waiting");
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
   });
 

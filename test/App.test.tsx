@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.js";
+import { stubDesktop } from "./desktop.js";
 import type { DraftRecord } from "../src/api/types.js";
 
 function draftFor(owner: string): DraftRecord {
@@ -66,6 +67,7 @@ describe("App — the query cache never leaks across a reconnect to a different 
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.clear();
+    window.location.hash = "";
   });
 
   it("does not show daemon A's cached drafts while daemon B's request is still in flight after reconnecting", async () => {
@@ -99,6 +101,10 @@ describe("App — the query cache never leaks across a reconnect to a different 
       });
     });
     vi.stubGlobal("fetch", fetchMock);
+    // The drafts queue is where the two daemons' questions would show; the
+    // desktop layout keeps the chat list (and its "Forget this device") beside it.
+    stubDesktop();
+    window.location.hash = "#waiting";
 
     render(<App />);
 
@@ -134,7 +140,7 @@ describe("App — hash routing between the surfaces", () => {
     window.location.hash = "";
   });
 
-  it("opens on Review, navigates to Mirror on #mirror, and back", async () => {
+  it("opens on the chat list, opens the waiting queue, and a retired #mirror address lands on the portrait", async () => {
     // A stored config skips Setup, so the shell renders straight into the
     // route tree this test is actually about.
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
@@ -165,12 +171,21 @@ describe("App — hash routing between the surfaces", () => {
 
     render(<App />);
 
-    // Fresh launch: the empty hash is Review, the default surface.
+    // Fresh launch: the empty hash is the chat list, with your duo pinned.
+    await waitFor(() => expect(screen.getByTestId("chat-list")).toBeInTheDocument());
+    expect(screen.getByTestId("duo-link")).toHaveAttribute("href", "#duo");
+    expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
+
+    window.location.hash = "#waiting";
+    window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
 
+    // The retired address renders its new home, and the bar is rewritten in place.
     window.location.hash = "#mirror";
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByTestId("mirror")).toBeInTheDocument());
+    expect(screen.getByTestId("profile-tab-portrait")).toHaveAttribute("aria-current", "page");
+    expect(window.location.hash).toBe("#duo/profile");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
 
     window.location.hash = "#review";
@@ -179,7 +194,7 @@ describe("App — hash routing between the surfaces", () => {
     expect(screen.queryByTestId("mirror")).toBeNull();
   });
 
-  it("navigates to Corrections on #corrections, beside Review in the loop's own order", async () => {
+  it("#corrections is the duo's Rules tab", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(
       "fetch",
@@ -188,24 +203,17 @@ describe("App — hash routing between the surfaces", () => {
 
     render(<App />);
 
-    // The queue is a first-class surface (AR-14's second half): its own
-    // sidebar entry, directly under Review — the loop's two queues read
-    // together, not buried behind another surface.
-    const link = screen.getByRole("link", { name: "Corrections" });
-    expect(link).toHaveAttribute("href", "#corrections");
-    const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
-    expect(entries.indexOf("Review")).toBeLessThan(entries.indexOf("Corrections"));
-    expect(entries.indexOf("Corrections")).toBeLessThan(entries.indexOf("Duo"));
-
     window.location.hash = "#corrections";
     window.dispatchEvent(new Event("hashchange"));
     // GET /review returns [] against this stub, so the queue shows its
     // honest empty state — the route mounted, not Review with no drafts.
     await waitFor(() => expect(screen.getByTestId("corrections-empty")).toBeInTheDocument());
+    expect(screen.getByTestId("profile-tab-rules")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("profile-tab-rules")).toHaveAttribute("href", "#duo/profile/rules");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 
-  it("navigates to Knowledge on #knowledge, beside the your-duo surfaces", async () => {
+  it("#knowledge is the duo's Knows tab", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(
       "fetch",
@@ -219,21 +227,14 @@ describe("App — hash routing between the surfaces", () => {
 
     render(<App />);
 
-    // Knowledge sits with the your-duo surfaces, right after Mirror — what
-    // it derived, then what it knows.
-    const link = screen.getByRole("link", { name: "Knowledge" });
-    expect(link).toHaveAttribute("href", "#knowledge");
-    const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
-    expect(entries.indexOf("Mirror")).toBeLessThan(entries.indexOf("Knowledge"));
-    expect(entries.indexOf("Knowledge")).toBeLessThan(entries.indexOf("Settings"));
-
     window.location.hash = "#knowledge";
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByTestId("knowledge")).toBeInTheDocument());
+    expect(screen.getByTestId("profile-tab-knows")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 
-  it("navigates to Escalations on #escalations, with the answering-others surfaces (#54, #129)", async () => {
+  it("#escalations is the duo's Activity tab (#54)", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(
       "fetch",
@@ -247,18 +248,10 @@ describe("App — hash routing between the surfaces", () => {
 
     render(<App />);
 
-    const link = screen.getByRole("link", { name: "Escalations" });
-    expect(link).toHaveAttribute("href", "#escalations");
-    const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
-    // #129: what it escalates sits with what it answered for others —
-    // the section before the training one, and above Settings.
-    expect(entries.indexOf("Audit")).toBeLessThan(entries.indexOf("Escalations"));
-    expect(entries.indexOf("Escalations")).toBeLessThan(entries.findIndex((text) => text?.startsWith("Review")));
-    expect(entries.indexOf("Escalations")).toBeLessThan(entries.indexOf("Settings"));
-
     window.location.hash = "#escalations";
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByTestId("escalations")).toBeInTheDocument());
+    expect(screen.getByTestId("profile-tab-activity")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 
@@ -281,6 +274,7 @@ describe("App — hash routing between the surfaces", () => {
       }),
     );
 
+    window.location.hash = "#waiting";
     render(<App />);
     await waitFor(() => expect(screen.getByText("question from A's daemon")).toBeInTheDocument());
 
@@ -300,7 +294,7 @@ describe("App — hash routing between the surfaces", () => {
     await waitFor(() => expect(screen.getByTestId("search-overlay")).toBeInTheDocument());
   });
 
-  it("navigates to Channels on #channels, with the answering-others surfaces (#47, #129)", async () => {
+  it("#channels is the duo's Knows tab, beside what it has read (#47)", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(
       "fetch",
@@ -309,16 +303,10 @@ describe("App — hash routing between the surfaces", () => {
 
     render(<App />);
 
-    const link = screen.getByRole("link", { name: "Channels" });
-    expect(link).toHaveAttribute("href", "#channels");
-    const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
-    expect(entries.indexOf("Escalations")).toBeLessThan(entries.indexOf("Channels"));
-    expect(entries.indexOf("Channels")).toBeLessThan(entries.findIndex((text) => text?.startsWith("Review")));
-    expect(entries.indexOf("Channels")).toBeLessThan(entries.indexOf("Settings"));
-
     window.location.hash = "#channels";
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByTestId("channels")).toBeInTheDocument());
+    expect(screen.getByTestId("profile-tab-knows")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 
@@ -382,9 +370,10 @@ describe("App — hash routing between the surfaces", () => {
       vi.fn(async () => new Response(JSON.stringify([draftFor("A")]), { status: 200 })),
     );
 
+    window.location.hash = "#waiting";
     render(<App />);
 
-    // Review loads first (the default route) so a query actually runs and
+    // The drafts queue loads first so a query actually runs and
     // the persister has something to write — the drafts are the data this
     // test watches leave, so without this the cache-removal below proves nothing.
     await waitFor(() => expect(screen.getByText("question from A's daemon")).toBeInTheDocument());
