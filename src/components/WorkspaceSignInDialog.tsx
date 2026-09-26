@@ -1,12 +1,14 @@
 import type { WorkspaceSession } from "../workspace/matrix.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./primitives/Dialog.js";
+import { useWorkspaceAccess } from "../workspace/access.js";
 import { WorkspaceSignInForm } from "./WorkspaceSignInForm.js";
 
 /**
  * #62: the workspace sign-in, as an overlay — what Settings offers when a
  * device paired to a duo before the workspace existed (or signed out and
  * wants back in). The same form component the front door renders; the
- * session lands through the same choke point.
+ * session lands through the same choke point. A hosted build never opens it
+ * (#127): there is no homeserver form to show.
  */
 export function WorkspaceSignInDialog({
   open,
@@ -17,6 +19,9 @@ export function WorkspaceSignInDialog({
   onOpenChange: (open: boolean) => void;
   onSession: (session: WorkspaceSession) => void;
 }) {
+  if (useWorkspaceAccess().kind === "hosted-pending") {
+    return null;
+  }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm" data-testid="workspace-signin-dialog">
