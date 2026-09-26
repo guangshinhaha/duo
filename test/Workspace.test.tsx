@@ -2070,6 +2070,9 @@ describe("#127 — hosted builds never show the homeserver form", () => {
 
   it("the front door's Advanced (address) screen offers pairing, not a homeserver form", async () => {
     vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    // Arrive at the front door itself (#signin), not the bare root, which
+    // redirects a signed-out visitor to the landing page.
+    window.location.hash = "#signin";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ googleClientId: "abc" }), { status: 200 })));
 
     await renderApp();
@@ -2082,6 +2085,9 @@ describe("#127 — hosted builds never show the homeserver form", () => {
 
   it("a hosted server without Google sign-in leads with pairing, with no workspace note above it", async () => {
     vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    // Arrive at the front door itself (#signin), not the bare root, which
+    // redirects a signed-out visitor to the landing page.
+    window.location.hash = "#signin";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ googleClientId: null }), { status: 200 })));
 
     await renderApp();
@@ -2093,6 +2099,7 @@ describe("#127 — hosted builds never show the homeserver form", () => {
 
   it("a hosted build paired to a personal daemon via Advanced keeps the manual form (AC 4)", async () => {
     vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    window.location.hash = "#signin";
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
