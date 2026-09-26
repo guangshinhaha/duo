@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
+import { workspaceSessionUrl } from "../src/api/hosted.js";
 import type { LiveArrival, NotificationMode, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
 import { WorkspaceSignInDialog } from "../src/components/WorkspaceSignInDialog.js";
 import type { StagedShare } from "../src/workspace/sharing.js";
@@ -2019,9 +2020,11 @@ describe("#66 — sharing files and images in a conversation", () => {
 /*
  * #127 (hide-the-form half): a hosted build (VITE_DUO_DAEMON_URL set) never
  * shows the homeserver form — its workspace is the operator's, not something
- * the person types an address for. Until auto-connect lands, Conversations
+ * the person types an address for. Where the daemon has no workspace to hand
+ * out (or this device is not paired to the account's server), Conversations
  * and Settings say the workspace isn't set up instead. A personal daemon
- * (no env var) keeps the manual form, exactly as #62 built it.
+ * (no env var) keeps the manual form, exactly as #62 built it. The
+ * auto-connect half follows in "#127 — a hosted device connects by itself".
  */
 describe("#127 — hosted builds never show the homeserver form", () => {
   const HOSTED_ORIGIN = "https://duo-daemon.example.org";
@@ -2125,19 +2128,18 @@ describe("#127 — hosted builds never show the homeserver form", () => {
     expect(localStorage.getItem("duo.hosted-account")).toBeNull();
   });
 
-  it("a stored session still connecting is not told the workspace isn't set up", async () => {
+  it("a hosted device never connects with a stored manual sign-in: its session comes from the daemon", async () => {
     vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
     seedPairing();
     seedHostedAccount();
     seedSession();
     stubDaemonFetch();
-    vi.mocked(connect).mockReturnValue(new Promise(() => {})); // never resolves: stays connecting
     window.location.hash = "#conversations";
 
     await renderApp();
 
-    await waitFor(() => expect(vi.mocked(connect)).toHaveBeenCalled());
-    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("workspace-not-set-up")).toBeInTheDocument();
+    expect(vi.mocked(connect)).not.toHaveBeenCalled();
   });
 
   it("the sign-in dialog renders nothing for a hosted device, even when asked to open", () => {
@@ -2165,5 +2167,430 @@ describe("#127 — hosted builds never show the homeserver form", () => {
     fireEvent.keyDown(screen.getByTestId("workspace-signin-dialog"), { key: "Escape" });
     await goTo("#settings");
     expect(await screen.findByTestId("settings-workspace-signin")).toHaveTextContent("Sign in to a workspace");
+  });
+});
+
+/*
+ * #127 (auto-connect half): after Google sign-in the app asks the paired
+ * daemon for the person's own workspace session and connects with it — no
+ * form, no typing. The credential is held in memory only, is renewed under
+ * the open connection, is answered afresh when the workspace refuses it, and
+ * is ended at the workspace on sign-out. (The hook's timing and error table
+ * is pinned in test/HostedWorkspace.test.tsx; this is the wiring.)
+ */
+describe("#127 — a hosted device connects by itself", () => {
+  const HOSTED_ORIGIN = "https://duo-daemon.example.org";
+  const HOMESERVER = "https://matrix.example.org";
+  const DEVICE_TOKEN = "device-token-ada";
+  const PAIRING = { baseUrl: `${HOSTED_ORIGIN}/t/ada`, token: DEVICE_TOKEN };
+
+  interface Answer {
+    status: number;
+    body: unknown;
+    headers?: Record<string, string>;
+  }
+
+  let minted = 0;
+  function granted(ttlMs = 24 * 3_600_000): Answer {
+    minted += 1;
+    return {
+      status: 200,
+      body: {
+        homeserverUrl: HOMESERVER,
+        userId: "@acme.ada:matrix.example.org",
+        accessToken: `syt_hosted_${minted}`,
+        deviceId: null,
+        expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+      },
+    };
+  }
+
+  function seedHostedDevice(origin: string = HOSTED_ORIGIN) {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    localStorage.setItem("duo.api-config", JSON.stringify(PAIRING));
+    localStorage.setItem("duo.hosted-account", JSON.stringify({ origin, ownerName: "Ada", isAdmin: false }));
+  }
+
+  /** The daemon: session `POST` answers in order (the last repeats) and a `DELETE` is a 204; the workspace's logout is recorded; everything else is empty and fine. */
+  function stubHostedNetwork(answers: Answer[]) {
+    let asked = 0;
+    const calls: Array<{ url: string; method: string; authorization: string | null }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, method: init?.method ?? "GET", authorization: new Headers(init?.headers).get("Authorization") });
+        if (url === workspaceSessionUrl(PAIRING) && init?.method === "DELETE") {
+          return new Response(null, { status: 204 });
+        }
+        if (url === workspaceSessionUrl(PAIRING)) {
+          const answer = answers[Math.min(asked, answers.length - 1)]!;
+          asked += 1;
+          return new Response(JSON.stringify(answer.body), { status: answer.status, headers: answer.headers });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+    return {
+      sessionCalls: () => calls.filter((call) => call.url === workspaceSessionUrl(PAIRING) && call.method === "POST"),
+      dropCalls: () => calls.filter((call) => call.url === workspaceSessionUrl(PAIRING) && call.method === "DELETE"),
+      logoutCalls: () => calls.filter((call) => call.url.endsWith("/_matrix/client/v3/logout")),
+    };
+  }
+
+  beforeEach(() => {
+    minted = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it("Conversations loads with no further input, connecting with the daemon's session — no device, no form", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([granted()]);
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
+    expect(net.sessionCalls()).toHaveLength(1);
+    expect(net.sessionCalls()[0]!.authorization).toBe(`Bearer ${DEVICE_TOKEN}`);
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(connect).mock.calls[0]![0]).toEqual({
+      homeserverUrl: HOMESERVER,
+      userId: "@acme.ada:matrix.example.org",
+      accessToken: "syt_hosted_1",
+      deviceId: null,
+    });
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("conversations-signin")).not.toBeInTheDocument();
+  });
+
+  it("holds the credential in memory only: it is in no browser store", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    expect(localStorage.getItem("duo.workspace-session")).toBeNull();
+    const everything = JSON.stringify({ ...localStorage, ...sessionStorage });
+    expect(everything).not.toContain("syt_hosted_1");
+    expect(everything).not.toContain("matrix.example.org");
+  });
+
+  it("Settings names no address and no account id, and offers no sign-in or separate sign-out", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#settings";
+
+    await renderApp();
+
+    const workspace = await screen.findByTestId("settings-workspace");
+    await waitFor(() => expect(within(workspace).getByTestId("workspace-status")).toHaveAttribute("data-state", "connected"));
+    expect(workspace).not.toHaveTextContent("matrix.example.org");
+    expect(workspace).not.toHaveTextContent("@acme.ada");
+    expect(within(workspace).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("the daemon has no workspace to give (404): the note stays, nothing connects", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([{ status: 404, body: { error: { code: "workspace_not_configured", message: "no" } } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("workspace-not-set-up")).toHaveTextContent("Workspace isn't set up yet");
+    expect(net.sessionCalls()).toHaveLength(1);
+    expect(vi.mocked(connect)).not.toHaveBeenCalled();
+  });
+
+  it("the person's account is still being made (503 pending): says it is setting things up, in plain words", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([{ status: 503, body: { error: { code: "workspace_pending", message: "wait" } }, headers: { "Retry-After": "60" } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    const status = await screen.findByTestId("workspace-status");
+    expect(status).toHaveTextContent("Setting things up…");
+    expect(status).not.toHaveTextContent(/matrix|homeserver|token|server/i);
+    expect(screen.queryByTestId("conversations-signin")).not.toBeInTheDocument();
+  });
+
+  it("the workspace is down (503 unavailable): says it could not reach the conversations and is trying again", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([{ status: 503, body: { error: { code: "workspace_unavailable", message: "down" } }, headers: { "Retry-After": "60" } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    const status = await screen.findByTestId("workspace-status");
+    expect(status).toHaveTextContent("Couldn't reach your conversations — trying again");
+    expect(status).not.toHaveTextContent(/matrix|homeserver|token|server/i);
+  });
+
+  it("the daemon no longer knows this device (401): signed out, back to the sign-in front door with the reason", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([{ status: 401, body: { error: { code: "unauthorized", message: "no" } } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    // The device is unpaired exactly as for any revoked device, and the front door says why.
+    await waitFor(() => expect(localStorage.getItem("duo.api-config")).toBeNull());
+    expect(await screen.findByText(/its device was revoked/i)).toBeInTheDocument();
+    expect(vi.mocked(connect)).not.toHaveBeenCalled();
+  });
+
+  it("a stored account for another server never gets the device token", async () => {
+    seedHostedDevice("https://elsewhere.example.org");
+    const net = stubHostedNetwork([granted()]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("workspace-not-set-up")).toBeInTheDocument();
+    expect(net.sessionCalls()).toEqual([]);
+    expect(vi.mocked(connect)).not.toHaveBeenCalled();
+  });
+
+  it("when the workspace stops accepting the credential, asks for a new session and connects again", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([granted(), granted()]);
+    const first = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    const second = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValueOnce(first.connection).mockResolvedValueOnce(second.connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    const options = vi.mocked(connect).mock.calls[0]![1] as { onSessionRejected: () => void };
+
+    act(() => options.onSessionRejected());
+
+    await waitFor(() => expect(vi.mocked(connect)).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(connect).mock.calls[1]![0].accessToken).toBe("syt_hosted_2");
+    expect(net.sessionCalls()).toHaveLength(2);
+    // The daemon's copy of the refused credential was dropped before the new ask.
+    expect(net.dropCalls()).toHaveLength(1);
+    expect(first.connection.stop).toHaveBeenCalled();
+    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
+  });
+
+  it("a first sync the workspace refuses (M_UNKNOWN_TOKEN) is answered the same way", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([granted(), granted()]);
+    const refused = Object.assign(new Error("no longer accepted"), { errcode: "M_UNKNOWN_TOKEN" });
+    vi.mocked(connect).mockRejectedValueOnce(refused);
+    vi.mocked(connect).mockResolvedValueOnce(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
+    expect(net.sessionCalls()).toHaveLength(2);
+    expect(net.dropCalls()).toHaveLength(1);
+    expect(vi.mocked(connect).mock.calls[1]![0].accessToken).toBe("syt_hosted_2");
+    // The person is never handed a sign-out button for something they did not cause.
+    expect(screen.queryByTestId("workspace-error")).not.toBeInTheDocument();
+  });
+
+  it("renews the credential about an hour before it expires, under the open connection", async () => {
+    seedHostedDevice();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const net = stubHostedNetwork([granted(), granted()]);
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    const renewToken = vi.fn();
+    fake.connection.renewToken = renewToken;
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(23 * 3_600_000);
+    });
+
+    expect(net.sessionCalls()).toHaveLength(2);
+    expect(renewToken).toHaveBeenCalledWith("syt_hosted_2");
+    // Renewed in place: no second connection, the first never stopped.
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(1);
+    expect(fake.connection.stop).not.toHaveBeenCalled();
+  });
+
+  it("signing out ends the session at the workspace with its own credential, then forgets it and disconnects", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([granted()]);
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(net.logoutCalls()).toHaveLength(1));
+    expect(net.logoutCalls()[0]).toEqual({
+      url: `${HOMESERVER}/_matrix/client/v3/logout`,
+      method: "POST",
+      authorization: "Bearer syt_hosted_1",
+    });
+    // The daemon is told to forget its copy too, with the device token, at this duo's own route.
+    await waitFor(() => expect(net.dropCalls()).toHaveLength(1));
+    expect(net.dropCalls()[0]).toEqual({ url: workspaceSessionUrl(PAIRING), method: "DELETE", authorization: `Bearer ${DEVICE_TOKEN}` });
+    await waitFor(() => expect(fake.connection.stop).toHaveBeenCalled());
+    expect(localStorage.getItem("duo.api-config")).toBeNull();
+    expect(screen.queryByTestId("conversations-list")).not.toBeInTheDocument();
+    expect(JSON.stringify({ ...localStorage })).not.toContain("syt_hosted_1");
+  });
+
+  it("a connect that fails on its own (not a refused credential) is retried after 5s, 10s, 20s — the daemon answering in between does not reset the wait", async () => {
+    seedHostedDevice();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const net = stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockRejectedValue(new Error("Failed to fetch"));
+    window.location.hash = "#conversations";
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    await renderApp();
+    await advance(50);
+    expect(net.sessionCalls()).toHaveLength(1);
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(1);
+    // The person is told, plainly, and is not handed a sign-out for something they did not cause.
+    expect(screen.getByTestId("workspace-status")).toHaveAttribute("data-state", "unreachable");
+    expect(screen.queryByTestId("workspace-error")).not.toBeInTheDocument();
+    // A plain failure is not a refused credential: nothing is dropped at the daemon.
+    expect(net.dropCalls()).toHaveLength(0);
+
+    await advance(4_900);
+    expect(net.sessionCalls()).toHaveLength(1);
+    await advance(1_100); // ~6s: the second ask, and a second failed connect
+    expect(net.sessionCalls()).toHaveLength(2);
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(2);
+
+    await advance(9_000); // 5s again would have asked by now; the wait is 10s
+    expect(net.sessionCalls()).toHaveLength(2);
+    await advance(2_000);
+    expect(net.sessionCalls()).toHaveLength(3);
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(3);
+
+    await advance(19_000); // and now 20s
+    expect(net.sessionCalls()).toHaveLength(3);
+    await advance(2_000);
+    expect(net.sessionCalls()).toHaveLength(4);
+    expect(net.dropCalls()).toHaveLength(0);
+  });
+
+  it("signing out also clears a manual sign-in left in storage, which a hosted device ignores and Settings cannot clear", async () => {
+    seedHostedDevice();
+    seedSession();
+    stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    expect(localStorage.getItem("duo.workspace-session")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(localStorage.getItem("duo.api-config")).toBeNull());
+    await waitFor(() => expect(localStorage.getItem("duo.workspace-session")).toBeNull());
+  });
+
+  it("a personal daemon's manual sign-in is not touched by forgetting the pairing", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", "");
+    seedPairing();
+    seedSession();
+    stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    fireEvent.click(screen.getByRole("button", { name: "Forget this device" }));
+
+    await waitFor(() => expect(localStorage.getItem("duo.api-config")).toBeNull());
+    // The pairing and the workspace sign-in are separate credentials: one ending leaves the other.
+    expect(localStorage.getItem("duo.workspace-session")).not.toBeNull();
+  });
+
+  it("Conversations while connecting is one live region that changes text in place, with no talk of a daemon", async () => {
+    seedHostedDevice();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let answer: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input) === workspaceSessionUrl(PAIRING) ? new Promise<Response>((resolve) => (answer = resolve)) : new Response("[]", { status: 200 }),
+      ),
+    );
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+
+    const region = screen.getByTestId("workspace-status");
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveTextContent("Connecting…");
+    // A slow connect used to read "Still waiting on the daemon…": nothing a hosted person knows.
+    expect(screen.queryByTestId("route-loading-slow")).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/daemon/i);
+
+    await act(async () => {
+      answer(new Response(JSON.stringify({ error: { code: "workspace_unavailable", message: "down" } }), { status: 503, headers: { "Retry-After": "60" } }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The same element, new words: that is what a screen reader announces.
+    expect(screen.getByTestId("workspace-status")).toBe(region);
+    expect(region).toHaveTextContent("Couldn't reach your conversations");
+    expect(screen.queryByTestId("route-loading")).not.toBeInTheDocument();
+  });
+
+  it("the not-set-up note is announced too: it lives inside the status region", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([{ status: 404, body: { error: { code: "workspace_not_configured", message: "no" } } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    const note = await screen.findByTestId("workspace-not-set-up");
+    expect(note.closest('[role="status"]')).not.toBeNull();
+  });
+
+  it("a personal daemon is unchanged: the stored sign-in connects as before, and the daemon is never asked for a session", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", "");
+    seedPairing();
+    seedSession();
+    const net = stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
+    // Exactly the stored session and nothing more — no hosted options ride along.
+    expect(vi.mocked(connect)).toHaveBeenCalledWith(SESSION);
+    expect(net.sessionCalls()).toEqual([]);
+    expect(net.logoutCalls()).toEqual([]);
   });
 });

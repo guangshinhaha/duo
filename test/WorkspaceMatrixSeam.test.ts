@@ -21,7 +21,7 @@ vi.mock("matrix-js-sdk", () => ({
   createClient: vi.fn(),
   ClientEvent: { Sync: "sync" },
   RoomEvent: { Timeline: "timeline" },
-  SyncState: { Prepared: "PREPARED" },
+  SyncState: { Prepared: "PREPARED", Error: "ERROR" },
   MsgType: { Text: "m.text", File: "m.file", Image: "m.image" },
   ReceiptType: { Read: "m.read", FullyRead: "m.fully_read", ReadPrivate: "m.read.private" },
   NotificationCountType: { Highlight: "highlight", Total: "total" },
@@ -34,7 +34,7 @@ vi.mock("matrix-js-sdk", () => ({
 }));
 
 import { ClientEvent, createClient, MatrixError, MsgType, ReceiptType, RoomEvent } from "matrix-js-sdk";
-import { connect, signIn } from "../src/workspace/matrix.js";
+import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
 
 const SESSION = {
@@ -124,6 +124,7 @@ type FakeClient = MatrixClient & {
   on: ReturnType<typeof vi.fn>;
   off: ReturnType<typeof vi.fn>;
   startClient: ReturnType<typeof vi.fn>;
+  setAccessToken: ReturnType<typeof vi.fn>;
   stopClient: ReturnType<typeof vi.fn>;
   getRooms: ReturnType<typeof vi.fn>;
   getRoom: ReturnType<typeof vi.fn>;
@@ -159,6 +160,7 @@ function fakeClient(
     on: vi.fn(),
     off: vi.fn(),
     startClient: vi.fn(),
+    setAccessToken: vi.fn(),
     stopClient: vi.fn(() => Promise.resolve()),
     getRooms: vi.fn(() => over.rooms ?? [fakeRoom()]),
     getRoom: vi.fn(() => over.rooms?.[0] ?? fakeRoom()),
@@ -284,7 +286,100 @@ describe("the seam's persistence contract (#62 AC4)", () => {
   });
 });
 
+/*
+ * #127: a hosted session's credential is minted by the operator, so it has no
+ * device. The client is built without one and never starts encryption (the
+ * only thing that needs a device), and the seam reports the workspace refusing
+ * the credential — the hosted hook answers that with a fresh session.
+ */
+describe("a hosted session — no device, and a credential that can end (#127)", () => {
+  const HOSTED_SESSION = { homeserverUrl: "https://workspace.example", userId: "@acme.ada:workspace.example", accessToken: "syt_minted", deviceId: null };
+
+  /** Fires the sync handlers the seam registered, the way the SDK reports a sync state. */
+  function emitSync(client: FakeClient, state: string, data?: unknown): void {
+    for (const [event, handler] of client.on.mock.calls) {
+      if (event === ClientEvent.Sync) {
+        (handler as (s: string, prev: string | null, d?: unknown) => void)(state, null, data);
+      }
+    }
+  }
+
+  it("builds the client with no device id and no crypto, and syncs on the access token alone", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const pending = connect(HOSTED_SESSION);
+    emitSync(client, "PREPARED");
+    await pending;
+
+    const options = vi.mocked(createClient).mock.calls[0]![0]!;
+    expect(options.accessToken).toBe("syt_minted");
+    expect(options.deviceId).toBeUndefined();
+    expect(Object.keys(options).filter((key) => /crypto|device/i.test(key))).toEqual([]);
+    expect(client.startClient).toHaveBeenCalledTimes(1);
+    // A fake with no crypto entry points would have thrown had the seam tried to start any.
+    expect((client as unknown as Record<string, unknown>).initRustCrypto).toBeUndefined();
+    expect((client as unknown as Record<string, unknown>).initCrypto).toBeUndefined();
+  });
+
+  it("tells its caller once when the workspace stops accepting the credential after the connection is up", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const onSessionRejected = vi.fn();
+    const pending = connect(HOSTED_SESSION, { onSessionRejected });
+    emitSync(client, "PREPARED");
+    await pending;
+
+    emitSync(client, "SYNCING");
+    expect(onSessionRejected).not.toHaveBeenCalled();
+    emitSync(client, "ERROR", { error: { errcode: "M_UNKNOWN_TOKEN" } });
+    expect(onSessionRejected).toHaveBeenCalledTimes(1);
+    expect(client.off).toHaveBeenCalled();
+  });
+
+  it("a network error is not a refusal", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const onSessionRejected = vi.fn();
+    const pending = connect(HOSTED_SESSION, { onSessionRejected });
+    emitSync(client, "PREPARED");
+    await pending;
+
+    emitSync(client, "ERROR", { error: { errcode: "M_LIMIT_EXCEEDED" } });
+    emitSync(client, "ERROR", { error: new Error("offline") });
+    expect(onSessionRejected).not.toHaveBeenCalled();
+  });
+
+  it("a credential already refused at the first sync rejects the connect by its errcode, and leaves no client polling", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const pending = connect(HOSTED_SESSION);
+    emitSync(client, "ERROR", { error: { errcode: "M_UNKNOWN_TOKEN" } });
+
+    await expect(pending).rejects.toMatchObject({ errcode: "M_UNKNOWN_TOKEN" });
+    expect(client.stopClient).toHaveBeenCalled();
+  });
+
+  it("renewToken swaps the credential under the open client", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const pending = connect(HOSTED_SESSION);
+    emitSync(client, "PREPARED");
+    const connection = await pending;
+
+    connection.renewToken?.("syt_renewed");
+
+    expect(client.setAccessToken).toHaveBeenCalledWith("syt_renewed");
+    expect(client.stopClient).not.toHaveBeenCalled();
+  });
+});
+
 describe("sign-in's wire rules", () => {
+  it("normalizeHomeserverUrl is the one rule for every door: https only, and the origin is what is used (#127)", () => {
+    expect(normalizeHomeserverUrl(" https://workspace.example/some/prefix/ ")).toBe("https://workspace.example");
+    expect(() => normalizeHomeserverUrl("http://workspace.example")).toThrow(/https/);
+    expect(() => normalizeHomeserverUrl("workspace.example")).toThrow();
+  });
+
   it("refuses a non-https homeserver without dialing it — the token must never ride a plaintext URL", async () => {
     const client = fakeClient();
     vi.mocked(createClient).mockReturnValue(client);

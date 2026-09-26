@@ -8,7 +8,14 @@ import { useEffect, useState } from "react";
  * never earns the excuse. The timer is presentation only — it decides
  * whether a sentence renders, never whether data is fetched.
  */
-export function RouteLoading({ variant = "cards" }: { variant?: "cards" | "rows" | "panels" }) {
+export function RouteLoading({
+  variant = "cards",
+  slowNote = "Still waiting on the daemon…",
+}: {
+  variant?: "cards" | "rows" | "panels";
+  /** What a slow load says; `null` for a surface that already says where things stand (a hosted build has no daemon to name). */
+  slowNote?: string | null;
+}) {
   const [slow, setSlow] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setSlow(true), 1500);
@@ -25,9 +32,9 @@ export function RouteLoading({ variant = "cards" }: { variant?: "cards" | "rows"
           <div key={index} className="shape-entry animate-pulse p-4" data-testid="route-loading-block" />
         ))}
       </div>
-      {slow && (
+      {slow && slowNote !== null && (
         <p className="mt-4 type-provenance text-[var(--muted)]" data-testid="route-loading-slow">
-          Still waiting on the daemon…
+          {slowNote}
         </p>
       )}
     </div>
