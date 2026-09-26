@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 import { apiRequest, type DuoApiConfig } from "./client.js";
+import { createInvite, listInvites, type CreateInviteInput } from "./hosted.js";
 import type {
   AskLinkRow,
   AuditEntry,
@@ -87,6 +88,7 @@ export const queryKeys = {
   deriveJob: ["corpus", "derive"] as const,
   // The ask links this duo has minted — never their tokens.
   askLinks: ["ask-links"] as const,
+  hostedInvites: ["hosted-invites"] as const,
   // Under the ["trust"] root: accepting a promotion or granting autonomy moves the grid too.
   trustPromotions: ["trust", "promotions"] as const,
   // #46: keyed by the submitted query — each distinct search is its own
@@ -645,6 +647,26 @@ export function useGrantAutonomy(api: DuoApiConfig) {
       apiRequest<GrantOutcome>(api, "/trust/grant", { method: "POST", body: JSON.stringify(input) }),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["trust"] });
+    },
+  });
+}
+
+/**
+ * Hosted mode's admin surface (`GET/POST {origin}/hosted/invites`) — at the
+ * daemon's origin, not under this duo's base path, and authorised by this
+ * device's own token (the daemon checks it belongs to an admin's duo).
+ */
+export function useHostedInvites(origin: string, api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.hostedInvites, queryFn: () => listInvites(origin, api.token) });
+}
+
+/** The answer carries the invite code and link, once; the list is re-read and never carries either. */
+export function useCreateHostedInvite(origin: string, api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateInviteInput) => createInvite(origin, api.token, input),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.hostedInvites });
     },
   });
 }

@@ -144,7 +144,11 @@ domain types.
 | `GET` | `/trust/promotions` | `PromotionOffer[]` — the batched digest (#54) | `trust/promotion` |
 | `POST` | `/trust/promotions/:topicId/:tier` | the moved `TrustCell` — `{ decision: "accept" \| "decline" }`; nothing promotes without it | `trust/promotion` |
 | `POST` | `/trust/grant` | `GrantOutcome` — `{ scopeText, tier, topicId? }`; "ambiguous" returns candidates for a picker, never a guess; T4 absent (trust-surface.md) | `trust/grants` |
-| `POST` | `/hosted/signup` | `HostedSignupResult` — at the daemon ORIGIN, not a duo's base URL; no bearer, the invite is the credential (`{ invite, name }`); 403 `invite_invalid` | `hosted` |
+| `POST` | `/hosted/signup` | `HostedSignupResult` — at the daemon ORIGIN, not a duo's base URL; no bearer, the invite is the credential (`{ invite, credential }` with Google sign-in configured, `{ invite, name }` without); 403 `invite_invalid` / `invite_wrong_account`, 409 `already_has_duo` | `hosted` |
+| `GET` | `/hosted/config` | `HostedConfig` — at the daemon ORIGIN, public: `{ googleClientId }`, null when sign-in isn't configured | `hosted` |
+| `POST` | `/hosted/login` | `HostedSignupResult` — at the daemon ORIGIN: `{ credential }` (a Google ID token) in, this account's duo (`basePath` "" for the root duo) and a fresh device token out; 404 `no_duo` | `hosted` |
+| `GET` | `/hosted/invites` | `HostedInviteRow[]` — at the daemon ORIGIN, admin only (Bearer: the admin's own device token); never a code | `hosted` |
+| `POST` | `/hosted/invites` | `MintedHostedInvite` — 201, admin only (`{ name, email?, expiresInHours? }`); the code and link shown once | `hosted` |
 | `GET` | `/search?q=&limit=&cursor=` | `HybridSearchOutcome` — `duo search`'s own hybrid read (#174) | `ingest/embeddings` |
 | `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178); the Escalations screen (#54) never calls it — opening a screen must not send | `escalation/digest` |
 | `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; the Escalations screen walks every page at `limit=100` before it counts | `escalation/digest` |

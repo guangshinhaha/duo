@@ -510,11 +510,21 @@ export interface EndDuoResult {
 // device token, shown exactly once. `basePath` is appended to the daemon
 // origin to make this device's `baseUrl` (the duo's own path on the daemon).
 export interface HostedSignupResult {
-  readonly tenantId: string;
+  /** null for the server's original (root) duo, which lives at the bare origin. */
+  readonly tenantId: string | null;
+  /** The duo's path under the daemon origin (/t/ then the tenant id), or "" for the root duo. */
   readonly basePath: string;
   readonly token: string;
   readonly ownerName: string;
+  /** May mint invites from Settings. Absent from a daemon that predates sign-in — read as false. */
+  readonly isAdmin?: boolean;
 }
+
+/** `GET {origin}/hosted/config` — what the sign-in page needs. A null client id means sign-in isn't configured on that server. */
+export interface HostedConfig {
+  readonly googleClientId: string | null;
+}
+
 
 // `POST /corpus/import-claude`: a Claude data export's conversations.json,
 // imported exactly as `duo import claude` does — the daemon's own counts.

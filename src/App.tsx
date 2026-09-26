@@ -19,6 +19,8 @@ import { usePendingDrafts, usePendingT4 } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Join } from "./routes/Join.js";
+import { Landing } from "./routes/Landing.js";
+import { configuredDaemonOrigin, readHostedAccount, writeHostedAccount } from "./api/hosted.js";
 import { Settings } from "./routes/Settings.js";
 import { Onboarding, ReviewOrFirstRun } from "./routes/Onboarding.js";
 import { Draft } from "./routes/Draft.js";
@@ -536,7 +538,7 @@ function MobileNav({
                 onDisconnect();
               }}
             >
-              Forget this device
+              {readHostedAccount() ? "Sign out" : "Forget this device"}
             </button>
           )}
         </nav>
@@ -797,6 +799,12 @@ function AppShell() {
   function setApi(next: DuoApiConfig | null): void {
     queryClient.clear();
     void persister.removeClient();
+    // Hosted mode: who this browser is signed in as goes with the pairing it
+    // describes — unpairing (forget, sign out, revocation, the duo's end)
+    // leaves no name or admin flag behind.
+    if (next === null) {
+      writeHostedAccount(null);
+    }
     setApiRaw(next);
   }
 
@@ -885,10 +893,11 @@ function AppShell() {
       <Join
         alreadyPaired={!!api}
         hash={joinHash}
-        onJoined={(config) => {
+        onJoined={(config, account) => {
           setRevoked(false);
           setEnded(null);
           setApi(config);
+          writeHostedAccount(account);
           // The invite is spent: its hash must not survive in history or a
           // reload would offer the Join screen again for a used code.
           window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#onboarding`);
@@ -899,23 +908,40 @@ function AppShell() {
   }
 
   if (!api && !session) {
-    return (
-      <Setup
-        notice={
-          ended
-            ? endedNoticeText(ended)
-            : revoked
-              ? "This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again."
-              : undefined
-        }
-        onConnect={(config) => {
-          setRevoked(false);
-          setEnded(null);
-          setApi(config);
-        }}
-        onWorkspaceSession={setSession}
-      />
-    );
+    // A hosted build knows its server: the front door is sign-in, not an
+    // address form. Without VITE_DUO_DAEMON_URL the app is exactly the
+    // pair-with-your-Mac app it always was.
+    const hostedOrigin = configuredDaemonOrigin();
+    const connectManually = (config: DuoApiConfig) => {
+      setRevoked(false);
+      setEnded(null);
+      setApi(config);
+      writeHostedAccount(null);
+    };
+    const notice = ended
+      ? endedNoticeText(ended)
+      : revoked
+        ? hostedOrigin
+          ? "This browser was signed out — its device was revoked. Sign in again to continue."
+          : "This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again."
+        : undefined;
+    if (hostedOrigin) {
+      return (
+        <Landing
+          notice={notice}
+          onConnect={connectManually}
+          onSignedIn={(config, account) => {
+            setRevoked(false);
+            setEnded(null);
+            setApi(config);
+            writeHostedAccount(account);
+          }}
+          onWorkspaceSession={setSession}
+          origin={hostedOrigin}
+        />
+      );
+    }
+    return <Setup notice={notice} onConnect={connectManually} onWorkspaceSession={setSession} />;
   }
 
   const openPairDuo = (): void => setPairOpen(true);
@@ -1054,7 +1080,10 @@ function AppShell() {
               className="mt-auto inline-flex min-h-11 items-center px-2 text-left type-provenance text-[var(--faint)]"
               onClick={() => setApi(null)}
             >
-              Forget this device
+              {/* Hosted mode says "Sign out" for the same local forget: the
+                  browser holds a signed-in device, and signing in again is
+                  one tap. */}
+              {readHostedAccount() ? "Sign out" : "Forget this device"}
             </button>
           )}
         </nav>

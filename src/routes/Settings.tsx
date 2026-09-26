@@ -15,6 +15,8 @@ import { Timestamp } from "../components/Timestamp.js";
 import { PairedDevices } from "../components/PairedDevices.js";
 import { PairAnotherDevice } from "../components/PairAnotherDevice.js";
 import { AskLinks } from "../components/AskLinks.js";
+import { InvitePeople } from "../components/InvitePeople.js";
+import { readHostedAccount } from "../api/hosted.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import {
   clearMissed,
@@ -69,6 +71,8 @@ export function Settings({
   // fresh per visit), written through — the log's read is the same story.
   const [dnd, setDnd] = useState<DndPrefs>(readDndPrefs);
   const [missed, setMissed] = useState<readonly MissedArrival[]>(readMissed);
+  // Hosted mode: who this browser is signed in as (null on a paired-by-address app).
+  const [account] = useState(readHostedAccount);
 
   const writeDnd = (next: DndPrefs): void => {
     writeDndPrefs(next);
@@ -308,8 +312,29 @@ export function Settings({
       {api && <PairedDevices api={api} onConfigChange={onConfigChange} />}
       {api && <PairAnotherDevice api={api} />}
       {api && <AskLinks api={api} />}
+      {api && account?.isAdmin && <InvitePeople api={api} origin={account.origin} />}
 
-      {api && (
+      {api && account && (
+        <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-account">
+          <h2 className="type-heading">Account</h2>
+          <p className="type-body text-[var(--muted)]">
+            Signed in to {account.ownerName}&apos;s duo with Google{account.isAdmin ? ", as an admin of this server" : ""}.
+          </p>
+          <p className="type-provenance text-[var(--muted)]">
+            Signing out forgets this browser&apos;s connection; sign in again any time. To cut a browser off for good, revoke it under Devices.
+          </p>
+          <button
+            className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
+            data-testid="settings-sign-out"
+            onClick={() => onConfigChange(null)}
+            type="button"
+          >
+            Sign out
+          </button>
+        </section>
+      )}
+
+      {api && !account && (
         <section className="shape-container flex flex-col gap-3 p-4">
           <h2 className="type-heading">This device</h2>
           {/* #34: the destructive confirmation is the alert-dialog primitive

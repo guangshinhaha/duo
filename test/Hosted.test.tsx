@@ -67,18 +67,21 @@ describe("parseJoinHash", () => {
 
 describe("Join — spending an invite", () => {
   it("posts the invite and name to {host}/hosted/signup, then hands back host + basePath with the first token", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
       new Response(JSON.stringify({ tenantId: "abc123", basePath: "/t/abc123", token: "first-tok", ownerName: "Sam" }), { status: 201 }),
     );
     vi.stubGlobal("fetch", fetchMock);
     const onJoined = vi.fn();
     render(<Join alreadyPaired={false} hash={joinHash()} onJoined={onJoined} />);
 
-    fireEvent.change(screen.getByRole("textbox", { name: /your name/i }), { target: { value: "  Sam  " } });
+    fireEvent.change(await screen.findByRole("textbox", { name: /your name/i }), { target: { value: "  Sam  " } });
     fireEvent.click(screen.getByRole("button", { name: "Create my duo" }));
 
-    await waitFor(() => expect(onJoined).toHaveBeenCalledWith({ baseUrl: `${ORIGIN}/t/abc123`, token: "first-tok" }));
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    await waitFor(() =>
+      expect(onJoined).toHaveBeenCalledWith({ baseUrl: `${ORIGIN}/t/abc123`, token: "first-tok" }, { origin: ORIGIN, ownerName: "Sam", isAdmin: false }),
+    );
+    // The first call asks the server whether it signs people in with Google (this one answers no field: the name form).
+    const [url, init] = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/hosted/signup")) as unknown as [string, RequestInit];
     expect(url).toBe(`${ORIGIN}/hosted/signup`);
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ invite: "inv-code", name: "Sam" });
@@ -93,7 +96,7 @@ describe("Join — spending an invite", () => {
     );
     const onJoined = vi.fn();
     render(<Join alreadyPaired={false} hash={joinHash()} onJoined={onJoined} />);
-    fireEvent.change(screen.getByRole("textbox", { name: /your name/i }), { target: { value: "Sam" } });
+    fireEvent.change(await screen.findByRole("textbox", { name: /your name/i }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create my duo" }));
 
     expect(await screen.findByTestId("join-error")).toHaveTextContent(/already been used, has expired/);
@@ -109,7 +112,7 @@ describe("Join — spending an invite", () => {
       }),
     );
     render(<Join alreadyPaired={false} hash={joinHash()} onJoined={vi.fn()} />);
-    fireEvent.change(screen.getByRole("textbox", { name: /your name/i }), { target: { value: "Sam" } });
+    fireEvent.change(await screen.findByRole("textbox", { name: /your name/i }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create my duo" }));
     expect(await screen.findByTestId("join-error")).toHaveTextContent(/Couldn't reach the duo server/);
   });
@@ -159,7 +162,7 @@ describe("Join in the app", () => {
     expect(await screen.findByTestId("join")).toBeInTheDocument();
     expect(screen.queryByText(/Sign in to your workspace/)).toBeNull();
 
-    fireEvent.change(screen.getByRole("textbox", { name: /your name/i }), { target: { value: "Sam" } });
+    fireEvent.change(await screen.findByRole("textbox", { name: /your name/i }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create my duo" }));
 
     expect(await screen.findByTestId("onboarding")).toBeInTheDocument();

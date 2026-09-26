@@ -53,7 +53,22 @@ in this pass).
   (`POST {host}/hosted/signup`), and pairs this browser to the new duo at `host + /t/<id>` exactly as
   Setup would, landing on Onboarding. A join hash outranks every other surface, paired or not, and is
   replaced in history once spent. Hosted duos live under a path, so `normalizeBaseUrl` keeps the
-  address's path (ws and ask links already append to it).
+  address's path (ws and ask links already append to it). On a server with Google sign-in
+  (`GET /hosted/config` names a client id) the name field becomes Continue with Google, and the new
+  duo is bound to that account; `already_has_duo` points back to sign-in.
+- **`src/routes/Landing.tsx` / `src/components/GoogleSignInButton.tsx`** — a hosted build's front
+  door. With `VITE_DUO_DAEMON_URL` set at build time (the Dockerfile takes it as a build arg) the app
+  already knows its server, so an unpaired browser sees Sign in with Google rather than an address
+  form: the Google ID token goes to `POST /hosted/login`, which answers this account's duo and a
+  fresh, revocable device token. The GIS script is loaded once, by script tag, and feature-detected.
+  Setup stays reachable under "Advanced: connect to a server by address", and a build without the
+  variable is the Setup-first app it always was. Who the browser is signed in as (name, admin flag)
+  sits beside the stored connection and leaves with it; the nav and Settings then say **Sign out**
+  for the same local forget.
+- **`src/components/InvitePeople.tsx`** — Settings → Invite people, for a server's admins only:
+  mint a single-use invite (optionally locked to one Google email), shown once with a copy button,
+  and see which invites were used, are pending, or expired (`GET/POST {origin}/hosted/invites`,
+  authorised by this device's own token).
 - **`src/routes/Setup.tsx`** — first run: paste the daemon's tailnet address and a `duo pair new`
   token.
 - **`src/routes/Onboarding.tsx`** (#49) — building a duo from the app: upload a Claude data export
