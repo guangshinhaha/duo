@@ -44,6 +44,8 @@ export interface WaitingItem {
   readonly source: string | null;
   /** The question, for a draft row that has no chat above it to hold it. */
   readonly question: string | null;
+  /** The drafts waiting behind this row, oldest first — empty for a confirmation. What a swipe on the row would decide. */
+  readonly drafts: readonly DraftRecord[];
 }
 
 /** The words a row's preview line uses for what waits. */
@@ -121,6 +123,7 @@ export function buildWaitingItems(
       label: bridge ? bridgedTitle(bridge) : null,
       source: bridge ? sourceLabel(bridge.channelKind) : null,
       question: null,
+      drafts: [...list].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     });
   }
   for (const draft of single) {
@@ -135,6 +138,7 @@ export function buildWaitingItems(
       label: askerOf(draft),
       source: null,
       question: draft.question,
+      drafts: [draft],
     });
   }
   if (confirmations.length > 0) {
@@ -149,6 +153,7 @@ export function buildWaitingItems(
       label: null,
       source: null,
       question: null,
+      drafts: [],
     });
   }
   return items.sort(byAge);
@@ -225,4 +230,21 @@ export function draftHref(draft: DraftRecord): string {
   }
   const bridged = bridgedIdOf(draft);
   return bridged !== null ? bridgedHref(bridged) : `#draft/${encodeURIComponent(draft.id)}`;
+}
+
+/**
+ * What a swipe on a row of the phone's waiting list may decide (#153). A
+ * swipe decides exactly one draft, so a row has swipe actions only when one
+ * draft waits behind it — and only chats and bridged chats, the places a
+ * draft is a reply to somebody. **Send** is `canSendOutside`'s rule and no
+ * looser: confident drafts only, never a hedged one or a passed-on question.
+ * **Dismiss** (held for an undo window, like every dismissal) is open to any
+ * draft the duo did not refuse, since a refusal has nothing to dismiss.
+ */
+export function swipeActionsOf(item: Pick<WaitingItem, "kind" | "drafts">): { send: DraftRecord | null; dismiss: DraftRecord | null } {
+  const only = item.drafts.length === 1 ? item.drafts[0]! : null;
+  if ((item.kind !== "chat" && item.kind !== "bridged") || only === null || only.outcome !== null) {
+    return { send: null, dismiss: null };
+  }
+  return { send: canSendOutside(only) ? only : null, dismiss: only.refused ? null : only };
 }
