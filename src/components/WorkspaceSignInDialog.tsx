@@ -1,6 +1,6 @@
 import type { WorkspaceSession } from "../workspace/matrix.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./primitives/Dialog.js";
-import { useWorkspaceAccess } from "../workspace/access.js";
+import { isHostedAccess, useWorkspaceAccess } from "../workspace/access.js";
 import { WorkspaceSignInForm } from "./WorkspaceSignInForm.js";
 
 /**
@@ -19,7 +19,7 @@ export function WorkspaceSignInDialog({
   onOpenChange: (open: boolean) => void;
   onSession: (session: WorkspaceSession) => void;
 }) {
-  if (useWorkspaceAccess().kind === "hosted-pending") {
+  if (isHostedAccess(useWorkspaceAccess())) {
     return null;
   }
   return (

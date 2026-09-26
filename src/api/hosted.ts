@@ -259,3 +259,128 @@ export function writeHostedAccount(account: HostedAccount | null): void {
 export function accountFor(origin: string, result: HostedSignupResult): HostedAccount {
   return { origin, ownerName: result.ownerName, isAdmin: result.isAdmin === true };
 }
+
+/**
+ * The hosted account this browser is signed in as, when it is the account of
+ * the server this app is paired with — the origin of `api.baseUrl` is the one
+ * place a hosted device token may be sent, so a stored account for a different
+ * server (a stale record, a pairing changed by address) matches nothing and
+ * never receives it. The one rule Admin and the workspace session share.
+ */
+export function pairedHostedAccount(api: DuoApiConfig | null): HostedAccount | null {
+  const account = readHostedAccount();
+  if (!api || !account) {
+    return null;
+  }
+  try {
+    const origin = new URL(api.baseUrl).origin;
+    return account.origin === origin ? { ...account, origin } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `POST {origin}/hosted/workspace/session` answers: the signed-in person's own
+ * workspace credential. It lives in memory only (`useHostedWorkspace`) — never
+ * stored, never in the query cache — and is fetched again on every load.
+ */
+export interface HostedWorkspaceSession {
+  readonly homeserverUrl: string;
+  readonly userId: string;
+  readonly accessToken: string;
+  /** Null: the credential has no device (nothing here uses end-to-end encryption). */
+  readonly deviceId: string | null;
+  /** ISO 8601: the credential stops working then. */
+  readonly expiresAt: string;
+}
+
+/** A refused `POST /hosted/workspace/session`: the daemon's own code, plus how long it asked us to wait (`Retry-After`), if it did. */
+export class WorkspaceSessionError extends ApiRequestError {
+  readonly retryAfterMs: number | null;
+
+  constructor(status: number, body: ApiError | undefined, retryAfterMs: number | null) {
+    super(status, body);
+    this.name = "WorkspaceSessionError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/** A 200 that isn't the documented shape (an older or different server): treated as unavailable, never trusted. */
+export class WorkspaceSessionShapeError extends Error {
+  constructor() {
+    super("The workspace session answer was not the expected shape.");
+    this.name = "WorkspaceSessionShapeError";
+  }
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function parseRetryAfter(header: string | null): number | null {
+  if (header === null) {
+    return null;
+  }
+  const seconds = Number(header);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : null;
+}
+
+/**
+ * Asks the daemon for this device's workspace session. The device token is the
+ * only credential and rides only to `origin` — callers pass the paired
+ * daemon's origin (`pairedHostedAccount`). No body: nothing the caller sends
+ * can name an account.
+ */
+export async function fetchWorkspaceSession(origin: string, token: string, signal?: AbortSignal): Promise<HostedWorkspaceSession> {
+  const response = await fetch(`${origin}/hosted/workspace/session`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    signal,
+  });
+  if (!response.ok) {
+    let body: ApiError | undefined;
+    try {
+      body = (await response.json()) as ApiError;
+    } catch {
+      body = undefined;
+    }
+    throw new WorkspaceSessionError(response.status, body, parseRetryAfter(response.headers.get("Retry-After")));
+  }
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    throw new WorkspaceSessionShapeError();
+  }
+  const fields = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const { homeserverUrl, userId, accessToken, deviceId, expiresAt } = fields;
+  if (!nonEmptyString(homeserverUrl) || !nonEmptyString(userId) || !nonEmptyString(accessToken) || !nonEmptyString(expiresAt)) {
+    throw new WorkspaceSessionShapeError();
+  }
+  return { homeserverUrl, userId, accessToken, deviceId: nonEmptyString(deviceId) ? deviceId : null, expiresAt };
+}
+
+/**
+ * Ends a workspace session at the workspace itself (`POST /_matrix/client/v3/logout`
+ * with the session's own credential). The daemon cannot revoke it — only the
+ * holder can — so this is the client's half of signing out. Best effort: a
+ * device that is offline still forgets it, and the credential then simply runs
+ * out at `expiresAt`. Sent only over https, since the credential rides it.
+ */
+export async function revokeWorkspaceSession(session: Pick<HostedWorkspaceSession, "homeserverUrl" | "accessToken">): Promise<void> {
+  try {
+    const url = new URL(session.homeserverUrl);
+    if (url.protocol !== "https:") {
+      return;
+    }
+    await fetch(`${url.origin}/_matrix/client/v3/logout`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.accessToken}`, "Content-Type": "application/json" },
+      body: "{}",
+      keepalive: true,
+    });
+  } catch {
+    // Offline, or the workspace already dropped it: nothing more to do.
+  }
+}

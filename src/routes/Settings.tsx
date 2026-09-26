@@ -1,8 +1,8 @@
 import { useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import type { WorkspaceSession } from "../workspace/matrix.js";
-import { useWorkspaceAccess } from "../workspace/access.js";
-import { WorkspaceNotSetUp } from "../components/WorkspaceNotSetUp.js";
+import { isHostedAccess, useWorkspaceAccess } from "../workspace/access.js";
+import { HostedWorkspaceStatus } from "../components/HostedWorkspaceStatus.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -90,7 +90,12 @@ export function Settings({
       <h1 className="type-heading sr-only">Settings</h1>
       <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-workspace">
         <h2 className="type-heading">Workspace</h2>
-        {session ? (
+        {isHostedAccess(workspaceAccess) ? (
+          // #127: on a hosted build the workspace is connected for you, so
+          // there is no address or account name to show and nothing to press:
+          // signing out of the app ends it too.
+          <HostedWorkspaceStatus access={workspaceAccess} className="flex flex-col gap-1" />
+        ) : session ? (
           <>
             <div className="flex flex-col gap-1 type-provenance text-[var(--muted)]">
               {/* The user id verbatim — the protocol's own spelling and the
@@ -106,8 +111,6 @@ export function Settings({
               Sign out
             </button>
           </>
-        ) : workspaceAccess.kind === "hosted-pending" ? (
-          <WorkspaceNotSetUp className="flex flex-col gap-1" />
         ) : (
           <>
             <p className="type-provenance text-[var(--muted)]">No workspace signed in on this device.</p>

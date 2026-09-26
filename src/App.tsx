@@ -18,7 +18,7 @@ import { Setup } from "./routes/Setup.js";
 import { Admin } from "./routes/Admin.js";
 import { Join } from "./routes/Join.js";
 import { Landing } from "./routes/Landing.js";
-import { configuredDaemonOrigin, readHostedAccount, writeHostedAccount } from "./api/hosted.js";
+import { configuredDaemonOrigin, pairedHostedAccount, readHostedAccount, writeHostedAccount } from "./api/hosted.js";
 import { Settings } from "./routes/Settings.js";
 import { Onboarding } from "./routes/Onboarding.js";
 import { WaitingHome } from "./shell/WaitingHome.js";
@@ -36,6 +36,7 @@ import { SearchOverlay } from "./components/SearchOverlay.js";
 import { NoDuoPanel } from "./components/NoDuoPanel.js";
 import { PairDuoDialog } from "./components/PairDuoDialog.js";
 import { WorkspaceSignInDialog } from "./components/WorkspaceSignInDialog.js";
+import { isHostedAccess, useHostedWorkspace, WorkspaceAccessProvider } from "./workspace/access.js";
 import { useWorkspaceSession } from "./workspace/session.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "./workspace/identity.js";
 import type { LiveArrival, RoomSummary, WorkspaceConnection, WorkspaceSession } from "./workspace/matrix.js";
@@ -196,16 +197,8 @@ async function dispatchArrival(
  * `api.baseUrl` and to no other: a stored account for a different server never receives it.
  */
 function adminAccount(api: DuoApiConfig | null) {
-  const account = readHostedAccount();
-  if (!api || !account?.isAdmin) {
-    return null;
-  }
-  try {
-    const origin = new URL(api.baseUrl).origin;
-    return account.origin === origin ? { ...account, origin } : null;
-  } catch {
-    return null;
-  }
+  const account = pairedHostedAccount(api);
+  return account?.isAdmin ? account : null;
 }
 
 /** #49: where onboarding lands — the duo's Rules, on the ones the daemon just derived, to approve or reject. */
@@ -334,13 +327,26 @@ function AppShell() {
   // revocation — and this device's own memory is the one honest source for
   // saying "ended" instead. It outranks `revoked` wherever both could show.
   const [ended, setEnded] = useEndedMarker();
+  // #127: on a hosted build the workspace session is not typed in — the
+  // daemon hands the signed-in person their own, held in memory and never
+  // written to storage. From here on `activeSession` is whichever door this
+  // device uses: that one, or the stored manual sign-in of a personal daemon.
+  const hosted = useHostedWorkspace(api, () => {
+    // The daemon no longer knows this device: the same answer as any other 401.
+    if (!ended) {
+      setApi(null);
+      setRevoked(true);
+    }
+  });
+  const hostedActive = isHostedAccess(hosted.access);
+  const activeSession = hostedActive ? hosted.session : session;
   // The public front door: a signed-out visitor who arrives at the bare
   // root of a hosted build sees the landing page, not the sign-in card.
   // Decided once, at arrival — signing out later returns to sign-in, never
   // to marketing.
   // A ref, not state: clearing it must never re-render the shell.
   const arrivedAtFrontDoor = useRef(opensOnWelcome(window.location));
-  if (api || session) {
+  if (api || activeSession) {
     arrivedAtFrontDoor.current = false;
   }
   // #46: corpus search, openable from any route. ⌘K and Ctrl+K are the
@@ -474,6 +480,9 @@ function AppShell() {
     // describes — unpairing (forget, sign out, revocation, the duo's end)
     // leaves no name or admin flag behind.
     if (next === null) {
+      // The workspace session goes first: ended at the workspace with its own
+      // credential (the daemon cannot revoke it), then forgotten.
+      hosted.signOut();
       writeHostedAccount(null);
     }
     setApiRaw(next);
@@ -500,25 +509,53 @@ function AppShell() {
   // pays for it. A connect that fails sets `workspaceError` — surfaced by
   // Conversations with the way out — rather than silently staying empty.
   useEffect(() => {
-    if (!session) {
+    if (!activeSession) {
       return;
     }
+    const target = activeSession;
     let disposed = false;
+    let held: WorkspaceConnection | null = null;
     setWorkspaceError(null);
     void (async () => {
       const { connect } = await import("./workspace/matrix.js");
       try {
-        const handle = await connect(session);
+        const handle = hostedActive
+          ? await connect(target, {
+              // The credential expired while the conversations were open: the
+              // sync has stopped, so let go of it and ask for a fresh session.
+              onSessionRejected: () => {
+                if (disposed) {
+                  return;
+                }
+                connectionRef.current = null;
+                setConnection(null);
+                void held?.stop();
+                hosted.report("rejected");
+              },
+            })
+          : await connect(target);
         if (disposed) {
           void handle.stop();
           return;
         }
+        held = handle;
         connectionRef.current = handle;
         setConnection(handle);
-      } catch (reason) {
-        if (!disposed) {
-          setWorkspaceError(reason instanceof Error ? reason.message : "The workspace connection failed.");
+        if (hostedActive) {
+          hosted.report("up");
         }
+      } catch (reason) {
+        if (disposed) {
+          return;
+        }
+        if (hostedActive) {
+          // Nothing to sign out of here and nothing for the person to fix:
+          // the hook asks the daemon again (a fresh session if this one was
+          // refused, the same one after a pause if the workspace was slow).
+          hosted.report((reason as { errcode?: unknown } | null)?.errcode === "M_UNKNOWN_TOKEN" ? "rejected" : "failed");
+          return;
+        }
+        setWorkspaceError(reason instanceof Error ? reason.message : "The workspace connection failed.");
       }
     })();
     return () => {
@@ -531,8 +568,18 @@ function AppShell() {
       }
     };
     // The session object is stable per sign-in; its credential fields are
-    // its identity in practice.
-  }, [session?.homeserverUrl, session?.accessToken]);
+    // its identity in practice. A hosted session is renewed in place (below),
+    // so its identity is the hook's `reconnectKey`, which moves only when the
+    // connection has to be made again.
+  }, [activeSession?.homeserverUrl, hostedActive ? hosted.reconnectKey : activeSession?.accessToken]);
+
+  // #127: a renewed hosted credential replaces the old one under the open
+  // connection — the conversation on screen never blinks.
+  useEffect(() => {
+    if (hostedActive && hosted.session) {
+      connectionRef.current?.renewToken?.(hosted.session.accessToken);
+    }
+  }, [hostedActive, hosted.session?.accessToken]);
 
   // After the guard unpairs, Setup carries the explanation with it; a fresh
   // pairing is a first run again and must not keep saying "no longer paired".
@@ -577,7 +624,7 @@ function AppShell() {
     );
   }
 
-  if (!api && !session) {
+  if (!api && !activeSession) {
     // A hosted build knows its server: the front door is sign-in, not an
     // address form. Without VITE_DUO_DAEMON_URL the app is exactly the
     // pair-with-your-Mac app it always was.
@@ -686,6 +733,7 @@ function AppShell() {
   );
 
   return (
+    <WorkspaceAccessProvider access={hosted.access}>
     <SyncStatusProvider>
       <ChatShell
         api={api}
@@ -698,7 +746,7 @@ function AppShell() {
         overlays={overlays}
         pane={routeSurface(route, {
           api,
-          session,
+          session: activeSession,
           connection,
           workspaceError,
           setApi,
@@ -708,7 +756,7 @@ function AppShell() {
           onDuoEnded: duoEnded,
         })}
         route={route}
-        session={session}
+        session={activeSession}
         workspaceError={workspaceError}
       />
       <PairDuoDialog
@@ -730,6 +778,7 @@ function AppShell() {
         }}
       />
     </SyncStatusProvider>
+    </WorkspaceAccessProvider>
   );
 }
 

@@ -11,8 +11,8 @@ import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { NoDuoPanel } from "../components/NoDuoPanel.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
-import { WorkspaceNotSetUp } from "../components/WorkspaceNotSetUp.js";
-import { useWorkspaceAccess } from "../workspace/access.js";
+import { HostedWorkspaceStatus } from "../components/HostedWorkspaceStatus.js";
+import { isHostedAccess, useWorkspaceAccess } from "../workspace/access.js";
 import { plainPreview } from "../workspace/duoAnswer.js";
 import { roomHref } from "../workspace/links.js";
 import type { NotificationMode, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
@@ -385,14 +385,17 @@ export function ChatList({
       );
     }
     if (!connection) {
+      // A hosted build has no way in to offer (#127): the workspace connects
+      // by itself, so this says where that has got to — never a sign-in button.
+      if (isHostedAccess(workspaceAccess)) {
+        if (workspaceAccess.kind === "hosted-connecting" || workspaceAccess.kind === "hosted-connected") {
+          return <RouteLoading variant="rows" />;
+        }
+        return <HostedWorkspaceStatus access={workspaceAccess} className="flex flex-col gap-1 p-4" />;
+      }
       if (session) {
         // A stored session is still connecting: not "nothing here".
         return <RouteLoading variant="rows" />;
-      }
-      // A hosted build has no way in to offer (#127): it says the workspace
-      // isn't set up, with no sign-in button.
-      if (workspaceAccess.kind === "hosted-pending") {
-        return <WorkspaceNotSetUp className="flex flex-col gap-1 p-4" />;
       }
       return (
         <div className="flex flex-col gap-3 p-4" data-testid="conversations-not-connected">
