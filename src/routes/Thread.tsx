@@ -6,6 +6,11 @@ import { roomTitle } from "./Conversations.js";
 import type { RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
 import { localpartOf } from "../workspace/identity.js";
 
+/** #70: bring the message a search hit landed at into view — the ref runs once, when its row mounts. */
+const focusIntoView = (element: HTMLElement | null): void => {
+  element?.scrollIntoView?.({ block: "center" });
+};
+
 /**
  * #64: one thread — a root message and the replies that relate to it. The
  * route's address carries both halves (`#thread/<room>/<root>`), so a
@@ -22,10 +27,13 @@ export function ThreadView({
   connection,
   roomId,
   rootEventId,
+  at,
 }: {
   connection: WorkspaceConnection | null;
   roomId: string;
   rootEventId: string;
+  /** #70: the reply a search hit landed at — marked, and brought into view. */
+  at?: string;
 }) {
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -50,6 +58,16 @@ export function ThreadView({
     meta: { target: "workspace" },
   });
 
+  // #70: landing at a hit also reads the window around it — a reply older
+  // than the live timeline still lands. The two are one thread's evidence,
+  // merged by event id (the live copy standing where both know a message).
+  const around = useQuery({
+    queryKey: ["workspace", "timeline", roomId, "at", at ?? ""],
+    queryFn: () => connection!.timelineAt(roomId, at!),
+    enabled: connection !== null && at !== undefined,
+    meta: { target: "workspace" },
+  });
+
   const room = rooms.data?.find((candidate) => candidate.roomId === roomId);
   const roomName = room ? roomTitle(room) : roomId;
 
@@ -57,7 +75,8 @@ export function ThreadView({
   // grade, so opening a thread counts as reading the conversation (#64 AC4
   // pins exactly this: the thread's own URL receipts the room).
   useEffect(() => {
-    if (!connection || !timeline.isSuccess || timeline.data === undefined) {
+    // Landing at an old reply is not reading the latest — no receipt (#70).
+    if (!connection || at !== undefined || !timeline.isSuccess || timeline.data === undefined) {
       return;
     }
     let cancelled = false;
@@ -74,9 +93,9 @@ export function ThreadView({
     return () => {
       cancelled = true;
     };
-  }, [connection, roomId, timeline.isSuccess, timeline.data, queryClient]);
+  }, [connection, roomId, at, timeline.isSuccess, timeline.data, queryClient]);
 
-  if (!connection || timeline.isLoading) {
+  if (!connection || timeline.isLoading || (at !== undefined && around.isLoading)) {
     return (
       <div className="p-6">
         <h1 className="type-heading sr-only">{roomName} — thread</h1>
@@ -99,8 +118,12 @@ export function ThreadView({
     );
   }
 
-  const root = timeline.data.find((message) => message.eventId === rootEventId) ?? null;
-  const replies = timeline.data.filter((message) => message.threadRootEventId === rootEventId);
+  const known = new Set(timeline.data.map((message) => message.eventId));
+  const windowOnly = (around.data ?? []).filter((message) => !known.has(message.eventId));
+  const messages =
+    windowOnly.length === 0 ? timeline.data : [...timeline.data, ...windowOnly].sort((a, b) => a.originServerTs - b.originServerTs);
+  const root = messages.find((message) => message.eventId === rootEventId) ?? null;
+  const replies = messages.filter((message) => message.threadRootEventId === rootEventId);
 
   const refresh = (): void => {
     void queryClient.invalidateQueries({ queryKey: ["workspace"] });
@@ -126,18 +149,26 @@ export function ThreadView({
         <section className="mt-2 flex flex-col gap-5" data-testid="thread-timeline">
           {root === null ? (
             <p className="text-[var(--muted)]" data-testid="thread-gone">
-              This thread&apos;s first message is gone — its replies keep their places.
+              {at === undefined
+                ? "This thread's first message is gone — its replies keep their places."
+                : "This thread's first message is outside what is loaded here — its replies keep their places."}
             </p>
           ) : (
             // Same row testid as the conversation's rows: a message is a
             // message wherever it's read (#64).
             <div data-testid="room-message">
-              <MessageBody conversation={timeline.data} message={root} loadMedia={connection.loadMedia} onToggleReaction={toggleReaction} />
+              <MessageBody conversation={messages} message={root} loadMedia={connection.loadMedia} onToggleReaction={toggleReaction} />
             </div>
           )}
           {replies.map((reply) => (
-            <div data-testid="room-message" key={reply.eventId}>
-              <MessageBody conversation={timeline.data} message={reply} loadMedia={connection.loadMedia} onToggleReaction={toggleReaction} />
+            <div
+              aria-current={reply.eventId === at ? "true" : undefined}
+              data-focused={reply.eventId === at ? "true" : undefined}
+              data-testid="room-message"
+              key={reply.eventId}
+              ref={reply.eventId === at ? focusIntoView : undefined}
+            >
+              <MessageBody conversation={messages} message={reply} loadMedia={connection.loadMedia} onToggleReaction={toggleReaction} />
             </div>
           ))}
         </section>

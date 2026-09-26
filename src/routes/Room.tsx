@@ -14,6 +14,7 @@ import type { RoomMemberRef, RoomMessage, SharedFile, WorkspaceConnection } from
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
+import { roomHref, threadHref } from "../workspace/links.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 
 /**
@@ -54,10 +55,7 @@ const REACTION_CHOICES = ["👍", "❤️", "😂", "🎉", "👀", "✅"] as co
 const rowActionClass =
   "inline-flex min-h-9 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance text-[var(--muted)]";
 
-/** A thread's own address: both halves encoded whole, the grammar is the route's (#64). */
-export function threadHref(roomId: string, rootEventId: string): string {
-  return `#thread/${encodeURIComponent(roomId)}/${encodeURIComponent(rootEventId)}`;
-}
+export { roomHref, threadHref };
 
 /** The latest reply's author as the id says they are — "carol's duo" from `@duo-carol`, never a chosen name. */
 function threadPreviewLabel(reply: { senderId: string; senderName: string }): string {
@@ -103,10 +101,13 @@ function messageWords(message: RoomMessage): ReactNode {
 export function Room({
   connection,
   roomId,
+  at,
   drafts = null,
 }: {
   connection: WorkspaceConnection | null;
   roomId: string;
+  /** #70: the event a search hit landed at — the room reads in context around it. */
+  at?: string;
   /**
    * #68: the owner's drafts for this conversation, when the shell has a duo
    * to ask — a slot, because the share path (#66) may not import the
@@ -131,9 +132,12 @@ export function Room({
     enabled: connection !== null,
     meta: { target: "workspace" },
   });
+  // #70: landing at a search hit reads the window AROUND that event — history
+  // the live timeline may never have carried — under its own key, still
+  // inside the timeline's prefix, so live arrivals and verbs refresh it too.
   const timeline = useQuery({
-    queryKey: ["workspace", "timeline", roomId],
-    queryFn: () => connection!.timeline(roomId),
+    queryKey: at === undefined ? ["workspace", "timeline", roomId] : ["workspace", "timeline", roomId, "at", at],
+    queryFn: () => (at === undefined ? connection!.timeline(roomId) : connection!.timelineAt(roomId, at)),
     enabled: connection !== null,
     meta: { target: "workspace" },
   });
@@ -146,7 +150,9 @@ export function Room({
   // accounting. A failed receipt leaves the room usable — the next open
   // tries again, and nothing local pretends it happened.
   useEffect(() => {
-    if (!connection || !timeline.isSuccess || timeline.data === undefined) {
+    // A window opened from a search hit is not the room's latest: reading
+    // an old moment is not reading the conversation, so no receipt (#70).
+    if (!connection || at !== undefined || !timeline.isSuccess || timeline.data === undefined) {
       return;
     }
     let cancelled = false;
@@ -163,7 +169,7 @@ export function Room({
     return () => {
       cancelled = true;
     };
-  }, [connection, roomId, timeline.isSuccess, timeline.data, queryClient]);
+  }, [connection, roomId, at, timeline.isSuccess, timeline.data, queryClient]);
 
   // After a verb, the server's next answer is the only record: one
   // invalidation of the workspace's whole query tree, and every reader of
@@ -215,14 +221,25 @@ export function Room({
           All conversations
         </a>
         <section className="mt-2 flex flex-col gap-5" data-testid="room-timeline">
-          {mainFlow.length === 0 ? (
-            <p className="text-[var(--muted)]" data-testid="room-empty">
-              Nothing here yet — say something below.
+          {at !== undefined && !timeline.data.some((message) => message.eventId === at) && (
+            // The workspace's window didn't hold the message this address
+            // named (struck since, or never a row of this conversation) —
+            // said, rather than landing somewhere else quietly.
+            <p className="text-[var(--muted)]" data-testid="room-at-missing">
+              That message isn&apos;t in what the workspace returned — it may have been deleted.
             </p>
+          )}
+          {mainFlow.length === 0 ? (
+            at === undefined && (
+              <p className="text-[var(--muted)]" data-testid="room-empty">
+                Nothing here yet — say something below.
+              </p>
+            )
           ) : (
             mainFlow.map((message) => (
               <RoomEntry
                 key={message.eventId}
+                focused={message.eventId === at}
                 message={message}
                 connection={connection}
                 roomId={roomId}
@@ -241,7 +258,21 @@ export function Room({
           owner's drafts for this conversation, never part of what its
           members read. */}
       {drafts}
-      <RoomComposer connection={connection} roomId={roomId} roomName={roomName} members={room?.members ?? []} />
+      {at === undefined ? (
+        <RoomComposer connection={connection} roomId={roomId} roomName={roomName} members={room?.members ?? []} />
+      ) : (
+        // A window into history has no composer: the words go to the live
+        // conversation, one link away.
+        <div className="border-t border-[var(--edge)] p-4">
+          <a
+            className="inline-flex min-h-11 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body"
+            data-testid="room-back-to-latest"
+            href={roomHref(roomId)}
+          >
+            Back to the latest messages
+          </a>
+        </div>
+      )}
       {/* A delete asks first: the words go for everyone, and the surface
           says so in the same words it will show afterwards. */}
       <Dialog
@@ -418,6 +449,7 @@ export function MessageBody({
  */
 function RoomEntry({
   message,
+  focused = false,
   connection,
   roomId,
   refresh,
@@ -425,6 +457,8 @@ function RoomEntry({
   onDelete,
 }: {
   message: RoomMessage;
+  /** #70: the message a search hit landed at — marked, and brought into view. */
+  focused?: boolean;
   connection: WorkspaceConnection;
   roomId: string;
   refresh: () => void;
@@ -437,6 +471,12 @@ function RoomEntry({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const own = message.senderId === connection.userId;
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focused) {
+      rowRef.current?.scrollIntoView?.({ block: "center" });
+    }
+  }, [focused]);
 
   // Every verb ends the same way: hand it to the homeserver, then re-read
   // the server's answer — the local copy never stands in for the record.
@@ -453,7 +493,13 @@ function RoomEntry({
   };
 
   return (
-    <div className="flex flex-col gap-1" data-testid="room-message">
+    <div
+      aria-current={focused ? "true" : undefined}
+      className={`flex flex-col gap-1 ${focused ? "rounded-[var(--r-md)] outline outline-2 outline-offset-4 outline-[var(--accent)]" : ""}`}
+      data-focused={focused ? "true" : undefined}
+      data-testid="room-message"
+      ref={rowRef}
+    >
       <MessageBody
         message={message}
         loadMedia={connection.loadMedia}

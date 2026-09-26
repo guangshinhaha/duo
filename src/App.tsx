@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Menu, X } from "lucide-react";
-import { QueryClient } from "@tanstack/react-query";
+import { defaultShouldDehydrateQuery, QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { useApiConfig } from "./api/config.js";
@@ -105,8 +105,8 @@ type Route =
   | "escalations"
   | "onboarding"
   | { draft: string }
-  | { room: string }
-  | { thread: { roomId: string; rootEventId: string } };
+  | { room: string; at?: string }
+  | { thread: { roomId: string; rootEventId: string; at?: string } };
 
 function routeFromHash(hash: string, fallback: Route = "review"): Route {
   if (hash.startsWith("#draft/")) {
@@ -124,22 +124,29 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
     const parts = hash.slice("#thread/".length).split("/");
     let roomId = "";
     let rootEventId = "";
+    let at = "";
     try {
       roomId = decodeURIComponent(parts[0] ?? "");
       rootEventId = decodeURIComponent(parts[1] ?? "");
+      at = decodeURIComponent(parts[2] ?? ""); // #70: the reply a search hit landed at
     } catch {
       roomId = ""; // a malformed escape is no id at all
     }
-    return roomId && rootEventId ? { thread: { roomId, rootEventId } } : "conversations";
+    return roomId && rootEventId ? { thread: { roomId, rootEventId, ...(at ? { at } : {}) } } : "conversations";
   }
   if (hash.startsWith("#room/")) {
+    // #70: `#room/<room>/<event>` lands at an event in context — a search
+    // hit's address; encoded whole, so the first `/` is the grammar's own.
+    const parts = hash.slice("#room/".length).split("/");
     let id = "";
+    let at = "";
     try {
-      id = decodeURIComponent(hash.slice("#room/".length));
+      id = decodeURIComponent(parts[0] ?? "");
+      at = decodeURIComponent(parts[1] ?? "");
     } catch {
       id = ""; // a malformed escape is no id at all
     }
-    return id ? { room: id } : "conversations";
+    return id ? { room: id, ...(at ? { at } : {}) } : "conversations";
   }
   if (hash === "#conversations") {
     return "conversations";
@@ -505,6 +512,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
     if ("room" in route) {
       return (
         <Room
+          at={route.at}
           connection={shell.connection}
           roomId={route.room}
           drafts={shell.api ? <RoomDrafts api={shell.api} roomId={route.room} /> : null}
@@ -513,7 +521,12 @@ function routeSurface(route: Route, shell: SurfaceContext) {
     }
     if ("thread" in route) {
       return (
-        <ThreadView connection={shell.connection} roomId={route.thread.roomId} rootEventId={route.thread.rootEventId} />
+        <ThreadView
+          at={route.thread.at}
+          connection={shell.connection}
+          roomId={route.thread.roomId}
+          rootEventId={route.thread.rootEventId}
+        />
       );
     }
     return shell.api ? (
@@ -1014,7 +1027,21 @@ function AppShell() {
 
 export function App() {
   return (
-    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, maxAge: ONE_WEEK_MS, buster: CACHE_BUSTER }}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister,
+        maxAge: ONE_WEEK_MS,
+        buster: CACHE_BUSTER,
+        // #70: a message search is asked, answered, and forgotten — what a
+        // member looked for, and what came back, never rests in storage, and
+        // a restored answer could never outlive a membership that ended.
+        dehydrateOptions: {
+          shouldDehydrateQuery: (query) =>
+            defaultShouldDehydrateQuery(query) && !(query.queryKey[0] === "workspace" && query.queryKey[1] === "search"),
+        },
+      }}
+    >
       <AppShell />
     </PersistQueryClientProvider>
   );

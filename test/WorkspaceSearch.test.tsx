@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 // @ts-expect-error no node types by design
 import { fileURLToPath } from "node:url";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
 import type {
   MessageSearchHit,
@@ -213,9 +213,15 @@ async function openConversations(fake: ReturnType<typeof searchConnection>) {
 }
 
 async function searchFor(term: string) {
-  fireEvent.change(screen.getByLabelText(SEARCH_LABEL), { target: { value: term } });
+  fireEvent.change(screen.getByRole("searchbox", { name: SEARCH_LABEL }), { target: { value: term } });
   fireEvent.click(within(screen.getByRole("search")).getByRole("button", { name: "Search" }));
 }
+
+// The app's first import is the slow one (the whole route tree); pay it
+// before the clock starts on any one test.
+beforeAll(async () => {
+  await import("../src/App.js");
+}, 30_000);
 
 beforeEach(() => {
   localStorage.clear();
@@ -308,6 +314,17 @@ describe("#70 AC1 — messages are searchable", () => {
     } finally {
       delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
     }
+  });
+
+  it("an address to a message the workspace no longer returns says so, rather than landing somewhere else quietly", async () => {
+    const fake = searchConnection({ rooms: roomsFixture(), live: { [PROJECT]: LIVE_PROJECT }, around: {}, index: [] });
+    await openConversations(fake);
+
+    navigate(`#room/${encodeURIComponent(PROJECT)}/${encodeURIComponent("$gone")}`);
+
+    expect(await screen.findByTestId("room-at-missing")).toHaveTextContent("isn't in what the workspace returned");
+    expect(screen.queryByTestId("room-empty")).toBeNull();
+    expect(screen.getByTestId("room-back-to-latest")).toBeInTheDocument();
   });
 
   it("a hit inside a thread opens that thread with the reply marked", async () => {
@@ -450,6 +467,31 @@ describe("#70 AC2 — results respect membership", () => {
   });
 });
 
+describe("#70 AC2 — nothing of a search rests on this device", () => {
+  it("a search's answer is never written to the persisted cache, though the rest of the workspace's is", async () => {
+    // Words no other fixture in this file says: a persister write left over
+    // from an earlier test can't be mistaken for this search's.
+    const probe = hitFor({
+      eventId: "$probe",
+      senderId: "@bose:workspace.example",
+      senderName: "Bose",
+      body: "the gelato budget was approved",
+      context: { before: [{ senderId: "@bose:workspace.example", senderName: "Bose", body: "pistachio or lemon" }], after: [] },
+    });
+    const fake = searchConnection({ rooms: roomsFixture(), index: [probe] });
+    await openConversations(fake);
+    await searchFor("gelato");
+    await screen.findAllByTestId("message-search-hit");
+
+    // The persister writes on a throttle; wait it out, then read what rests.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const resting = localStorage.getItem("duo-cache") ?? "";
+    expect(resting).toContain("project-x"); // the persisted cache is live: the list rests there
+    expect(resting).not.toContain("gelato");
+    expect(resting).not.toContain("pistachio");
+  });
+});
+
 describe("#70 AC3 — the two searches are distinguishable", () => {
   it("the conversations search says it searches what was said, on the workspace — and never claims to be the duo's knowledge", async () => {
     const fake = searchConnection({ rooms: roomsFixture(), index: [] });
@@ -527,7 +569,7 @@ describe("#70 AC3 — the two searches are distinguishable", () => {
     const overlay = await screen.findByTestId("search-overlay");
     fireEvent.change(within(overlay).getByLabelText("Search what your duo knows"), { target: { value: "leave" } });
     fireEvent.click(within(overlay).getByRole("button", { name: /search/i }));
-    await within(overlay).findByText(/Leave policy/);
+    expect(await within(overlay).findAllByTestId("search-result")).toHaveLength(1);
     expect(daemonCalls.filter((url) => url.includes("/search"))).toHaveLength(1);
     expect(fake.searchMessages).toHaveBeenCalledTimes(1);
 

@@ -498,6 +498,36 @@ conversation and the thread read identically:
   its own; the client's framing sits beside it, never in place of it, in the vocabulary of a
   boundary — no alert semantics, no retry, no error words, no waiting state.
 
+#70 adds searching what was said, and holds it apart from the other search this product has.
+There are two, and they are different questions on different machines: **messages** (what people
+and duos said in conversations — shared, the workspace's, served by the homeserver's own
+`POST /search`) and **the corpus** (what a duo knows — private, on the owner's Mac, `GET /search`
+on the daemon, #46). The seam's `searchMessages(query, next?)` asks the homeserver over message
+bodies with the member's words, a page size, and a small context window (`event_context`), and
+chooses no rooms: scoping to the conversations the member is in is the homeserver's rule, and the
+projection additionally refuses a result from a room this account is not joined to, so a slip of
+the server's can never put another conversation's words on screen. A hit is a text message — words
+said (an edit's replacement event amends a row that exists elsewhere, and a shared file or a notice is not
+words said, so the name of a file is not searched here) — with its room, its
+sender's id, the lines said around it in the order they were said, and its thread's root when it
+answered inside one. Nothing in the message search imports the daemon's `src/api`, and nothing
+in the corpus search imports `src/workspace` — a scan in `test/WorkspaceSearch.test.tsx` holds
+both directions, so corpus results can reach no one but the owner and message search can never
+fall back to them. The surfaces name their scope: the conversations list's box reads "Search what
+was said" (messages in your conversations, searched on the workspace); the ⌘K overlay reads
+"Search what your duo knows" (your duo's private records, searched on your Mac).
+
+Landing at a hit is the homeserver's `/context` through the SDK (`timelineAt`): the room's address
+grows an event (`#room/<room>/<event>`; a thread's, `#thread/<room>/<root>/<event>`), the route
+reads the window around it — history the live timeline may never have carried — marks and scrolls
+to the hit, sends no read receipt (an old moment is not the latest), and offers the way back to the
+live conversation in place of the composer. A hit renders through the same `RoomDuoMessage` /
+`RoomPersonMessage` split as any message, and each context line's label comes from the same id
+grammar — a duo's answer, found by search, is still visibly that duo's (#60). A search's answer is
+asked, shown and forgotten: its query key (`["workspace", "search", query]`) has `gcTime: 0` and is
+excluded from the persisted cache, so what a member looked for never rests in storage and a
+restored answer can never outlive a membership that ended.
+
 ## 3.3 Offline
 
 The query cache persists to storage and rehydrates at launch. Two connections fail for

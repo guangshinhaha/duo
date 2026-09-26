@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ConversationSearch } from "../components/ConversationSearch.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -204,23 +205,27 @@ function RoomList({ connection }: { connection: WorkspaceConnection }) {
             {actionError}
           </p>
         )}
-        {rooms.data.length === 0 ? (
-          <p className="p-6 text-[var(--muted)]" data-testid="conversations-empty">
-            No conversations yet. When someone messages you, it appears here.
-          </p>
-        ) : (
-          <nav aria-label="Conversations" className="mt-2 flex flex-col gap-2" data-testid="conversations-list">
-            {rooms.data.map((room) => (
-              <ConversationEntry
-                busy={busyRoomId === room.roomId}
-                key={room.roomId}
-                onLeave={() => setLeaveTarget(room)}
-                onSetMode={(mode) => setMode(room, mode)}
-                room={room}
-              />
-            ))}
-          </nav>
-        )}
+        {/* #70: search what was said — the shared, workspace-side search.
+            While one is active its results stand in place of the list. */}
+        <ConversationSearch connection={connection} rooms={rooms.data} titleOf={roomTitle}>
+          {rooms.data.length === 0 ? (
+            <p className="p-6 text-[var(--muted)]" data-testid="conversations-empty">
+              No conversations yet. When someone messages you, it appears here.
+            </p>
+          ) : (
+            <nav aria-label="Conversations" className="mt-2 flex flex-col gap-2" data-testid="conversations-list">
+              {rooms.data.map((room) => (
+                <ConversationEntry
+                  busy={busyRoomId === room.roomId}
+                  key={room.roomId}
+                  onLeave={() => setLeaveTarget(room)}
+                  onSetMode={(mode) => setMode(room, mode)}
+                  room={room}
+                />
+              ))}
+            </nav>
+          )}
+        </ConversationSearch>
       </div>
       {newOpen && (
         <NewConversationDialog

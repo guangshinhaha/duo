@@ -99,6 +99,14 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
           </button>
         </form>
 
+        {/* #70: the other search in this product is the workspace's, over
+            what people said in conversations. This one is what the duo
+            knows — private, on the owner's Mac — and says so, so the two are
+            never mistaken for each other. */}
+        <p className="type-provenance text-[var(--faint)]" data-testid="search-scope">
+          Your duo&apos;s private records, searched on your Mac — never on the workspace.
+        </p>
+
         {/* The daemon's own degraded-retrieval sentence, verbatim — the
             client neither paraphrases it nor hides it: results found by
             full-text alone are still results, with their caveat attached. */}

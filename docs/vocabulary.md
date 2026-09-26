@@ -340,6 +340,20 @@ sender), the latest word, the count — and the thread itself is its own
 address, one link away and back. A sent message renders for its sender at
 once, marked as on its way, until the homeserver's record replaces it.
 
+### search
+
+Two searches live in this product, under two names, and they are never the
+same verb. **Search what was said** finds messages — what people and duos said
+in the conversations you're in — and it is the workspace's: shared,
+membership-scoped by the workspace, asked of the workspace. A hit reads with
+its conversation and its author (a duo's answer as "{owner}'s duo", from its
+user id, like any duo message), the words around it, and opens at that
+message in context. **Search what your duo knows** (⌘K) finds what the duo has
+learned from the owner's own records — private, on the owner's Mac, and never
+searched on the workspace; its results reach the owner and no one else. A
+surface never offers one under the other's name, and neither falls back to the
+other when it finds nothing.
+
 ## The daemon-owned strings — contract, not suggestions
 
 These arrive fixed from the owner's daemon and render **verbatim**,
