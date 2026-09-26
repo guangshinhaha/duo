@@ -4,6 +4,7 @@ import { usePendingDrafts, usePendingT4 } from "../api/queries.js";
 import type { DraftRecord, PendingT4RequestForJudgement } from "../api/types.js";
 import { hairlineState, type HairlineState } from "../components/ConfidenceHairline.js";
 import { toDraftPipelineResult } from "../components/DraftCard.js";
+import { isOwnTurn } from "../routes/Duo.js";
 import { conversationOf } from "../workspace/drafts.js";
 import { roomHref } from "../workspace/links.js";
 import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
@@ -13,11 +14,11 @@ import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
  *
  * - `chat`: a draft for a message that arrived in a conversation the member
  *   holds — decided in that chat's tray.
- * - `duo`: an answer to a question the owner asked their own duo — decided in
- *   Your duo.
+ * - `duo`: an answer to a question the owner asked their own duo — decided
+ *   in Your duo.
  * - `draft`: a draft with no chat of its own (a question bridged from
- *   Slack, a row that predates provenance) — decided on its own page until
- *   bridged questions become chats (#150).
+ *   Slack, or a row that predates provenance) — decided on its own page
+ *   until bridged questions become chats (#150).
  * - `confirmations`: an action staged for the owner's explicit yes.
  */
 export type WaitingKind = "chat" | "duo" | "draft" | "confirmations";
@@ -89,7 +90,7 @@ export function buildWaitingItems(
     const conversation = conversationOf(draft.provenance);
     if (conversation !== null && held.has(conversation.roomId)) {
       add(`chat:${conversation.roomId}`, draft);
-    } else if (draft.provenance?.origin === "owner") {
+    } else if (isOwnTurn(draft)) {
       add("duo", draft);
     } else {
       single.push(draft);

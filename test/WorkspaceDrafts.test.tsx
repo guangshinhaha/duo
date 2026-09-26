@@ -606,9 +606,26 @@ describe("#142 — an old draft address opens the chat the draft belongs to", ()
     expect(window.location.hash).toBe(ROOM_HASH);
   });
 
-  it("a draft with no conversation of its own (you asked it yourself) keeps its own page", async () => {
+  it("a question you asked your own duo opens in Your duo, on its tray", async () => {
     seed();
-    vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1", provenance: { origin: "owner" } })]).fetchMock);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    const daemon = fakeDaemon([draftFor({ id: "d1", provenance: { origin: "owner" } })]);
+    vi.stubGlobal("fetch", daemon.fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate("#draft/d1");
+
+    expect(await within(await screen.findByTestId("duo-drafts")).findByTestId("draft-tray")).toHaveTextContent(DRAFT_TEXT);
+    expect(window.location.hash).toBe("#duo");
+  });
+
+  it("a draft with no chat of its own (a bridged question) keeps its own page", async () => {
+    seed();
+    vi.stubGlobal(
+      "fetch",
+      fakeDaemon([draftFor({ id: "d1", provenance: { origin: "channel", channelKind: "slack", askerRef: "U1", threadId: null, permalink: null } })]).fetchMock,
+    );
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
 
     await renderApp();
