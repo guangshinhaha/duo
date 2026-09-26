@@ -196,7 +196,8 @@ export function ChatShell({
   // phone's home screen where the list is all there is, the list itself.
   const ListTag = showPane ? "aside" : "main";
   return (
-    <div className="flex h-dvh flex-col bg-[var(--bg)] text-[var(--text)]">
+    // Installed on a phone the page runs edge to edge (`viewport-fit=cover`), so the notch and the home indicator are kept clear here; everywhere else these insets are zero.
+    <div className="box-border flex h-dvh flex-col bg-[var(--bg)] pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] text-[var(--text)]">
       {banners}
       <OfflineBar />
       {api && <WaitingMirror api={api} />}
