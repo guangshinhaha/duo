@@ -204,6 +204,7 @@ describe("#39 AC1 — the page has structure", () => {
         routes: {
           "/mirror/portrait": { totalQuestions: 0, periodStart: null, periodEnd: null, topicBreakdown: [], topFiveShare: 0, busiestThreads: [], tooThin: true, minimumQuestionsToCharacterize: 10 },
           "/mirror/rules": { awaitingApproval: [rule], weakSignals: [], inconsistent: [], approved: [], rejected: [] },
+          "/mirror/refusals": { decided: true, refusals: [{ heading: "Pay", reason: "Never on pay." }] },
         },
       },
       { name: "Settings", ui: <Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />, routes: {} },
@@ -234,6 +235,21 @@ describe("#39 AC1 — the page has structure", () => {
     await waitFor(() => expect(container.querySelector("[data-testid^='bucket-']")).not.toBeNull());
     const bucketHeading = container.querySelector("[data-testid^='bucket-'] h2, [data-testid^='bucket-'] h3");
     expect(bucketHeading?.tagName).toBe("H2");
+  });
+
+  it("Mirror's refusals sit at h2 with each refusal at h3 beneath it — no level skipped (#53)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      stubFetch({
+        "/mirror/portrait": { totalQuestions: 0, periodStart: null, periodEnd: null, topicBreakdown: [], topFiveShare: 0, busiestThreads: [], tooThin: true, minimumQuestionsToCharacterize: 10 },
+        "/mirror/rules": { awaitingApproval: [], weakSignals: [], inconsistent: [], approved: [], rejected: [] },
+        "/mirror/refusals": { decided: true, refusals: [{ heading: "Pay", reason: "Never on pay." }] },
+      }),
+    );
+    const { container } = renderWithClient(<Mirror api={api} />);
+    await waitFor(() => expect(container.querySelector("[data-testid='refusal']")).not.toBeNull());
+    expect(container.querySelector("[data-testid='refusals'] > h2")).not.toBeNull();
+    expect(container.querySelector("[data-testid='refusal'] h3")).not.toBeNull();
   });
 });
 

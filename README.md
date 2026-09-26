@@ -33,9 +33,11 @@ in this pass).
   question carries neither identity — only the duo's answer is `DuoMessage` (AR-13 cuts both ways).
 - **`src/routes/Mirror.tsx`** — the Mirror browser (C6): the interruption portrait plus derived
   rules in five buckets, with Approve / Reject / Promote on exactly the actions the daemon's own
-  preconditions allow. Read-and-disposition only — rule authoring stays in `duo/rules/*.md` on
-  the Mac (AR-18). No percentages anywhere: bars and counts, never numerals the data doesn't
-  carry.
+  preconditions allow. Each rule opens onto the exchanges it cites (`GET /mirror/rules/:id`, #53),
+  and a refusals section shows what the owner told the duo to refuse and why (`GET /mirror/refusals`,
+  never-asked told from asked-and-none by the daemon's own `decided` flag). Read-and-disposition
+  only — rule and refusal authoring stay in `duo/` on the Mac (AR-18). No percentages anywhere:
+  bars and counts, never numerals the data doesn't carry.
 - **`src/routes/Setup.tsx`** — first run: paste the daemon's tailnet address and a `duo pair new`
   token.
 - **`src/routes/Settings.tsx`** (#11) — this device's connection at `#settings`: the daemon address
@@ -132,7 +134,3 @@ The build is unsigned — the signing decision and its consequences are recorded
 - **Live draft-ready push** — the client half of C7 is in (`useDraftReadySocket`), but the
   daemon's `GET /ws` doesn't exist yet (digital-duo #162); until it does, Review refreshes by
   refetch, which was always the floor.
-- **The Mirror's refusals tab** and **rule-detail-with-evidence view** — `client-tech-design.md`
-  §3.1 lists refusals alongside portrait and rules, but no daemon route lists refusals yet, and
-  the `GET /mirror/rules/:id` the daemon does expose isn't in §1.4's client route contract. Both
-  wait on core work first: a surface must not add a behaviour.

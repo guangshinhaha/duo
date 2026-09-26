@@ -11,8 +11,10 @@ import type {
   DuoSummary,
   GridRow,
   InterruptionPortrait,
+  RefusalsListing,
   Rule,
   RuleReviewListing,
+  RuleWithEvidence,
   SearchOutcome,
   SettableDraftOutcome,
 } from "./types.js";
@@ -45,6 +47,10 @@ export const queryKeys = {
   review: ["review"] as const,
   mirrorPortrait: ["mirror", "portrait"] as const,
   mirrorRules: ["mirror", "rules"] as const,
+  // Under the ["mirror", "rules"] root on purpose: a disposition invalidates
+  // the listing by prefix and so refreshes any open evidence with it.
+  mirrorRule: (id: string) => ["mirror", "rules", id] as const,
+  mirrorRefusals: ["mirror", "refusals"] as const,
   trustGrid: ["trust", "grid"] as const,
   audit: ["audit"] as const,
   knowledge: ["knowledge"] as const,
@@ -151,6 +157,24 @@ export function useMirrorPortrait(api: DuoApiConfig) {
 
 export function useMirrorRules(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.mirrorRules, queryFn: () => apiRequest<RuleReviewListing>(api, "/mirror/rules") });
+}
+
+/** `GET /mirror/refusals` — what the owner's duo must never speak for them on, and why (#53). */
+export function useMirrorRefusals(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.mirrorRefusals, queryFn: () => apiRequest<RefusalsListing>(api, "/mirror/refusals") });
+}
+
+/**
+ * `GET /mirror/rules/:id` — one rule with the exchanges its evidence cites
+ * (#53). `enabled` lets the card ask only when the owner opens the evidence:
+ * a listing of rules must not fan out into one read per rule.
+ */
+export function useMirrorRule(api: DuoApiConfig, id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.mirrorRule(id),
+    queryFn: () => apiRequest<RuleWithEvidence>(api, `/mirror/rules/${encodeURIComponent(id)}`),
+    enabled,
+  });
 }
 
 /** #45: what this duo knows, in one read (digital-duo #175's composition). Read-only — no client route writes it, so nothing invalidates it but a refetch. */

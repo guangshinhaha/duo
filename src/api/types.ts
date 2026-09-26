@@ -250,6 +250,41 @@ export interface RuleReviewListing {
   rejected: Rule[];
 }
 
+/**
+ * One cited exchange behind a rule, as `GET /mirror/rules/:id` resolves it
+ * (digital-duo #182's `RuleEvidenceExchange`). Text is `null` when the record
+ * the citation points at has since been removed — the daemon degrades rather
+ * than refusing the whole rule, and the client says so rather than hiding it.
+ */
+export interface RuleEvidenceExchange {
+  qaPairId: string;
+  questionText: string | null;
+  answerText: string | null;
+}
+
+/** `GET /mirror/rules/:id` — a rule together with the exchanges its evidence cites. */
+export interface RuleWithEvidence {
+  rule: Rule;
+  evidence: RuleEvidenceExchange[];
+}
+
+/** One entry of `duo/refusals.md`: `heading` is what is refused, `reason` the owner's own hand-written basis (may be empty). */
+export interface Refusal {
+  heading: string;
+  reason: string;
+}
+
+/**
+ * `GET /mirror/refusals` (digital-duo #182) — pure `duo/refusals.md` file
+ * state. `decided` is whether that file exists at all: `false` is "never
+ * asked", which an empty `refusals` alone cannot tell from "asked, and the
+ * owner recorded none".
+ */
+export interface RefusalsListing {
+  decided: boolean;
+  refusals: Refusal[];
+}
+
 export type TrustTier = "T0" | "T1" | "T2" | "T3";
 export type AutonomyLevel = "ask" | "approve" | "auto";
 

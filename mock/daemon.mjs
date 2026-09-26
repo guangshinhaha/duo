@@ -135,6 +135,18 @@ function seedState() {
       approved: [rule("r-3", "t-money", "Money questions go out same day.", "confirmed", 12, 0.95, "owner_asserted")],
       rejected: [],
     },
+    // GET /mirror/refusals (digital-duo #182): pure duo/refusals.md file
+    // state — `decided` is whether that file exists at all, `refusals` its
+    // `##` sections (heading = what is refused, reason = the owner's own
+    // words, possibly empty). Read-only here as on the daemon: add and
+    // confirm-none stay terminal-only (AR-18).
+    refusals: {
+      decided: true,
+      refusals: [
+        { heading: "Salary and pay", reason: "Never speak for me on pay or offers — that is a conversation I have myself." },
+        { heading: "Legal holds", reason: "" },
+      ],
+    },
     portrait: {
       totalQuestions: 214,
       periodStart: minutesAgo(60 * 24 * 30),
@@ -549,10 +561,23 @@ export function createMockDaemon() {
         "GET",
         /^\/mirror\/rules\/([^/]+)$/,
         (m) => {
+          // RuleWithEvidence (digital-duo #182), not a bare Rule: the rule
+          // plus one cited exchange per supporting pair. The exchanges are
+          // generated from the rule's own supportCount so the count the
+          // card shows and the evidence it opens onto can never disagree.
           const found = Object.values(state.rules).flat().find((r) => r.id === m[1]);
-          return found ? ok(found) : fail(404, "not_found", "No such rule.");
+          if (!found) {
+            return fail(404, "RuleNotFoundError", `No rule with id "${m[1]}"`);
+          }
+          const evidence = Array.from({ length: found.supportCount }, (_, i) => ({
+            qaPairId: `${found.id}-qa-${i + 1}`,
+            questionText: `Earlier question ${i + 1} on this topic (${found.topicId}).`,
+            answerText: `${found.text} (answer ${i + 1})`,
+          }));
+          return ok({ rule: found, evidence });
         },
       ],
+      ["GET", /^\/mirror\/refusals$/, () => ok(state.refusals)],
       ["GET", /^\/trust\/grid$/, () => ok(state.grid)],
       ["GET", /^\/audit$/, () => ok(state.audit)],
       [
