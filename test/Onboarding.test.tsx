@@ -11,8 +11,10 @@ import type { DuoKnowledge, EmbedJobStatus, PasteImportSummary, Rule, RuleReview
 // The shell's notification side effects are Tauri's; the onboarding flow is
 // the client's half and is what this file pins.
 vi.mock("../src/notifications.js", () => ({
+  draftArrivalBody: vi.fn(() => null),
   notifyDraftReady: vi.fn(),
-  wireDraftNotificationClicks: vi.fn(() => Promise.resolve(() => {})),
+  postNotification: vi.fn(),
+  wireNotificationClicks: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 /*
