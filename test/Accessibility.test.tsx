@@ -185,10 +185,11 @@ function assertHeadingOrder(container: HTMLElement) {
 afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
+  window.location.hash = "";
 });
 
 describe("#39 AC1 — the page has structure", () => {
-  it("the shell is landmarks: a labelled nav and one main", async () => {
+  it("the shell is landmarks: a labelled nav and one main (the list itself, on a phone's home screen)", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     const fetchMock = stubFetch({ "/drafts?outcome=pending": [] });
     vi.stubGlobal("fetch", fetchMock);
@@ -207,7 +208,7 @@ describe("#39 AC1 — the page has structure", () => {
 
     const nav = container.querySelector("nav");
     expect(nav).not.toBeNull();
-    expect(nav).toHaveAttribute("aria-label", "Surfaces");
+    expect(nav).toHaveAttribute("aria-label", "Chats");
     expect(container.querySelectorAll("main")).toHaveLength(1);
     assertHeadingOrder(main());
   });
@@ -350,6 +351,7 @@ describe("#39 AC2 — state changes announce politely, once, without stealing fo
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal("fetch", stubFetch({ "/drafts?outcome=pending": [] }));
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    window.location.hash = "#waiting";
 
     render(<App />);
     await screen.findByText("Nothing waiting on you.");
@@ -362,7 +364,7 @@ describe("#39 AC2 — state changes announce politely, once, without stealing fo
       FakeWebSocket.instances[0].message({ type: "draft-ready", draftId: "d-new" });
     });
 
-    const notice = await screen.findByText("A draft is waiting in the Review queue.");
+    const notice = await screen.findByText("A draft is waiting on you.");
     expect(notice.closest("[role='status']")).not.toBeNull();
     expect(notice.closest("[aria-live='assertive']")).toBeNull();
     // Never steals focus.

@@ -461,8 +461,8 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     // browser would.
     // #63's entry markup puts the title in its own element inside the link;
     // the destination is the link's, resolved by role.
-    expect(screen.getByRole("link", { name: /project-x/ })).toHaveAttribute("href", "#room/!project-x%3Aworkspace.example");
-    window.location.hash = "#room/!project-x%3Aworkspace.example";
+    expect(screen.getByRole("link", { name: /project-x/ })).toHaveAttribute("href", "#chat/!project-x%3Aworkspace.example");
+    window.location.hash = "#chat/!project-x%3Aworkspace.example";
     window.dispatchEvent(new Event("hashchange"));
 
     expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
@@ -480,7 +480,7 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#room/!project-x%3Aworkspace.example";
+    window.location.hash = "#chat/!project-x%3Aworkspace.example";
     window.dispatchEvent(new Event("hashchange"));
     await screen.findByTestId("room-timeline");
 
@@ -525,8 +525,7 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#review";
-    window.dispatchEvent(new Event("hashchange"));
+    // The list itself offers the duo — pairing is offered, never demanded.
     fireEvent.click(await screen.findByTestId("no-duo-pair"));
 
     fireEvent.change(await screen.findByLabelText("Daemon address"), { target: { value: "100.64.1.5:7717" } });
@@ -536,7 +535,7 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem("duo.api-config") ?? "null")).toEqual({ baseUrl: "http://100.64.1.5:7717", token: "tok" }));
     // The dialog closes behind the pairing, and the duo's own surface takes over.
     await waitFor(() => expect(screen.queryByTestId("pair-duo-dialog")).toBeNull());
-    await waitFor(() => expect(screen.getByRole("link", { name: /Review/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("duo-link")).toBeInTheDocument());
     expect(screen.queryByTestId("no-duo")).toBeNull();
   });
 });
@@ -566,7 +565,7 @@ describe("#62 AC3 — both credentials are managed", () => {
     // The pairing survives: the two connections end independently.
     await waitFor(() => expect(JSON.parse(localStorage.getItem("duo.api-config") ?? "null")).toEqual({ baseUrl: "http://100.64.1.5:7717", token: "tok" }));
     // Still the owner's shell — the duo surfaces stand without the workspace.
-    await waitFor(() => expect(screen.getByRole("link", { name: /Review/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("duo-link")).toBeInTheDocument());
   });
 
   it("forgetting the duo keeps the workspace session, and the member shell stands", async () => {
@@ -620,7 +619,7 @@ describe("#62 AC4 — signing out leaves nothing behind", () => {
 });
 
 describe("#62 — the both-credentials shell and the failing-connection edge", () => {
-  it("a paired member signed in opens on Conversations, the first section above the duo's", async () => {
+  it("a paired member signed in opens on the chat list, with the duo pinned above the conversations", async () => {
     seedSession();
     seedPairing();
     stubDaemonFetch();
@@ -629,12 +628,13 @@ describe("#62 — the both-credentials shell and the failing-connection edge", (
 
     await renderApp();
 
-    // Conversations is the default space, and #129's first section: people
-    // come before the duo's own screens, Review among them.
-    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
-    const entries = [...screen.getByRole("navigation", { name: "Surfaces" }).querySelectorAll("a")].map((a) => a.textContent);
-    expect(entries.indexOf("Conversations")).toBeGreaterThan(-1);
-    expect(entries.indexOf("Conversations")).toBeLessThan(entries.findIndex((text) => text?.startsWith("Review")));
+    // The chat list is the default space, and your duo is always its first row:
+    // pinned above the people, never a section of its own.
+    const list = await screen.findByTestId("conversations-list");
+    const duo = screen.getByTestId("duo-link");
+    expect(duo).toHaveAttribute("href", "#duo");
+    expect(duo.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(duo).getByTestId("chat-avatar")).toHaveAttribute("data-kind", "duo");
   });
 
   it("a connection that cannot be established says so and offers the way out", async () => {
@@ -672,7 +672,7 @@ describe("#63 AC1 — the list triages without opening anything", () => {
     const group = entryFor("project-x");
     expect(within(group).getByTestId("room-preview")).toHaveTextContent("ship it");
     expect(within(group).getByTestId("timestamp")).toBeInTheDocument();
-    expect(within(group).getByTestId("room-unread")).toHaveTextContent("3 unread");
+    expect(within(group).getByTestId("room-unread")).toHaveAttribute("aria-label", "3 unread");
 
     // A channel reads by its name too — one list, three kinds, no opening.
     const channel = entryFor("announce");
@@ -697,11 +697,11 @@ describe("#63 AC2 — mentions outrank unread", () => {
 
     const mentioned = entryFor("project-x");
     expect(within(mentioned).getByTestId("room-mentions")).toHaveTextContent("2");
-    expect(within(mentioned).getByTestId("room-unread")).toHaveTextContent("5 unread");
+    expect(within(mentioned).getByTestId("room-unread")).toHaveAttribute("aria-label", "5 unread");
 
     const merelyUnread = entryFor("Bose");
     expect(within(merelyUnread).queryByTestId("room-mentions")).toBeNull();
-    expect(within(merelyUnread).getByTestId("room-unread")).toHaveTextContent("3 unread");
+    expect(within(merelyUnread).getByTestId("room-unread")).toHaveAttribute("aria-label", "3 unread");
   });
 });
 
@@ -739,6 +739,8 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
     await screen.findByTestId("conversations-list");
     const beforeKeys = JSON.stringify(Object.keys(localStorage).sort());
 
+    // A conversation's own verbs sit behind its "more" control.
+    fireEvent.click(within(entryFor("project-x")).getByTestId("room-more"));
     const setting = within(entryFor("project-x")).getByTestId("room-notifications");
     expect(setting).toHaveValue("all");
 
@@ -767,6 +769,7 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
     await renderApp();
     await screen.findByTestId("conversations-list");
 
+    fireEvent.click(screen.getByRole("button", { name: "More for announce" }));
     fireEvent.click(screen.getByRole("button", { name: "Leave announce" }));
     fireEvent.click(await screen.findByTestId("leave-conversation-confirm"));
 
@@ -802,9 +805,9 @@ describe("#63 — read state is durable, not local", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    expect(within(entryFor("project-x")).getByTestId("room-unread")).toHaveTextContent("3 unread");
+    expect(within(entryFor("project-x")).getByTestId("room-unread")).toHaveAttribute("aria-label", "3 unread");
 
-    window.location.hash = "#room/!project-x%3Aworkspace.example";
+    window.location.hash = "#chat/!project-x%3Aworkspace.example";
     window.dispatchEvent(new Event("hashchange"));
     await screen.findByTestId("room-timeline");
 
@@ -825,7 +828,7 @@ describe("#64 AC1 — messages send and arrive", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
@@ -856,7 +859,7 @@ describe("#64 AC2 — editing and deleting are honest", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("the policy doc says 30 days")).getByRole("button", { name: "Edit" }));
@@ -882,7 +885,7 @@ describe("#64 AC2 — editing and deleting are honest", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     // Bose amends their own message: the same event id comes back with new
@@ -906,7 +909,7 @@ describe("#64 AC3 — threads and reactions work", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "React" }));
@@ -916,12 +919,12 @@ describe("#64 AC3 — threads and reactions work", () => {
     await waitFor(() => expect(within(messageRow("what's our refund policy?")).getByTestId("room-reaction")).toHaveTextContent("👍 1"));
 
     // The reaction follows the message into its thread view.
-    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
     expect(within(messageRow("what's our refund policy?")).getByTestId("room-reaction")).toHaveTextContent("👍 1");
 
     // Back in the conversation, the chip takes the reaction back.
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
     fireEvent.click(within(messageRow("what's our refund policy?")).getByTestId("room-reaction"));
     await waitFor(() => expect(fake.connection.unreact).toHaveBeenCalledWith("!project-x:workspace.example", "$1", "👍"));
@@ -934,7 +937,7 @@ describe("#64 AC3 — threads and reactions work", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     // In the conversation: the thread's existence, its count, and its
@@ -943,11 +946,11 @@ describe("#64 AC3 — threads and reactions work", () => {
     expect(preview).toHaveTextContent("carol's duo");
     expect(preview).toHaveTextContent("np, 30 days");
     expect(preview).toHaveTextContent("1 reply");
-    expect(screen.getByTestId("open-thread")).toHaveAttribute("href", "#thread/!project-x%3Aworkspace.example/%241");
+    expect(screen.getByTestId("open-thread")).toHaveAttribute("href", "#chat/!project-x%3Aworkspace.example/thread/%241");
     // The reply itself is not a row of the main flow — it lives behind the preview.
     expect(screen.queryByText("np, 30 days")).toBeNull();
 
-    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
     // The thread view: the root, and the reply — a duo's, labelled structurally (#60's rule).
     expect(screen.getByTestId("room-duo-message-attribution")).toHaveTextContent("carol's duo");
@@ -960,7 +963,7 @@ describe("#64 AC3 — threads and reactions work", () => {
     await waitFor(() => expect(screen.getByText("thanks!")).toBeInTheDocument());
 
     // Back in the conversation, the preview carries the new latest word and count.
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
     const updated = within(messageRow("what's our refund policy?")).getByTestId("room-thread-preview");
     await waitFor(() => expect(updated).toHaveTextContent("2 replies"));
@@ -980,7 +983,7 @@ describe("#64 AC4 — read state is maintained", () => {
     await screen.findByTestId("conversations-list");
     expect(fake.connection.markRead).not.toHaveBeenCalled();
 
-    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
     await waitFor(() => expect(fake.connection.markRead).toHaveBeenCalledWith("!project-x:workspace.example"));
   });
@@ -1008,7 +1011,7 @@ describe("#65 AC1 — people and duos are both mentionable", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     const composer = screen.getByLabelText("Message project-x");
@@ -1039,7 +1042,7 @@ describe("#65 AC1 — people and duos are both mentionable", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     const composer = screen.getByLabelText("Message project-x");
@@ -1065,7 +1068,7 @@ describe("#65 AC2 — mentioning a duo asks it", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     const composer = screen.getByLabelText("Message project-x");
@@ -1117,7 +1120,7 @@ describe("#65 AC3 — a duo that may not answer says so", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     // The daemon's own composed outcomes (digital-duo public-answer.ts:
@@ -1198,7 +1201,7 @@ describe("#65 — a delivered mention renders as the mention it is", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     const pills = await screen.findAllByTestId("room-mention");
@@ -1235,7 +1238,7 @@ describe("#65 — a mention of you marks the conversation in the list", () => {
     await screen.findByTestId("conversations-list");
 
     // project-x starts at 3 unread, no mentions — the badge isn't there.
-    expect(within(entryFor("project-x")).getByTestId("room-unread").textContent).toBe("3 unread");
+    expect(within(entryFor("project-x")).getByTestId("room-unread").getAttribute("aria-label")).toBe("3 unread");
     expect(within(entryFor("project-x")).queryByTestId("room-mentions")).toBeNull();
 
     // Bose mentions ana; the arrival moves the server's counts — a mention
@@ -1256,7 +1259,7 @@ describe("#65 — a mention of you marks the conversation in the list", () => {
     );
 
     await waitFor(() => expect(within(entryFor("project-x")).getByTestId("room-mentions").textContent).toBe("@ 1"));
-    expect(within(entryFor("project-x")).getByTestId("room-unread").textContent).toBe("4 unread");
+    expect(within(entryFor("project-x")).getByTestId("room-unread").getAttribute("aria-label")).toBe("4 unread");
   });
 });
 
@@ -1268,7 +1271,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.send).mockRejectedValueOnce(new Error("offline"));
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
@@ -1293,7 +1296,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.edit).mockRejectedValueOnce(new Error("refused"));
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("the policy doc says 30 days")).getByRole("button", { name: "Edit" }));
@@ -1315,7 +1318,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.delete).mockRejectedValueOnce(new Error("refused"));
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("the policy doc says 30 days")).getByRole("button", { name: "Delete" }));
@@ -1336,7 +1339,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.react).mockRejectedValueOnce(new Error("refused"));
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "React" }));
@@ -1353,7 +1356,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.replyInThread).mockRejectedValueOnce(new Error("refused"));
 
     await renderApp();
-    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     await screen.findByTestId("thread-timeline");
 
     fireEvent.change(screen.getByLabelText("Reply in thread"), { target: { value: "thanks!" } });
@@ -1443,7 +1446,7 @@ describe("#69 AC1 — an arrival interrupts by the conversation's setting", () =
 
     // The room the member is looking at does not interrupt about itself —
     // a notification for what the open window already shows is noise.
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
     await act(async () => {
       fake.deliver(messageFor({ eventId: "$n5", senderId: "@bose:workspace.example", senderName: "Bose", body: "while you watch" }), true);
@@ -1478,7 +1481,7 @@ describe("#69 AC2 — do not disturb holds everything back, visibly", () => {
     // The record points back at where it happened — the entry itself is the
     // link. ("!" is one of encodeURIComponent's unreserved characters; ":" is
     // not — the same address the conversations list links with.)
-    expect(entry.getAttribute("href")).toBe("#room/!project-x%3Aworkspace.example");
+    expect(entry.getAttribute("href")).toBe("#chat/!project-x%3Aworkspace.example");
 
     fireEvent.click(screen.getByTestId("missed-clear"));
     await waitFor(() => expect(screen.queryByTestId("missed-entry")).toBeNull());
@@ -1674,7 +1677,7 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     navigate("#settings");
     const entry = within(await screen.findByTestId("missed-list")).getByTestId("missed-entry");
     expect(entry).toHaveTextContent("Your duo answered on your behalf in project-x.");
-    expect(entry.getAttribute("href")).toBe("#room/!project-x%3Aworkspace.example");
+    expect(entry.getAttribute("href")).toBe("#chat/!project-x%3Aworkspace.example");
   });
 
   it("an escalation is held by do not disturb the same way, and waits in the record", async () => {
@@ -1759,7 +1762,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
     return fake;
   }
@@ -1821,7 +1824,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-file");
 
     await waitFor(() => expect(fake.connection.loadMedia).toHaveBeenCalled());
@@ -1956,7 +1959,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!announce%3Aworkspace.example");
+    navigate("#chat/!announce%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     await pick([new File([new Uint8Array([1])], "announce.txt", { type: "text/plain" })]);

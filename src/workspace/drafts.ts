@@ -57,7 +57,7 @@ export function conversationOf(provenance: DraftProvenance | undefined): DraftCo
 
 /** A conversation's own address — the route Conversations' entries link to. */
 export function roomHref(roomId: string): string {
-  return `#room/${encodeURIComponent(roomId)}`;
+  return `#chat/${encodeURIComponent(roomId)}`;
 }
 
 /**

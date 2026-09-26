@@ -8,7 +8,7 @@ import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
-import { roomTitle } from "./Conversations.js";
+import { roomTitle } from "../shell/roomTitle.js";
 import { addressed, mentionLabelOf, type MessageMention } from "../workspace/mentions.js";
 import type { RoomMemberRef, RoomMessage, SharedFile, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
@@ -216,7 +216,7 @@ export function Room({
         <a
           className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
           data-testid="back-to-conversations"
-          href="#conversations"
+          href="#chats"
         >
           All conversations
         </a>

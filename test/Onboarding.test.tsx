@@ -421,7 +421,7 @@ describe("#49 AC3 — it ends at the Mirror", () => {
     const onFinish = renderOnboarding();
 
     const link = await screen.findByRole("link", { name: /review your rules in the mirror/i });
-    expect(link).toHaveAttribute("href", "#mirror");
+    expect(link).toHaveAttribute("href", "#duo/profile");
     await new Promise((resolve) => setTimeout(resolve, POLL_MS * 3));
     expect(onFinish).not.toHaveBeenCalled();
   });
@@ -454,7 +454,7 @@ describe("#49 AC3 — it ends at the Mirror", () => {
 
     // The default poll is human-paced; the wait is the flow's own.
     await screen.findByTestId("mirror", undefined, { timeout: 6000 });
-    expect(window.location.hash).toBe("#mirror");
+    expect(window.location.hash).toBe("#duo/profile");
     const card = await screen.findByTestId("rule-card");
     expect(card).toHaveTextContent("Money questions get answered the same day.");
     expect(within(card).getByTestId("approve-rule")).toBeEnabled();
@@ -469,19 +469,30 @@ describe("#49 AC4 — a duo built in a terminal never sees onboarding", () => {
     render(<App />);
   }
 
-  it("an existing duo opens on Review as it always did — onboarding is skipped", async () => {
+  it("an existing duo opens on its chats — onboarding is skipped", async () => {
     const daemon = fakeDaemon({ knowledge: existingDuo, embedGet: () => idle });
     await launch();
 
-    // Review's empty state reads the same knowledge; once it has rendered
-    // the daemon's facts, the gate has had every chance to redirect.
-    await screen.findByTestId("review-empty-knowledge");
-    await waitFor(() => expect(screen.getByTestId("review-empty-knowledge")).toHaveTextContent(/312 records/));
-    expect(daemon.count("GET", "/knowledge")).toBeGreaterThan(0);
+    // The chat list's first-run gate reads the same knowledge; once the daemon's
+    // facts are in, the gate has had every chance to redirect.
+    await screen.findByTestId("chat-list");
+    await waitFor(() => expect(daemon.count("GET", "/knowledge")).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
     expect(window.location.hash).toBe("");
     // …and the job routes were never touched: nothing started, nothing watched.
     expect(daemon.calls.some((c) => c.path.startsWith("/corpus"))).toBe(false);
+  });
+
+  it("an existing duo's waiting queue reads the same knowledge for its empty state, and skips onboarding", async () => {
+    const daemon = fakeDaemon({ knowledge: existingDuo, embedGet: () => idle });
+    await launch("#waiting");
+
+    await screen.findByTestId("review-empty-knowledge");
+    await waitFor(() => expect(screen.getByTestId("review-empty-knowledge")).toHaveTextContent(/312 records/));
+    expect(daemon.count("GET", "/knowledge")).toBeGreaterThan(0);
+    expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
+    expect(window.location.hash).toBe("#waiting");
   });
 
   it("a paired but empty duo, opened on the default surface, is taken to onboarding", async () => {

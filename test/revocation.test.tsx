@@ -43,6 +43,8 @@ function revoked(): Response {
 function mountApp(fetchMock: ReturnType<typeof vi.fn>): ReturnType<typeof render> {
   localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "revoked-token" }));
   vi.stubGlobal("fetch", fetchMock);
+  // These tests are about the drafts queue: the waiting surface, not the chat list.
+  window.location.hash = "#waiting";
   return render(<App />);
 }
 

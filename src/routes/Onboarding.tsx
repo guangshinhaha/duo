@@ -366,7 +366,7 @@ function DeriveStep({
             </p>
           )}
           {state === "done" && (
-            <a className="inline-flex min-h-11 items-center self-start underline" href="#mirror">
+            <a className="inline-flex min-h-11 items-center self-start underline" href="#duo/profile">
               Review your rules in the Mirror
             </a>
           )}
@@ -484,6 +484,18 @@ export function Onboarding({ api, onFinish, pollMs = POLL_MS }: { api: DuoApiCon
  * redirects.
  */
 export function ReviewOrFirstRun({ api, connection = null }: { api: DuoApiConfig; connection?: WorkspaceConnection | null }) {
+  useFirstRunRedirect(api);
+  return <Review api={api} connection={connection} />;
+}
+
+/**
+ * The redirect half of `ReviewOrFirstRun`, callable from anywhere that is a
+ * default surface: when the daemon says this duo is empty, the address moves
+ * to `#onboarding`. The chat-first shell mounts it for the chat list (the
+ * new default), so a brand-new duo's first screen is still its first run.
+ * Only a definite "empty" ever redirects.
+ */
+export function useFirstRunRedirect(api: DuoApiConfig): void {
   const knowledge = useKnowledge(api);
   const empty = !!knowledge.data && isDuoKnowledgeShape(knowledge.data) && isEmptyDuo(knowledge.data);
   useEffect(() => {
@@ -491,5 +503,4 @@ export function ReviewOrFirstRun({ api, connection = null }: { api: DuoApiConfig
       window.location.hash = "#onboarding";
     }
   }, [empty]);
-  return <Review api={api} connection={connection} />;
 }

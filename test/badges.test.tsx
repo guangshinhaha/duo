@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.js";
 import { setDockBadgeCount } from "../src/dockBadge.js";
 import type { DraftRecord } from "../src/api/types.js";
+import { stubDesktop } from "./desktop.js";
 
 /*
- * #22: the pending-draft count in two places — the sidebar's Review entry
- * (§3.1: "badge = drafts where outcome is null") and the macOS dock badge
+ * #22: the pending-draft count in two places — the chat list's "Waiting on
+ * you" chip (§3.1: "badge = drafts where outcome is null", plus staged
+ * confirmations) and the macOS dock badge
  * via Tauri's window API, which feature-detects and no-ops in a plain
  * browser tab exactly as src/notifications.ts does. Both follow the push
  * channel: a draft-ready push invalidates ["drafts"], the pending list
@@ -47,9 +49,14 @@ function pendingDrafts(count: number): DraftRecord[] {
  * variable, the way the daemon's answer changes between refetches.
  */
 function mountApp(pendingNow: () => number, hash = "#duo") {
+  stubDesktop();
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(JSON.stringify(pendingDrafts(pendingNow())), { status: 200 })),
+    vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes("/actions/t4/pending")
+        ? new Response("[]", { status: 200 })
+        : new Response(JSON.stringify(pendingDrafts(pendingNow())), { status: 200 }),
+    ),
   );
   localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
   window.location.hash = hash;
@@ -81,7 +88,7 @@ class FakeWebSocket {
   }
 }
 
-describe("#22 — pending count in the sidebar and the dock", () => {
+describe("#22 — pending count in the chat list and the dock", () => {
   beforeEach(() => {
     dock.setBadgeCount.mockClear();
     FakeWebSocket.instances = [];
@@ -92,23 +99,23 @@ describe("#22 — pending count in the sidebar and the dock", () => {
     window.location.hash = "";
   });
 
-  it("the Review entry shows the count on any route, and nothing at all at zero", async () => {
+  it("the Waiting on you chip shows the count on any route, and nothing at all at zero", async () => {
     let pending = 2;
     const { unmount } = mountApp(() => pending, "#duo");
-    await waitFor(() => expect(screen.getByTestId("review-badge")).toHaveTextContent("2"));
+    await waitFor(() => expect(screen.getByTestId("waiting-badge")).toHaveTextContent("2"));
 
     // The count falls to zero on the next read of the list — here driven as
     // a relaunch (the in-session push path is the test below).
     pending = 0;
     unmount();
     mountApp(() => pending, "#duo");
-    await waitFor(() => expect(screen.queryByTestId("review-badge")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("waiting-badge")).toBeNull());
   });
 
   it("the dock badge mirrors the count and clears at zero", async () => {
     let pending = 3;
     const { unmount } = mountApp(() => pending, "#trust");
-    await waitFor(() => expect(screen.getByTestId("review-badge")).toHaveTextContent("3"));
+    await waitFor(() => expect(screen.getByTestId("waiting-badge")).toHaveTextContent("3"));
     await waitFor(() => expect(dock.setBadgeCount).toHaveBeenLastCalledWith(3));
 
     pending = 0;
@@ -125,21 +132,21 @@ describe("#22 — pending count in the sidebar and the dock", () => {
     // Stubbed before mount so the socket effect sees it on first render.
     vi.stubGlobal("WebSocket", FakeWebSocket);
     mountApp(() => pending, "#duo");
-    await waitFor(() => expect(screen.getByTestId("review-badge")).toHaveTextContent("1"));
+    await waitFor(() => expect(screen.getByTestId("waiting-badge")).toHaveTextContent("1"));
     await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
     act(() => FakeWebSocket.instances[FakeWebSocket.instances.length - 1].open());
 
     pending = 4;
     act(() => FakeWebSocket.instances[FakeWebSocket.instances.length - 1].message({ type: "draft-ready", draftId: "d-new" }));
     // No hashchange, no remount — the invalidation alone moves both badges.
-    await waitFor(() => expect(screen.getByTestId("review-badge")).toHaveTextContent("4"));
+    await waitFor(() => expect(screen.getByTestId("waiting-badge")).toHaveTextContent("4"));
     await waitFor(() => expect(dock.setBadgeCount).toHaveBeenLastCalledWith(4));
   });
 
-  it("in a plain browser tab the dock call degrades quietly and the sidebar still updates", async () => {
+  it("in a plain browser tab the dock call degrades quietly and the list still updates", async () => {
     dock.setBadgeCount.mockRejectedValue(new Error("no Tauri IPC in a browser tab"));
     mountApp(() => 2, "#duo");
-    await waitFor(() => expect(screen.getByTestId("review-badge")).toHaveTextContent("2"));
+    await waitFor(() => expect(screen.getByTestId("waiting-badge")).toHaveTextContent("2"));
     // setDockBadgeCount swallowed the rejection — the surface is unaffected.
     expect(dock.setBadgeCount).toHaveBeenCalled();
   });

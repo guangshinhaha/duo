@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { App } from "../src/App.js";
+import { stubPhone } from "./desktop.js";
 import { Review } from "../src/routes/Review.js";
 import { Corrections } from "../src/routes/Corrections.js";
 import { Duo } from "../src/routes/Duo.js";
@@ -28,9 +29,9 @@ vi.mock("../src/notifications.js", () => ({
 /*
  * #38: responsive down to a phone browser (G4's mitigation — a responsive
  * web client reached over Tailscale in mobile Safari). The layout folds
- * at the desktop breakpoint, the navigation re-arranges rather than
- * shrinking (§1.5: "no tab bar, no second product"), §3.1's mobile rules
- * hold (the folded navigation carries the same three sections as the sidebar, #129; rule authoring is gone
+ * at the desktop breakpoint: a phone shows the chat list or one screen
+ * pushed onto it, rather than a shrunken sidebar (§1.5: "no tab bar, no second product"), §3.1's mobile rules
+ * hold (the phone folds the same chat-first structure as the desktop, epic #138; rule authoring is gone
  * — AR-18), and every control is a real touch target.
  *
  * happy-dom does not apply media queries, so these tests pin the
@@ -119,12 +120,6 @@ async function renderApp(routes: Record<string, unknown>) {
   return view;
 }
 
-/** Opens the folded navigation and returns its element. */
-async function openMobileNav() {
-  fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
-  return screen.findByTestId("mobile-nav");
-}
-
 /** The 44px law, applied to every interactive element under a root. */
 function expectTouchTargets(root: HTMLElement) {
   const controls = [...root.querySelectorAll("button, input, select, textarea")];
@@ -148,23 +143,21 @@ afterEach(() => {
 });
 
 describe("#38 AC1 — the app works on a phone", () => {
-  it("the shell stacks below the desktop width, and its one fixed-width element is gone with it", async () => {
+  it("the shell is one column sized to the dynamic viewport; the list is full width on a phone and a fixed column from md", async () => {
     const view = await renderApp({ "/drafts?outcome=pending": [] });
 
-    // The root is a column on a phone, a row from the desktop breakpoint
-    // up, sized to the dynamic viewport (mobile Safari's bar collapses
-    // dvh; a fixed 100vh would bury the composer under it).
+    // Sized to the dynamic viewport (mobile Safari's bar collapses dvh; a
+    // fixed 100vh would bury the composer under it).
     const root = view.container.querySelector("div") as HTMLElement;
     expect(root.className).toContain("flex-col");
-    expect(root.className).toContain("md:flex-row");
     expect(root.className).toContain("h-dvh");
 
-    // The sidebar is the desktop arrangement: hidden below md, flex from
-    // md up — a 14rem column cannot be what a phone renders.
-    const sidebar = view.container.querySelector('nav[aria-label="Surfaces"]') as HTMLElement;
-    expect(sidebar.className).toContain("w-56");
-    expect(sidebar.className).toMatch(/(^|\s)hidden\b/);
-    expect(sidebar.className).toMatch(/md:flex/);
+    // The chat list is a phone's whole home screen (full width) and, from md
+    // up, a 20rem column beside the open surface — never a wide sidebar on a phone.
+    const list = view.container.querySelector('[data-testid="chat-list-column"]') as HTMLElement;
+    expect(list.className).toContain("w-full");
+    expect(list.className).toContain("md:w-80");
+    expect(list.className).toContain("md:shrink-0");
 
     // The main column yields to its content rather than clipping it.
     const column = view.container.querySelector("main")?.parentElement as HTMLElement;
@@ -183,84 +176,50 @@ describe("#38 AC1 — the app works on a phone", () => {
 });
 
 describe("#38 AC2 — navigation adapts", () => {
-  it("a top bar carries a labelled menu control below the desktop width; nothing of it survives at md", async () => {
+  it("on a phone, a chat opens as a screen of its own, and the way back is always named", async () => {
+    stubPhone();
+    window.location.hash = "#duo";
     await renderApp({ "/drafts?outcome=pending": [] });
 
+    // The open surface alone — the list is not mounted behind it — under a
+    // top bar whose one control says where it goes and is a real touch target.
     const bar = await screen.findByTestId("mobile-topbar");
-    expect(bar.className).toContain("md:hidden");
-
-    const menu = within(bar).getByRole("button", { name: "Open navigation" });
-    // An icon-only control: named for what it does, a real touch target
-    // in both dimensions (#39 named it; #38 makes it hittable). Its
-    // desktop-width absence is the bar's — the parent is display:none
-    // from md up, and nothing inside a hidden bar renders.
-    expect(menu.className).toMatch(/min-w-11\b/);
-    expect(menu.className).toMatch(/min-h-11\b/);
+    expect(screen.queryByTestId("chat-list")).toBeNull();
+    const back = within(bar).getByRole("link", { name: "Back to chats" });
+    expect(back).toHaveAttribute("href", "#chats");
+    expect(back.className).toMatch(/min-h-11\b/);
   });
 
-  it("the menu opens the folded navigation; Review keeps its count, and a link closes it on the way through", async () => {
+  it("the home screen is the list: what is waiting on you reads without opening anything", async () => {
+    stubPhone();
     await renderApp({ "/drafts?outcome=pending": [draftFor("d1")] });
 
-    // The count is the phone's notification surrogate (AR-15: no push) —
-    // it must read without opening anything.
-    const bar = await screen.findByTestId("mobile-topbar");
-    expect(within(bar).getByTestId("topbar-count").textContent).toBe("1");
-
-    const nav = await openMobileNav();
-
-    // Review stays on top and its count still its own (§1.5).
-    const review = within(nav).getByRole("link", { name: /Review/ });
-    expect(review.getAttribute("href")).toBe("#review");
-    expect(within(review).getByTestId("review-badge").textContent).toBe("1");
-
-    // A link is a link — native href navigation — and following one
-    // hands the screen back (the overlay never outstays its route).
-    const corrections = within(nav).getByRole("link", { name: "Corrections" });
-    expect(corrections.getAttribute("href")).toBe("#corrections");
-    fireEvent.click(corrections);
-    await waitFor(() => expect(screen.queryByTestId("mobile-nav")).toBeNull());
-
-    // The phone's own dismissal is a labelled control, not a keyboard's
-    // Escape or an invisible scrim-tap.
-    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
-    await screen.findByTestId("mobile-nav");
-    fireEvent.click(screen.getByRole("button", { name: "Close navigation" }));
-    await waitFor(() => expect(screen.queryByTestId("mobile-nav")).toBeNull());
+    // The phone's notification surrogate (AR-15: no push) — the count is on
+    // the first screen, and the list is the page's one main landmark.
+    expect(await screen.findByTestId("waiting-badge")).toHaveTextContent("1");
+    expect(screen.queryByTestId("mobile-topbar")).toBeNull();
+    expect(screen.getByTestId("chat-list-column").tagName).toBe("MAIN");
+    // Your duo is pinned first, with the same count on its row.
+    expect(screen.getByTestId("duo-row-count")).toHaveTextContent("1");
   });
 });
 
 describe("#38 AC3 — §3.1's mobile rules hold", () => {
-  it("the folded navigation keeps the sidebar's three sections — same map, each screen in exactly one (#129)", async () => {
-    const view = await renderApp({ "/drafts?outcome=pending": [] });
+  it("the phone folds the same structure — the list, then a screen pushed onto it — and never a second product", async () => {
+    stubPhone();
+    await renderApp({ "/drafts?outcome=pending": [] });
+    // Home: the list, no pane, no menu button to open and no tab bar.
+    expect(screen.getByTestId("chat-list")).toBeInTheDocument();
+    expect(screen.queryByTestId("pane")).toBeNull();
+    expect(screen.queryByRole("button", { name: /open navigation/i })).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    cleanup();
 
-    // The desktop sidebar first — its queries must run before the folded
-    // navigation opens, because the dialog primitive marks everything
-    // outside itself aria-hidden while it is open (#34's focus contract).
-    const sidebar = view.container.querySelector('nav[aria-label="Surfaces"]') as HTMLElement;
-    const sectionLinks = (root: HTMLElement) =>
-      Object.fromEntries(
-        ["people", "answering", "training"].map((id) => [
-          id,
-          [...within(root.querySelector(`[data-testid="nav-section-${id}"]`) as HTMLElement).queryAllByRole("link")].map(
-            (link) => link.getAttribute("href"),
-          ),
-        ]),
-      );
-    const desktop = sectionLinks(sidebar);
-    expect(within(sidebar).queryByText("More")).toBeNull();
-
-    // The phone folds the same three groups: no "More" bucket pulling
-    // Trust and Audit out of the sections they belong to.
-    const nav = await openMobileNav();
-    expect(within(nav).queryByText("More")).toBeNull();
-    expect(sectionLinks(nav)).toEqual(desktop);
-    // Long enough to outgrow a short phone: the panel is capped to the screen
-    // and only the surfaces list scrolls, so the title and Close stay put.
-    expect(nav.className).toMatch(/max-h-/);
-    expect(nav.className).not.toMatch(/overflow-y-auto/);
-    const surfaces = within(nav).getByRole("navigation", { name: "Surfaces" });
-    expect(surfaces.className).toMatch(/overflow-y-auto/);
-    expect(surfaces.className).toMatch(/min-h-0/);
+    // A pushed screen: the pane, no list.
+    window.location.hash = "#waiting";
+    await renderApp({ "/drafts?outcome=pending": [] });
+    expect(screen.getByTestId("pane")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-list")).toBeNull();
   });
 
   it("no rule-authoring affordance appears on a phone (AR-18) — read, approve, reject, promote stay", async () => {

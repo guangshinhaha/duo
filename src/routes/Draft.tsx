@@ -45,7 +45,7 @@ export function Draft({
     seenData.current = true;
     prevOutcome.current = draft.data.outcome;
     if (!firstRead && before === null && draft.data.outcome != null) {
-      window.location.hash = "#review";
+      window.location.hash = "#waiting";
     }
   }, [draft.data]);
 
@@ -67,8 +67,8 @@ export function Draft({
         ) : (
           <MutationError error={draft.error} />
         )}
-        <a className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-body" href="#review">
-          Back to Review
+        <a className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-body" href="#waiting">
+          Back to Waiting on you
         </a>
       </div>
     );

@@ -62,7 +62,12 @@ const QUEUE: DraftRecord[] = [
 ];
 
 function stubQueue(drafts: DraftRecord[] = QUEUE) {
-  const fetchMock = vi.fn(async () => new Response(JSON.stringify(drafts), { status: 200 }));
+  const fetchMock = vi.fn(async (input?: RequestInfo | URL) =>
+    // Staged confirmations are a different queue — never the drafts array.
+    String(input ?? "").includes("/actions/t4/pending")
+      ? new Response("[]", { status: 200 })
+      : new Response(JSON.stringify(drafts), { status: 200 }),
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -160,20 +165,20 @@ describe("#50 — filter the Review queue by state and origin", () => {
     expect(fetchMock.mock.calls.length).toBe(callsAfterLoad);
   });
 
-  it("the sidebar badge counts everything, whatever the filter shows (App-level)", async () => {
+  it("the Waiting on you count counts everything, whatever the filter shows (App-level)", async () => {
     stubQueue();
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://test", token: "tok" }));
-    window.location.hash = "#review";
+    window.location.hash = "#waiting";
     window.dispatchEvent(new Event("hashchange"));
     const { App } = await import("../src/App.js");
     render(<App />);
 
-    await waitFor(() => expect(screen.getByTestId("review-badge")).toHaveTextContent("5"));
+    await waitFor(() => expect(screen.getByTestId("waiting-badge")).toHaveTextContent("5"));
     fireEvent.change(screen.getByLabelText(/state/i), { target: { value: "drafts" } });
     await waitFor(() => expect(screen.getAllByTestId("draft-card")).toHaveLength(3));
     // The badge is the queue's count, not the view's — §3.1's "badge =
     // drafts where outcome is null" holds under any filter.
-    expect(screen.getByTestId("review-badge")).toHaveTextContent("5");
+    expect(screen.getByTestId("waiting-badge")).toHaveTextContent("5");
     window.location.hash = "";
   });
 });

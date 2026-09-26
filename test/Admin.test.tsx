@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { App } from "../src/App.js";
+import { stubDesktop } from "./desktop.js";
 import { Admin } from "../src/routes/Admin.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { HostedOrg } from "../src/api/hosted.js";
@@ -59,6 +60,8 @@ function signInAs(isAdmin: boolean) {
 }
 
 async function renderShell() {
+  // Side by side, so the chat list (with its footer's Admin link) stands beside the open page.
+  stubDesktop();
   const view = render(<App />);
   await waitFor(() => expect(view.container.querySelector("main")).not.toBeNull());
   await act(async () => {
@@ -81,25 +84,25 @@ afterEach(() => {
 });
 
 describe("#128 — who sees the way in", () => {
-  it("a signed-in admin sees Admin beside Settings, outside the three sections", async () => {
+  it("a signed-in admin sees Admin in the list footer, beside Sign out", async () => {
     signInAs(true);
     daemon({});
     await renderShell();
-    const link = within(screen.getByRole("navigation", { name: "Surfaces" })).getByRole("link", { name: "Admin" });
+    const link = within(screen.getByTestId("chat-list")).getByRole("link", { name: "Admin" });
     expect(link).toHaveAttribute("href", "#admin");
-    expect(link.closest('[role="group"]')).toBeNull();
+    expect(link.closest("nav")).toBeNull(); // the footer, never among the chats
   });
 
   it("a signed-in non-admin never sees it, and a paired-by-address app doesn't either", async () => {
     signInAs(false);
     daemon({});
     const { unmount } = await renderShell();
-    expect(within(screen.getByRole("navigation", { name: "Surfaces" })).queryByRole("link", { name: "Admin" })).toBeNull();
+    expect(within(screen.getByTestId("chat-list")).queryByRole("link", { name: "Admin" })).toBeNull();
     unmount();
 
     localStorage.removeItem("duo.hosted-account");
     await renderShell();
-    expect(within(screen.getByRole("navigation", { name: "Surfaces" })).queryByRole("link", { name: "Admin" })).toBeNull();
+    expect(within(screen.getByTestId("chat-list")).queryByRole("link", { name: "Admin" })).toBeNull();
   });
 
   it("typing #admin as a non-admin says it isn't for you and asks the daemon nothing", async () => {
@@ -136,13 +139,13 @@ describe("#128 — who sees the way in", () => {
     const { unmount } = await renderShell();
     expect(await screen.findByTestId("admin-orgs")).toBeInTheDocument();
     // The Admin entry is the lit one.
-    expect(screen.getByRole("link", { name: "Admin" }).className).toContain("bg-[var(--surface)]");
+    expect(screen.getByRole("link", { name: "Admin" })).toHaveAttribute("aria-current", "page");
     unmount();
 
     window.location.hash = "#admin/plat1";
     await renderShell();
     expect(await screen.findByTestId("admin-org-name")).toHaveTextContent("Platform team");
-    expect(screen.getByRole("link", { name: "Admin" }).className).toContain("bg-[var(--surface)]");
+    expect(screen.getByRole("link", { name: "Admin" })).toHaveAttribute("aria-current", "page");
   });
 });
 
@@ -480,7 +483,7 @@ describe("#128 — the token goes only to the server the app is paired with", ()
     const mock = daemon({});
     window.location.hash = "#admin";
     await renderShell();
-    expect(within(screen.getByRole("navigation", { name: "Surfaces" })).queryByRole("link", { name: "Admin" })).toBeNull();
+    expect(within(screen.getByTestId("chat-list")).queryByRole("link", { name: "Admin" })).toBeNull();
     expect(screen.getByTestId("admin-not-available")).toBeInTheDocument();
     expect(mock.mock.calls.filter(([input]) => String(input).includes("/hosted/"))).toHaveLength(0);
   });

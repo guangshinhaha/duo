@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.js";
+import { stubDesktop } from "./desktop.js";
 import type { DraftRecord } from "../src/api/types.js";
 
 /*
@@ -80,8 +81,13 @@ function pendingDrafts(count: number): DraftRecord[] {
 function mountApp(pendingNow: () => number, hash = "#duo") {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(JSON.stringify(pendingDrafts(pendingNow())), { status: 200 })),
+    vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes("/actions/t4/pending")
+        ? new Response("[]", { status: 200 })
+        : new Response(JSON.stringify(pendingDrafts(pendingNow())), { status: 200 }),
+    ),
   );
+  stubDesktop();
   localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
   window.location.hash = hash;
   window.dispatchEvent(new Event("hashchange"));
@@ -172,7 +178,7 @@ describe("#42 AC3 — the menu bar answers the standing question", () => {
     expect(JSON.parse(localStorage.getItem("duo.api-config") ?? "null")).toBeNull();
   });
 
-  it("one click on the tray's Review takes the client to Review", async () => {
+  it("one click on the tray's Review takes the client to what is waiting on the owner", async () => {
     const handlers = new Map<string, () => void>();
     shell.listen.mockImplementation(async (event: string, handler: () => void) => {
       handlers.set(event, handler);
@@ -184,7 +190,7 @@ describe("#42 AC3 — the menu bar answers the standing question", () => {
 
     window.location.hash = "";
     act(() => handlers.get("tray-open-review")!());
-    expect(window.location.hash).toBe("#review");
+    expect(window.location.hash).toBe("#waiting");
   });
 
   it("the seams degrade quietly outside the shell, where the IPC calls reject", async () => {

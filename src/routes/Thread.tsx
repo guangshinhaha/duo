@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { MessageBody } from "./Room.js";
-import { roomTitle } from "./Conversations.js";
+import { roomTitle } from "../shell/roomTitle.js";
 import type { RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
 import { localpartOf } from "../workspace/identity.js";
 
@@ -13,7 +13,7 @@ const focusIntoView = (element: HTMLElement | null): void => {
 
 /**
  * #64: one thread — a root message and the replies that relate to it. The
- * route's address carries both halves (`#thread/<room>/<root>`), so a
+ * route's address carries both halves (`#chat/<room>/thread/<root>`), so a
  * thread is linkable from the conversation's preview and back again.
  *
  * Every row renders through the same `MessageBody` as the conversation's
@@ -142,7 +142,7 @@ export function ThreadView({
         <a
           className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
           data-testid="back-to-room"
-          href={`#room/${encodeURIComponent(roomId)}`}
+          href={`#chat/${encodeURIComponent(roomId)}`}
         >
           Back to conversation
         </a>
