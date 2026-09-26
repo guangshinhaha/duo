@@ -84,3 +84,11 @@ export const NAV_SECTIONS: readonly NavSection[] = [
 
 /** Outside every section on purpose: the app's own upkeep, not one of the three things you do in it. */
 export const SETTINGS_SCREEN: NavScreen = { href: "#settings", label: "Settings" };
+
+/**
+ * #128: the super admin's screens (orgs, who is in them, invite links). Not one of the three things
+ * a person does in the app and not upkeep of it either, so it stands beside Settings — and unlike
+ * every other entry it is drawn only for a super admin (`isAdminAccount` in App), never listed
+ * for anyone else. The screen re-checks with the daemon, so the entry is a convenience, not a lock.
+ */
+export const ADMIN_SCREEN: NavScreen = { href: "#admin", label: "Admin" };

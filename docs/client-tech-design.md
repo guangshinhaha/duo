@@ -150,7 +150,11 @@ domain types.
 | `GET` | `/hosted/config` | `HostedConfig` — at the daemon ORIGIN, public: `{ googleClientId }`, null when sign-in isn't configured | `hosted` |
 | `POST` | `/hosted/login` | `HostedSignupResult` — at the daemon ORIGIN: `{ credential }` (a Google ID token) in, this account's duo (`basePath` "" for the root duo) and a fresh device token out; 404 `no_duo` | `hosted` |
 | `GET` | `/hosted/invites` | `HostedInviteRow[]` — at the daemon ORIGIN, admin only (Bearer: the admin's own device token); never a code | `hosted` |
-| `POST` | `/hosted/invites` | `MintedHostedInvite` — 201, admin only (`{ name, email?, expiresInHours? }`); the code and link shown once | `hosted` |
+| `POST` | `/hosted/invites` | `MintedHostedInvite` — 201, admin only (`{ name, orgId?, email?, expiresInHours? }`; no `orgId` means the default org); the code and link shown once | `hosted` |
+| `GET` | `/hosted/orgs` | `HostedOrg[]` (`{ id, name, createdAt, memberCount }`) — at the daemon ORIGIN, super admin only (401 no credential, 403 anyone else); the Admin screen (#128) | `hosted` |
+| `POST` | `/hosted/orgs` | `HostedOrg` — 201, super admin only (`{ name }`); 400 bad name, 409 name taken | `hosted` |
+| `POST` | `/hosted/orgs/:orgId/rename` | `HostedOrg` — super admin only (`{ name }`; POST because the daemon's CORS allows only GET and POST); 404 unknown org, 409 name taken | `hosted` |
+| `GET` | `/hosted/orgs/:orgId/members` | `HostedOrgMember[]` (`{ duoId, name, email, isRoot, joinedAt, isAdmin }`) — super admin only; 404 unknown org | `hosted` |
 | `GET` | `/search?q=&limit=&cursor=` | `HybridSearchOutcome` — `duo search`'s own hybrid read (#174) | `ingest/embeddings` |
 | `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178); the Escalations screen (#54) never calls it — opening a screen must not send | `escalation/digest` |
 | `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; the Escalations screen walks every page at `limit=100` before it counts | `escalation/digest` |

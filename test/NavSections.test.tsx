@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, NAMED_ROUTES } from "../src/App.js";
-import { NAV_SECTIONS, SETTINGS_SCREEN } from "../src/navSections.js";
+import { ADMIN_SCREEN, NAV_SECTIONS, SETTINGS_SCREEN } from "../src/navSections.js";
 import { connect } from "../src/workspace/matrix.js";
 
 /*
@@ -29,7 +29,7 @@ const SESSION = {
   deviceId: "YGBNAUIOMK",
 };
 
-const allScreens = () => [...NAV_SECTIONS.flatMap((section) => section.screens), SETTINGS_SCREEN];
+const allScreens = () => [...NAV_SECTIONS.flatMap((section) => section.screens), SETTINGS_SCREEN, ADMIN_SCREEN];
 
 beforeEach(() => {
   localStorage.clear();
@@ -81,10 +81,11 @@ describe("#129 — the map is three sections, every screen in exactly one", () =
     ]);
   });
 
-  it("lists no screen twice, and Settings is in none of the sections", () => {
+  it("lists no screen twice, and Settings and Admin are in none of the sections", () => {
     const hrefs = allScreens().map((screen) => screen.href);
     expect(new Set(hrefs).size).toBe(hrefs.length);
     expect(NAV_SECTIONS.flatMap((section) => section.screens.map((s) => s.href))).not.toContain(SETTINGS_SCREEN.href);
+    expect(NAV_SECTIONS.flatMap((section) => section.screens.map((s) => s.href))).not.toContain(ADMIN_SCREEN.href);
   });
 
   it("covers every named route the app has — a new route must be placed, not forgotten", () => {
@@ -118,6 +119,7 @@ describe("#129 — the copy is plain words", () => {
         ...section.screens.map((screen) => screen.label),
       ]),
       SETTINGS_SCREEN.label,
+      ADMIN_SCREEN.label,
     ];
     for (const text of strings) {
       expect(text, text).not.toMatch(/workspace|homeserver|matrix|server|assistant|employee|teammate|colleague|chatbot/i);

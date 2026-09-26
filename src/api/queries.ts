@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 import { apiRequest, type DuoApiConfig } from "./client.js";
-import { createInvite, listInvites, type CreateInviteInput } from "./hosted.js";
+import { createInvite, createOrg, listInvites, listOrgMembers, listOrgs, renameOrg, type CreateInviteInput } from "./hosted.js";
 import type {
   AskLinkRow,
   AuditEntry,
@@ -92,6 +92,8 @@ export const queryKeys = {
   askLinks: ["ask-links"] as const,
   connector: ["connector"] as const,
   hostedInvites: ["hosted-invites"] as const,
+  hostedOrgs: ["hosted-orgs"] as const,
+  hostedOrgMembers: (orgId: string) => ["hosted-orgs", orgId, "members"] as const,
   // Under the ["trust"] root: accepting a promotion or granting autonomy moves the grid too.
   trustPromotions: ["trust", "promotions"] as const,
   // #46: keyed by the submitted query — each distinct search is its own
@@ -685,6 +687,44 @@ export function useCreateHostedInvite(origin: string, api: DuoApiConfig) {
     mutationFn: (input: CreateInviteInput) => createInvite(origin, api.token, input),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.hostedInvites });
+    },
+  });
+}
+
+/**
+ * The super admin's org screens (the `hosted/orgs` routes, same origin and same
+ * device token as the invites above). A 401 or 403 here is how the daemon
+ * says this account is not (or is no longer) a super admin, so it is not
+ * retried — the screen reads it and says so.
+ */
+export function useHostedOrgs(origin: string, api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.hostedOrgs, queryFn: () => listOrgs(origin, api.token), retry: false });
+}
+
+export function useHostedOrgMembers(origin: string, api: DuoApiConfig, orgId: string) {
+  return useQuery({
+    queryKey: queryKeys.hostedOrgMembers(orgId),
+    queryFn: () => listOrgMembers(origin, api.token, orgId),
+    retry: false,
+  });
+}
+
+export function useCreateHostedOrg(origin: string, api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => createOrg(origin, api.token, name),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.hostedOrgs });
+    },
+  });
+}
+
+export function useRenameHostedOrg(origin: string, api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { orgId: string; name: string }) => renameOrg(origin, api.token, input.orgId, input.name),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.hostedOrgs });
     },
   });
 }

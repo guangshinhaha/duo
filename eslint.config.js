@@ -79,10 +79,10 @@ const channelsBelongToTheCore =
  * The same rule for hosted mode's account layer, minus "email": there the
  * word is a Google account's address (sign-in identity, invite locking),
  * which the daemon's own contract names `email` — not a messaging channel.
- * Every other product name stays forbidden, and only these two files get
+ * Every other product name stays forbidden, and only these files get
  * the carve-out.
  */
-const accountLayerFiles = ["src/api/hosted.ts", "src/components/InvitePeople.tsx"];
+const accountLayerFiles = ["src/api/hosted.ts", "src/components/InvitePeople.tsx", "src/routes/Admin.tsx"];
 const channelProductExceptAccountAddress = externalChannelProduct.replace("|email|", "|");
 const noExternalChannelNamesInAccountLayer = [
   { selector: `Literal[value=/\\b(${channelProductExceptAccountAddress})\\b/i]`, message: `This string ${channelsBelongToTheCore}` },
