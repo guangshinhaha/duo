@@ -1,8 +1,6 @@
 import type { DuoApiConfig } from "../api/client.js";
-import { useChannels, useSetChannelMute } from "../api/queries.js";
+import { useSetChannelMute } from "../api/queries.js";
 import type { ChannelSummary } from "../api/types.js";
-import { RouteError } from "../components/RouteError.js";
-import { RouteLoading } from "../components/RouteLoading.js";
 import { ageLabel } from "../components/Timestamp.js";
 
 /**
@@ -135,20 +133,6 @@ export function ChannelList({ api, channels }: { api: DuoApiConfig; channels: re
   );
 }
 
-function ChannelsScreen({ api, channels }: { api: DuoApiConfig; channels: readonly ChannelSummary[] }) {
-  return (
-    <div className="flex flex-col gap-6 p-6" data-testid="channels">
-      <header className="flex flex-col gap-1">
-        <h1 className="type-heading">Channels</h1>
-        <p className="type-provenance text-[var(--muted)]">
-          The outside systems bridged into your duo, and whether each is working.
-        </p>
-      </header>
-      <ChannelList api={api} channels={channels} />
-    </div>
-  );
-}
-
 /**
  * The cache is a storage layer, not a promise (Knowledge's own note): a
  * payload that is not the daemon's list is not an answer, and the screen
@@ -156,27 +140,4 @@ function ChannelsScreen({ api, channels }: { api: DuoApiConfig; channels: readon
  */
 export function isChannelList(value: unknown): value is ChannelSummary[] {
   return Array.isArray(value);
-}
-
-/**
- * The channels screen (#47) — what this duo is reachable through and
- * whether each is working, rendered from `GET /channels` and nothing this
- * client knows. It recognises no channel (#43): the kind and the label are
- * the core's strings, shown as sent, so a channel the client has never
- * seen — or one added to the core tomorrow — renders like any other.
- * Read and mute only: connecting or authorising a channel happens where
- * its credentials are.
- */
-export function Channels({ api }: { api: DuoApiConfig }) {
-  const channels = useChannels(api);
-  if (channels.isLoading) {
-    return <RouteLoading variant="rows" />;
-  }
-  if (channels.error) {
-    return <RouteError api={api} error={channels.error} onRetry={() => void channels.refetch()} />;
-  }
-  if (isChannelList(channels.data)) {
-    return <ChannelsScreen api={api} channels={channels.data} />;
-  }
-  return <RouteLoading variant="rows" />;
 }

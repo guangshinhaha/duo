@@ -4,8 +4,8 @@ import type { CorrectionCandidate, Rule, RuleReviewListing } from "../api/types.
 import { RuleCard, type RuleBucket } from "../components/RuleCard.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
-import { CandidateCard } from "../routes/Corrections.js";
-import { RefusalsSection } from "../routes/Mirror.js";
+import { CandidateCard } from "./CandidateCard.js";
+import { RefusalsSection } from "./Refusals.js";
 
 /** The buckets in the order an owner meets them — what needs a decision first, the record last. */
 const BUCKETS: ReadonlyArray<{ key: RuleBucket; heading: string; empty: string; collapsed?: boolean }> = [

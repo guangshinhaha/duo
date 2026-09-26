@@ -4,7 +4,7 @@ import type { AuditEntry } from "../api/types.js";
 import { DuoLine } from "../components/DuoLine.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
-import { PatternSection, RateSection } from "../routes/Escalations.js";
+import { PatternSection, RateSection } from "./Patterns.js";
 import { PUBLIC_PASSED_ON_MESSAGE } from "../workspace/duoAnswer.js";
 import { plainAsker, relativeDay } from "./words.js";
 

@@ -16,7 +16,7 @@ import { MeterBar } from "../components/MeterBar.js";
 import { MutationError } from "../components/MutationError.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
-import { isDuoKnowledgeShape } from "./Knowledge.js";
+import { isDuoKnowledgeShape } from "../profile/knowledgeWords.js";
 
 /**
  * How often the flow re-asks the daemon while something is in motion —

@@ -1,12 +1,10 @@
 import type { DuoApiConfig } from "../api/client.js";
-import { useDecideCandidate, useReview } from "../api/queries.js";
+import { useDecideCandidate } from "../api/queries.js";
 import type { CorrectionCandidate } from "../api/types.js";
 import { DuoMessage } from "../components/DuoMessage.js";
 import { EditDiff } from "../components/EditDiff.js";
 import { MutationError } from "../components/MutationError.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
-import { RouteError } from "../components/RouteError.js";
-import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { useSyncStatus } from "../sync.js";
 
@@ -59,48 +57,6 @@ export function CandidateCard({ api, candidate }: { api: DuoApiConfig; candidate
           </button>
         </div>
         <MutationError error={decide.error} />
-      </div>
-    </div>
-  );
-}
-
-/**
- * The correction queue (#44) — AR-14's second half. Review gave the draft
- * loop its own surface because "the draft loop drowns in a chat
- * transcript"; the training signal drowns the same way, so confirming it
- * gets a screen of its own beside Review, not a section under something
- * else. This is where "the thing my duo learns from me is something I
- * actually confirmed" happens: nothing here auto-writes (the daemon's
- * `corrections/queue.ts` never does), every learning is one explicit
- * Approve away.
- */
-export function Corrections({ api }: { api: DuoApiConfig }) {
-  const { data: candidates, isLoading, error, refetch } = useReview(api);
-
-  if (isLoading) {
-    return <RouteLoading />;
-  }
-  if (error) {
-    return <RouteError api={api} error={error} onRetry={() => void refetch()} />;
-  }
-  if (!candidates || candidates.length === 0) {
-    return (
-      <div className="p-6 text-[var(--muted)]" data-testid="corrections-empty">
-        <h1 className="type-heading sr-only">Corrections</h1>
-        Nothing to confirm yet. Editing a draft before you send it is what puts a correction here.
-      </div>
-    );
-  }
-
-  return (
-    // #33: the second queue reads as one panel, like the first — the
-    // container shape is what makes a queue a thing rather than a pile.
-    <div className="p-6">
-      <h1 className="type-heading sr-only">Corrections</h1>
-      <div className="shape-container flex flex-col gap-4 p-4" data-testid="corrections-list">
-        {candidates.map((candidate) => (
-          <CandidateCard key={candidate.id} api={api} candidate={candidate} />
-        ))}
       </div>
     </div>
   );
