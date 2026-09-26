@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Menu, X } from "lucide-react";
 import { defaultShouldDehydrateQuery, QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
@@ -41,6 +41,7 @@ import { SearchOverlay } from "./components/SearchOverlay.js";
 import { DuoRoster } from "./components/DuoRoster.js";
 import { NoDuoPanel } from "./components/NoDuoPanel.js";
 import { PairDuoDialog } from "./components/PairDuoDialog.js";
+import { NAV_SECTIONS, SETTINGS_SCREEN, type NavScreen } from "./navSections.js";
 import { WorkspaceSignInDialog } from "./components/WorkspaceSignInDialog.js";
 import { useWorkspaceSession } from "./workspace/session.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "./workspace/identity.js";
@@ -96,20 +97,31 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * own address within it. The parameterized entries are objects so no
  * string compare can ever confuse them with a named route.
  */
+/**
+ * Every route that is one plain address (`#name`). One list feeds the
+ * `Route` type and `routeFromHash`, and the nav-coverage test reads it too,
+ * so a route added here cannot dodge being placed in a section (#129).
+ */
+export const NAMED_ROUTES = [
+  "review",
+  "conversations",
+  "corrections",
+  "confirmations",
+  "duo",
+  "trust",
+  "audit",
+  "settings",
+  "mirror",
+  "knowledge",
+  "channels",
+  "escalations",
+  "onboarding",
+] as const;
+
+type NamedRoute = (typeof NAMED_ROUTES)[number];
+
 type Route =
-  | "review"
-  | "conversations"
-  | "corrections"
-  | "confirmations"
-  | "duo"
-  | "trust"
-  | "audit"
-  | "settings"
-  | "mirror"
-  | "knowledge"
-  | "channels"
-  | "escalations"
-  | "onboarding"
+  | NamedRoute
   | { draft: string }
   | { room: string; at?: string }
   | { thread: { roomId: string; rootEventId: string; at?: string } };
@@ -154,47 +166,12 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
     }
     return id ? { room: id, ...(at ? { at } : {}) } : "conversations";
   }
-  if (hash === "#conversations") {
-    return "conversations";
-  }
   // #68: Review is a named address too, not only the empty hash's default —
   // with a workspace session the default is Conversations, and the link
   // that says "#review" must still land on the queue.
-  if (hash === "#review") {
-    return "review";
-  }
-  if (hash === "#mirror") {
-    return "mirror";
-  }
-  if (hash === "#knowledge") {
-    return "knowledge";
-  }
-  if (hash === "#channels") {
-    return "channels";
-  }
-  if (hash === "#escalations") {
-    return "escalations";
-  }
-  if (hash === "#onboarding") {
-    return "onboarding";
-  }
-  if (hash === "#corrections") {
-    return "corrections";
-  }
-  if (hash === "#confirmations") {
-    return "confirmations";
-  }
-  if (hash === "#duo") {
-    return "duo";
-  }
-  if (hash === "#trust") {
-    return "trust";
-  }
-  if (hash === "#audit") {
-    return "audit";
-  }
-  if (hash === "#settings") {
-    return "settings";
+  const named = NAMED_ROUTES.find((name) => hash === `#${name}`);
+  if (named) {
+    return named;
   }
   return fallback;
 }
@@ -397,6 +374,114 @@ function ConfirmationsLink({ api, active, onNavigate }: { api: DuoApiConfig; act
 }
 
 /**
+ * The sidebar entry a route lights (#129). A draft's page belongs to the
+ * review loop, so Review stays lit while one is open and the way back is
+ * always named; a conversation's room and thread belong to Conversations.
+ * The first run is no entry's — it is the way in, not a place in the map.
+ */
+function activeNavHref(route: Route): string {
+  if (typeof route === "object") {
+    return "draft" in route ? "#review" : "#conversations";
+  }
+  return route === "onboarding" ? "" : `#${route}`;
+}
+
+/** One entry of the map: a plain link, or the link that carries its count. */
+function NavEntry({
+  api,
+  screen,
+  activeHref,
+  onNavigate,
+}: {
+  api: DuoApiConfig | null;
+  screen: NavScreen;
+  activeHref: string;
+  onNavigate?: () => void;
+}) {
+  const active = screen.href === activeHref;
+  if (api && screen.badge === "drafts") {
+    return <ReviewLink api={api} active={active} onNavigate={onNavigate} />;
+  }
+  if (api && screen.badge === "confirmations") {
+    return <ConfirmationsLink api={api} active={active} onNavigate={onNavigate} />;
+  }
+  return (
+    <NavLink active={active} href={screen.href} onClick={onNavigate}>
+      {screen.label}
+    </NavLink>
+  );
+}
+
+/**
+ * #129: the navigation, grouped by the three things a person does here
+ * (`NAV_SECTIONS` is the map — this only draws it). One component for the
+ * sidebar and the phone's folded navigation, so the two can never disagree
+ * about which screen sits where. A section whose backend isn't there yet —
+ * no conversation account, no paired duo — says so in a short note instead
+ * of listing screens that would only ask you to sign in.
+ */
+function NavSections({
+  api,
+  session,
+  route,
+  onNavigate,
+}: {
+  api: DuoApiConfig | null;
+  session: WorkspaceSession | null;
+  route: Route;
+  onNavigate?: () => void;
+}) {
+  const idPrefix = useId();
+  const activeHref = activeNavHref(route);
+  return (
+    <>
+      {NAV_SECTIONS.map((section) => {
+        const ready = section.needs === "duo" ? api !== null : session !== null;
+        const titleId = `${idPrefix}-${section.id}`;
+        return (
+          <div
+            aria-labelledby={titleId}
+            className="mt-3 flex flex-col gap-1 first:mt-0"
+            data-testid={`nav-section-${section.id}`}
+            key={section.id}
+            role="group"
+          >
+            <div className="flex flex-col px-2">
+              <p className="type-provenance uppercase text-[var(--text)]" id={titleId}>
+                {section.title}
+              </p>
+              <p className="type-provenance text-[var(--muted)]">{section.explainer}</p>
+            </div>
+            {ready ? (
+              section.screens.map((screen) => (
+                <NavEntry activeHref={activeHref} api={api} key={screen.href} onNavigate={onNavigate} screen={screen} />
+              ))
+            ) : (
+              <>
+                <p className="px-2 type-body text-[var(--muted)]" data-testid={`nav-section-${section.id}-not-set-up`}>
+                  {section.notSetUp}
+                </p>
+                {section.setUp && (
+                  <NavLink active={false} href={section.setUp.href} onClick={onNavigate}>
+                    {section.setUp.label}
+                  </NavLink>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })}
+      {/* Settings is the app's own upkeep, in none of the three. */}
+      <div className="mt-3 border-t border-[var(--edge)] pt-2">
+        <NavLink active={route === "settings"} href={SETTINGS_SCREEN.href} onClick={onNavigate}>
+          {SETTINGS_SCREEN.label}
+        </NavLink>
+      </div>
+    </>
+  );
+}
+
+/**
  * #38: the phone's notification surrogate (AR-15 — no push can reach a
  * browser tab over Tailscale), so Review's count is read without opening
  * anything. Same query the Review link observes; the badge is the point,
@@ -432,11 +517,10 @@ function TopBarConfirmations({ api }: { api: DuoApiConfig }) {
 /**
  * #38: the folded navigation — §1.5's "phone-width folds the same map, it
  * does not replace it". No tab bar, no second product: the same surfaces
- * nav, arranged for the width, with §3.1's one mobile-only rule applied —
- * Trust and Audit, the rare globals, share one "More" section instead of
- * two top-level entries. The dialog primitive (#34) supplies the focus
- * trap, Escape, and the scrim; every entry is still a real anchor, and
- * following one dismisses the overlay on the way through.
+ * nav, arranged for the width. It renders the same three sections as the
+ * sidebar (#129), so the two cannot disagree. The dialog primitive (#34)
+ * supplies the focus trap, Escape, and the scrim; every entry is still a
+ * real anchor, and following one dismisses the overlay on the way through.
  *
  * #62: `api` is nullable now — a member signed in to the workspace with no
  * paired duo folds the member's map (Conversations, Settings, and the
@@ -461,11 +545,10 @@ function MobileNav({
   onPairDuo: () => void;
 }) {
   const close = () => onOpenChange(false);
-  // The same actives the sidebar computes — one map, folded differently.
-  const onReview = route === "review" || (typeof route === "object" && "draft" in route);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm" data-testid="mobile-nav">
+      {/* #129: three sections outgrow a short phone — the panel is capped to the screen and only the nav scrolls, so the title and its Close button stay in view. */}
+      <DialogContent className="max-h-[calc(100dvh-3rem)] max-w-sm" data-testid="mobile-nav">
         <div className="flex items-center justify-between gap-2">
           <DialogTitle className="type-heading">Duo</DialogTitle>
           {/* The phone's dismissal: Escape is a keyboard's gesture, and a
@@ -484,52 +567,8 @@ function MobileNav({
             title stays "Duo" (the dialog's name); whose duos these are is
             the roster's half to say. */}
         {api ? <DuoRoster api={api} /> : <NoDuoPanel onPairDuo={onPairDuo} condensed />}
-        <nav aria-label="Surfaces" className="flex flex-col gap-1">
-          {api && <ReviewLink api={api} active={onReview} onNavigate={close} />}
-          {api && <ConfirmationsLink api={api} active={route === "confirmations"} onNavigate={close} />}
-          {session && (
-            <NavLink
-              active={route === "conversations" || (typeof route === "object" && ("room" in route || "thread" in route))}
-              href="#conversations"
-              onClick={close}
-            >
-              Conversations
-            </NavLink>
-          )}
-          {api && (
-            <>
-              <NavLink active={route === "corrections"} href="#corrections" onClick={close}>
-                Corrections
-              </NavLink>
-              <NavLink active={route === "duo"} href="#duo" onClick={close}>
-                Duo
-              </NavLink>
-              <NavLink active={route === "mirror"} href="#mirror" onClick={close}>
-                Mirror
-              </NavLink>
-              <NavLink active={route === "knowledge"} href="#knowledge" onClick={close}>
-                Knowledge
-              </NavLink>
-              <NavLink active={route === "channels"} href="#channels" onClick={close}>
-                Channels
-              </NavLink>
-              <NavLink active={route === "escalations"} href="#escalations" onClick={close}>
-                Escalations
-              </NavLink>
-              <section className="mt-2 flex flex-col gap-1">
-                <div className="px-2 type-provenance uppercase text-[var(--faint)]">More</div>
-                <NavLink active={route === "trust"} href="#trust" onClick={close}>
-                  Trust
-                </NavLink>
-                <NavLink active={route === "audit"} href="#audit" onClick={close}>
-                  Audit
-                </NavLink>
-              </section>
-            </>
-          )}
-          <NavLink active={route === "settings"} href="#settings" onClick={close}>
-            Settings
-          </NavLink>
+        <nav aria-label="Surfaces" className="flex min-h-0 flex-col gap-1 overflow-y-auto">
+          <NavSections api={api} session={session} route={route} onNavigate={close} />
           {api && (
             <button
               className="mt-2 inline-flex min-h-11 items-center border-t border-[var(--edge)] px-2 pt-3 text-left type-provenance text-[var(--faint)]"
@@ -1030,79 +1069,16 @@ function AppShell() {
             This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again.
           </p>
         )}
-        <nav aria-label="Surfaces" className="hidden w-56 flex-col gap-1 border-r border-[var(--edge)] p-3 md:flex">
+        <nav aria-label="Surfaces" className="hidden w-56 flex-col gap-1 overflow-y-auto border-r border-[var(--edge)] p-3 md:flex">
           {/* #40: the duos the daemon reports, where the hardcoded wordmark
               stood — `useDuos` stops being dead code the moment the shell
               renders it. Falls back to the plain wordmark above. For a
               member with no duo paired, the same slot explains and offers
               (#62: pairing is offered, never demanded). */}
-          {api ? (
-            <>
-              <DuoRoster api={api} />
-              {/* A draft page belongs to the review loop — Review stays the
-                  lit entry while one is open, so the way back is always
-                  named. */}
-              <ReviewLink api={api} active={route === "review" || (typeof route === "object" && "draft" in route)} />
-              {/* #52: what waits on an explicit yes sits right under Review
-                  — the two queues the owner opens the app for. */}
-              <ConfirmationsLink api={api} active={route === "confirmations"} />
-            </>
-          ) : (
-            <NoDuoPanel onPairDuo={openPairDuo} condensed />
-          )}
-          {/* #62: Conversations — the member's default space — sits under
-              Review where §1.5 puts it, only when there is a workspace to
-              read. */}
-          {session && (
-            <NavLink
-              active={route === "conversations" || (typeof route === "object" && ("room" in route || "thread" in route))}
-              href="#conversations"
-            >
-              Conversations
-            </NavLink>
-          )}
-          {api && (
-            <>
-              {/* #44: the loop's second queue, directly under Review —
-                  deciding drafts and confirming what they taught are the
-                  same morning's work, so they read together, each still its
-                  own surface. */}
-              <NavLink active={route === "corrections"} href="#corrections">
-                Corrections
-              </NavLink>
-              <NavLink active={route === "duo"} href="#duo">
-                Duo
-              </NavLink>
-              <NavLink active={route === "trust"} href="#trust">
-                Trust
-              </NavLink>
-              <NavLink active={route === "audit"} href="#audit">
-                Audit
-              </NavLink>
-              <NavLink active={route === "mirror"} href="#mirror">
-                Mirror
-              </NavLink>
-              {/* #45: with the your-duo surfaces — what it derived (Mirror),
-                  then what it knows (Knowledge). */}
-              <NavLink active={route === "knowledge"} href="#knowledge">
-                Knowledge
-              </NavLink>
-              {/* #47: what the duo is reachable through — the bridged
-                  channels and whether each is working, right after what it
-                  knows. */}
-              <NavLink active={route === "channels"} href="#channels">
-                Channels
-              </NavLink>
-              {/* #54: then where that knowledge runs out — what it keeps
-                  having to ask about. */}
-              <NavLink active={route === "escalations"} href="#escalations">
-                Escalations
-              </NavLink>
-            </>
-          )}
-          <NavLink active={route === "settings"} href="#settings">
-            Settings
-          </NavLink>
+          {api ? <DuoRoster api={api} /> : <NoDuoPanel onPairDuo={openPairDuo} condensed />}
+          {/* #129: the three modes, each with its own screens — see
+              navSections.ts for the map and the words. */}
+          <NavSections api={api} session={session} route={route} />
           {api && (
             <button
               className="mt-auto inline-flex min-h-11 items-center px-2 text-left type-provenance text-[var(--faint)]"

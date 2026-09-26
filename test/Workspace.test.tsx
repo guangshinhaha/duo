@@ -620,7 +620,7 @@ describe("#62 AC4 — signing out leaves nothing behind", () => {
 });
 
 describe("#62 — the both-credentials shell and the failing-connection edge", () => {
-  it("a paired member signed in opens on Conversations, with Review still above it", async () => {
+  it("a paired member signed in opens on Conversations, the first section above the duo's", async () => {
     seedSession();
     seedPairing();
     stubDaemonFetch();
@@ -629,12 +629,12 @@ describe("#62 — the both-credentials shell and the failing-connection edge", (
 
     await renderApp();
 
-    // Conversations is the default space; Review — the thing the app exists
-    // to open — keeps its place above it in the sidebar.
+    // Conversations is the default space, and #129's first section: people
+    // come before the duo's own screens, Review among them.
     expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
     const entries = [...screen.getByRole("navigation", { name: "Surfaces" }).querySelectorAll("a")].map((a) => a.textContent);
     expect(entries.indexOf("Conversations")).toBeGreaterThan(-1);
-    expect(entries.indexOf("Review")).toBeLessThan(entries.indexOf("Conversations"));
+    expect(entries.indexOf("Conversations")).toBeLessThan(entries.findIndex((text) => text?.startsWith("Review")));
   });
 
   it("a connection that cannot be established says so and offers the way out", async () => {

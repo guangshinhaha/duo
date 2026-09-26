@@ -233,7 +233,7 @@ describe("App — hash routing between the surfaces", () => {
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 
-  it("navigates to Escalations on #escalations, with the your-duo surfaces after Knowledge (#54)", async () => {
+  it("navigates to Escalations on #escalations, with the answering-others surfaces (#54, #129)", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(
       "fetch",
@@ -250,7 +250,10 @@ describe("App — hash routing between the surfaces", () => {
     const link = screen.getByRole("link", { name: "Escalations" });
     expect(link).toHaveAttribute("href", "#escalations");
     const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
-    expect(entries.indexOf("Knowledge")).toBeLessThan(entries.indexOf("Escalations"));
+    // #129: what it escalates sits with what it answered for others —
+    // the section before the training one, and above Settings.
+    expect(entries.indexOf("Audit")).toBeLessThan(entries.indexOf("Escalations"));
+    expect(entries.indexOf("Escalations")).toBeLessThan(entries.findIndex((text) => text?.startsWith("Review")));
     expect(entries.indexOf("Escalations")).toBeLessThan(entries.indexOf("Settings"));
 
     window.location.hash = "#escalations";
@@ -297,7 +300,7 @@ describe("App — hash routing between the surfaces", () => {
     await waitFor(() => expect(screen.getByTestId("search-overlay")).toBeInTheDocument());
   });
 
-  it("navigates to Channels on #channels, with the your-duo surfaces (#47)", async () => {
+  it("navigates to Channels on #channels, with the answering-others surfaces (#47, #129)", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(
       "fetch",
@@ -309,7 +312,8 @@ describe("App — hash routing between the surfaces", () => {
     const link = screen.getByRole("link", { name: "Channels" });
     expect(link).toHaveAttribute("href", "#channels");
     const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
-    expect(entries.indexOf("Knowledge")).toBeLessThan(entries.indexOf("Channels"));
+    expect(entries.indexOf("Escalations")).toBeLessThan(entries.indexOf("Channels"));
+    expect(entries.indexOf("Channels")).toBeLessThan(entries.findIndex((text) => text?.startsWith("Review")));
     expect(entries.indexOf("Channels")).toBeLessThan(entries.indexOf("Settings"));
 
     window.location.hash = "#channels";
