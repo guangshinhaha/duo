@@ -23,10 +23,10 @@ its job.
 |---|---|---|---|
 | P1 | **Attributed, always** | Generated text sits behind the hairline and under an attribution line ("Your duo", "{owner}'s duo"). Nothing else in the product uses a leading line. | Cover the words. You should still be able to tell which blocks the duo wrote. |
 | P2 | **Why costs zero clicks** | Provenance ("Drew on 3 sources", rules hit, confidence reading) is on screen by default: a rail on desktop, a drawer on phone. It is never behind a disclosure triangle. | Screenshot any draft. Can someone answer "why did it say that?" from the screenshot? |
-| P3 | **Quiet until it matters** | The UI is greyscale with one accent (Signal), which means *action available*. Attention is batched: one count (Review) and digests rather than a stream. | Squint at a screen. The only colour you see should be the thing waiting on you. |
+| P3 | **Quiet until it matters** | The UI is greyscale with one accent (Signal), which means *action available*. Attention is batched: one count (Waiting on you) and digests rather than a stream. | Squint at a screen. The only colour you see should be the thing waiting on you. |
 | P4 | **Decisions, not settings** | Trust changes when the owner answers a concrete example (approve this rule, accept this offer). It never happens through a toggle on an abstract grid. | Search the UI for a switch that changes what the duo may do. There should be none. |
 | P5 | **Cautious by design** | Promotions arrive as *offers*. Demotions arrive as *announcements*. Irreversible acts take two steps with Cancel focused, and they are disabled rather than queued when offline. | Every T4 path has two screens, and neither has the primary action focused. |
-| P6 | **Keyboard-first, touch-complete** | Every Review, Mirror and Corrections action has a single key. Every one of them also has a visible control of at least 44px on phone. | Clear Review with the trackpad unplugged. Then clear it one-handed on a phone. |
+| P6 | **Keyboard-first, touch-complete** | Every draft, rule and offer action has a single key. Every one of them also has a visible control of at least 44px on phone. | Clear Review with the trackpad unplugged. Then clear it one-handed on a phone. |
 
 Two rules sit above the principles, inherited from `vocabulary.md`. **A duo is never called an
 employee, assistant or teammate**, and **it never speaks as the owner.** The visual language
@@ -42,14 +42,14 @@ Good products have already solved pieces of this problem. We borrow the mechanis
 | Reference | What they got right | What we take | Where it lands | What we leave |
 |---|---|---|---|---|
 | **Granola** | Your notes render in black; AI-enhanced text renders in grey. Authorship is legible at a glance. | Authorship as a *visual register*, not a badge. | P1, the hairline, the duo's text treatment | Colour alone as the signal. Ours is structural, so it survives greyscale and colour-blindness. |
-| **Superhuman** | Inbox triage as a game you can win. One key per verb. "Inbox Zero" as a reward. | Single-key triage, J/K movement, a calm "Review is clear" end state. | Review, Corrections, Mirror | Undo-send. A send here posts to a real person, so we don't pretend a timer makes it reversible. |
-| **Linear** | Restraint: one accent, dense but airy lists, ⌘K for everything, Triage as its own inbox. | Triage as a separate surface from the work, ⌘K, and the single accent. | IA (Review above Conversations), search | Linear's density. Our list holds a handful of considered drafts, not hundreds of issues. |
+| **Superhuman** | Inbox triage as a game you can win. One key per verb. "Inbox Zero" as a reward. | Single-key triage, J/K movement, a calm "Nothing waiting on you" end state. | Review, Corrections, Mirror | Undo-send. A send here posts to a real person, so we don't pretend a timer makes it reversible. |
+| **Linear** | Restraint: one accent, dense but airy lists, ⌘K for everything, Triage as its own inbox. | A single count for what waits on you, ⌘K, and the single accent. | IA (Review above Conversations), search | Linear's density. Our list holds a handful of considered drafts, not hundreds of issues. |
 | **GitHub** (suggested changes) | A reviewer's edit renders as a diff that can be accepted in one click. | Edits shown as diffs, and "what your edit taught" as a reviewable object. | Edit-to-teach, Corrections | Code-review chrome: no line numbers, no file trees. |
 | **Stripe** (dashboard, test mode) | A persistent, unmissable banner tells you which mode you're in. Every object has an id and a log. | A persistent *mode ribbon* for whose voice you're reading, and an event log behind every object. | Attribution line, Audit | Stripe's teal-on-white. |
 | **Perplexity** | Numbered citations inline, with sources always visible beside the answer. | Sources beside the answer at zero clicks. | Provenance rail, trust reading on the asker page | Inline footnote numerals in drafts. Drafts are messages, and a colleague shouldn't read "[2]". |
-| **Spotify Wrapped / Apple Screen Time** | Your own data, reflected back as a portrait worth screenshotting. | The Mirror as a *portrait*: big editorial sentences built from your own numbers. | Mirror, onboarding | Gamified superlatives ("You're a top 1% answerer!"). |
+| **Spotify Wrapped / Apple Screen Time** | Your own data, reflected back as a portrait worth screenshotting. | The duo's Portrait as a *portrait*: big editorial sentences built from your own numbers. | Mirror, onboarding | Gamified superlatives ("You're a top 1% answerer!"). |
 | **Things 3** | Calm typography, generous whitespace, and a *Today* count that doesn't nag. | Warmth through type and spacing rather than colour. | Global type scale | — |
-| **Apple** (permission prompts) | Permission is asked in context, at the moment it matters, in plain words. | Trust offers appear in Review, beside the draft that earned them. | Promotion offers | Blanket "Allow always". |
+| **Apple** (permission prompts) | Permission is asked in context, at the moment it matters, in plain words. | Trust offers arrive as a card in your duo's chat. | Promotion offers | Blanket "Allow always". |
 | **Raycast** | A command bar that does things, not only finds them. | ⌘K "Search what your duo knows" with actions on results. | Search | — |
 
 ---
@@ -129,7 +129,7 @@ above.
   by Edge borders. The only shadow is on dialogs.
 - **Motion**: `--t` (150ms, ease-out) on state change only. Three named moments are allowed more:
   - *Draft arrives*: fade-up 8px over 200ms, and the hairline draws in over 300ms.
-  - *Review clears*: the count ticks down, then settles to "Review is clear" (no confetti).
+  - *Waiting on you clears*: *Waiting on you clears*: the count ticks down, then settles to "Nothing waiting on you." (no confetti).
   - *Demotion*: the trust cell steps down one level with a 300ms cross-fade, and the sentence
     announcing it arrives at the same time.
   - Everything respects `prefers-reduced-motion` by collapsing to instant.
@@ -162,11 +162,11 @@ It is always present, it is never truncated before the name, and it is never the
 │█  Refunds within 30 days are automatic;    │  ← hairline on the leading edge (Moss/Amber/Ash)
 │█  after that, route to Finance via …       │     square leading corners, 10px trailing
 │                                             │
-│  [Send ⏎]  [Edit E]  [Ignore X]      ⌘K ↗  │  ← Signal only on the primary verb
+│  [Send ⏎]  [Edit E]  [Dismiss X]     ⌘K ↗  │  ← Signal only on the primary verb
 └─────────────────────────────────────────────┘
 ```
 
-Primary action: Send (Signal fill). Secondary: Edit, Ignore (ghost). When offline the primary
+Primary action: Send (Signal fill). Secondary: Edit, Dismiss (ghost). In the chat-first shell this card is the **draft tray**, docked above the composer and never in the transcript (§6.2). When offline the primary
 action is disabled rather than queued (AR-15), and the reason shows under the button.
 
 ### 4.3 Provenance rail
@@ -176,7 +176,7 @@ fixed order: **Trust reading** (words, never a number), **Standing orders hit** 
 the rule), and **Drew on N sources** (each one opens the source). An empty block says so ("No
 standing order applied"). It never disappears.
 
-### 4.4 Rule card (Mirror, Corrections)
+### 4.4 Rule card (profile, rules-to-confirm card)
 
 A standing order in plain words, set in Interface 16 with **evidence stacked beneath it**: the
 threads it came from, and one line each. Its verbs are Approve (A), Edit (E) and Reject (R). A
@@ -185,7 +185,7 @@ rule's evidence can be deleted from the card, which deletes the rule along with 
 ### 4.5 Trust cell
 
 This is one (topic × tier) cell in the grid. It is read-only. It changes through only two
-routes: an **offer** accepted in Review, or a **plain-words grant**. T4 renders as a hatched,
+routes: an **offer** accepted in Your duo's chat, or a **plain-words grant**. T4 renders as a hatched,
 empty cell labelled "Never on its own". It is not a disabled switch, because no switch exists
 there to disable (AR-17).
 
@@ -195,12 +195,12 @@ there to disable (AR-17).
 
 Each pattern names the problem, the mechanism, the words, and the keys.
 
-### 5.1 Triage (Review)
+### 5.1 Triage (Waiting on you)
 *Problem:* drafts in a transcript scroll away, and an ignored draft looks like an unread one (AR-14).
-*Pattern:* Review is a queue with a count. It opens on the oldest undecided item. J/K moves
-through the queue. **⏎ Send**, **E Edit**, **X Ignore**, **O Open the conversation**. Ignore can be
+*Pattern:* **Waiting on you** is a filter on the chat list with a count. It opens on the oldest undecided chat. J/K moves
+between waiting chats. **⏎ Send**, **E Edit**, **X Dismiss**. Dismiss can be
 undone for 5s (⌘Z) because nothing has left the machine. Send cannot be undone, and the UI
-doesn't pretend otherwise. The empty state reads "Review is clear.", with the time of the last
+doesn't pretend otherwise. The empty state reads "Nothing waiting on you.", with the time of the last
 decision and nothing else.
 *Borrowed from:* Superhuman, Linear Triage.
 
@@ -208,13 +208,13 @@ decision and nothing else.
 *Problem:* an edit is the richest training signal, but only if the owner can see what it taught.
 *Pattern:* Edit opens the draft in place, with the hairline still visible. On **Send edited**
 (⌘⏎) a one-line toast confirms the send and adds: "Queued as a correction candidate", which links to
-Corrections. In Corrections the edit renders as a diff (removed text struck through in Dust,
+the duo's Rules. There the edit renders as a diff (removed text struck through in Dust,
 added text in Paper), with the proposed rule beneath it.
 *Borrowed from:* GitHub suggested changes.
 
-### 5.3 Approve a draft of yourself (Mirror)
+### 5.3 Approve a draft of yourself (profile and cards)
 *Problem:* nobody will write their own personality.
-*Pattern:* the Mirror opens on a **portrait**, three to five Reflection-scale sentences built from
+*Pattern:* Profile › Portrait opens on a **portrait**, three to five Reflection-scale sentences built from
 the owner's own counts ("You were asked about deployment access 23 times in six months."). Below
 the portrait sit rule cards, one decision at a time, with evidence. Approve (A) and Reject (R)
 advance the queue. Progress shows as "4 of 12", never as a percentage.
@@ -222,7 +222,7 @@ advance the queue. Progress shows as "4 of 12", never as a percentage.
 
 ### 5.4 Offer and announce (the trust ledger)
 *Problem:* trust should be felt as granted, and losing it should never be a surprise.
-*Pattern:* a **promotion** is an offer card in Review, sitting beside the draft that earned it:
+*Pattern:* a **promotion** is an offer card in Your duo's chat, naming the drafts that earned it:
 "Your duo has answered 12 deploy-access questions without an edit. Let it answer these on its
 own?" It has two buttons, **Let it answer** and **Keep asking me**. A **demotion** has no
 buttons. It is one sentence in the draft's attribution line and in Audit: "I got that wrong,
@@ -254,7 +254,7 @@ offline, with a reason, and are never queued. The offline bar sits at the top of
 says what still works.
 
 ### 5.9 Batched attention
-The dock or tray badge shows **the Review count only**. Escalations interrupt only when marked
+The dock or tray badge shows **the Waiting-on-you count only**. Escalations interrupt only when marked
 urgent. Everything else waits for the digest. Do not disturb holds the duo's acts too, and "what
 was missed" collects them.
 
@@ -273,14 +273,14 @@ here."
 | Scope | Key | Action |
 |---|---|---|
 | Global | ⌘K | Search what your duo knows |
-| Global | G then R / C / M / T | Go to Review / Conversations / Mirror / Trust |
+| Global | ⌘1–9 | Open the first nine chats (Your duo is ⌘1) |
+| Global | ⌘I | Toggle the inspector |
 | Global | ? | Show the keyboard map |
-| Review | J / K | Next / previous |
-| Review | ⏎ | Send |
-| Review | E | Edit (⌘⏎ Send edited) |
-| Review | X | Ignore (⌘Z within 5s to undo) |
-| Review | O | Open the conversation |
-| Mirror, Corrections | A / R / E | Approve / Reject / Edit |
+| Chats | J / K | Next / previous chat (in Waiting on you: next waiting chat) |
+| Draft tray | ⏎ | Send |
+| Draft tray | E | Edit (⌘⏎ Send edited) · Answer it, on a passed-on question |
+| Draft tray | X | Dismiss (⌘Z within 5s to undo) |
+| Rule cards | A / R / E | Approve / Reject / Edit |
 | Conversation | / | Search what was said |
 
 ---
@@ -300,69 +300,74 @@ Owner ─owns─▶ Duo ─drafts─▶ Draft ─(send/edit/ignore)─▶ Outcom
 Member ─in─▶ Conversation ◀─in─ Person | Colleague's duo
 ```
 
-### 6.2 Navigation: three groups, one spine
+### 6.2 Navigation: a messenger, three places
 
-The shipped sidebar is a flat list of twelve peers. §1.5 already argued for grouping, and this
-section makes the grouping concrete. Group headings are labels, not links.
+> **Revised 2026-09-26** (epic #138): supersedes the grouped-sidebar proposal that was here.
+
+The app is **Chats, Your duo, Settings.** One list is home. Your duo is always its first, pinned
+row. The three-group sidebar shipped in #132 is replaced by this.
 
 ```
-┌─────────────────────────────┐
-│ █│ duo        Your duo ▾     │  ← roster (switch duos)
-│                              │
-│ Review               ③       │  ┐
-│ Corrections          2       │  ├ Inbox: what waits on you.
-│ Confirmations        1       │  ┘  Confirmations hides at zero.
-│                              │
-│ CONVERSATIONS            +   │  ┐
-│  · Ana                       │  ├ The member's space. Duos are
-│  · project-x                 │  │ entries, not a section.
-│  · Bose's duo                │  ┘
-│                              │
-│ YOUR DUO                     │  ┐
-│  Ask                         │  │ (today's "Duo" route)
-│  Mirror                      │  ├ What it is, knows, may do,
-│  Knowledge                   │  │ and where it runs out.
-│  Trust                       │  │
-│  Escalations                 │  ┘
-│                              │
-│ Audit · Channels · Settings  │  ← rare: one row, off the spine
-└─────────────────────────────┘
+┌──────────────────────┬────────────────────────────┬───────────────┐
+│ Chats     ✎  ⚙       │ ▮ Aisha · via Slack        │ Why it drafted │
+│ ⌕ Search        ⌘K   │                            │ ─────────────  │
+│ [All] [Waiting on you ③]│  Aisha: how do I get…    │ Trust reading  │
+│                      │                            │ Standing order │
+│ ▮ Your duo    ●      │ ┌█ Your duo · draft ─────┐ │ Drew on 3      │
+│ ──────────────       │ │ Request read-only…     │ │ Who's asking   │
+│ AR Aisha   Slack  ①  │ │ [Send ⏎][Edit E][✕ X]  │ │                │
+│ BA Bala           ①  │ └────────────────────────┘ │                │
+│ #  release Slack  ①  │ [ Message Aisha…        ↑ ]│                │
+│ WL Wei Ling          │                            │                │
+│ ▮ Bose's duo         │                            │                │
+└──────────────────────┴────────────────────────────┴───────────────┘
 ```
 
-Changes from what ships:
+1. **Chats is home.** People, groups, bridged Slack threads and colleagues' duos in one list.
+   Filters: **All · Waiting on you (n)**. A duo's row carries the mark, never initials or a photo.
+2. **Your duo is a chat.** Pinned first, always present, works with no workspace. Ask it anything;
+   answers arrive behind the hairline with their sources. Training arrives here as occasional
+   cards: rules to confirm, trust offers, "I got that wrong" notices, a weekly digest.
+3. **The draft tray** docks above the composer of the chat a draft answers: attribution line,
+   hairline state, the draft, a one-line why, and **Send ⏎ · Edit E · Dismiss X**. It is never in the
+   transcript. A passed-on question shows **Answer it**; a refusal shows the reason only.
+4. **The inspector** (desktop, ⌘I) shows why a draft says what it says — trust reading, standing
+   orders hit, sources, who asked. With no draft it shows the contact; in Your duo it shows the
+   profile. On phone the tray's **Why?** opens the same content as a bottom sheet.
+5. **The duo's profile** (tap its name): **Portrait**, **Knows**, **May do**, **Rules**,
+   **Activity**. It is where you go to understand the duo, never where you must go to use it.
+6. **Settings** (list header): Notifications · Appearance · Devices · Ask links · Connect to
+   Claude · Advanced (connection) · End this duo.
 
-1. **Group into Inbox / Conversations / Your duo / footer.** The groups follow the order of the
-   owner's morning: decide, talk, tune.
-2. **Rename "Duo" to "Ask".** The route is where you ask your duo things, and the vocabulary already
-   owns the verb ("Ask your duo…"). "Duo" as a nav label collides with the roster above it.
-3. **Hide Confirmations at zero.** It is a queue, not a place. When it has items it sits in the
-   Inbox with a count in Ash.
-4. **Move Channels to the footer.** Connecting happens elsewhere (vocabulary: *channel*), and the
-   owner visits Channels only to learn why something is quiet.
-5. **Keep Knowledge and Mirror separate.** Mirror covers *who it thinks you are* (rules, portrait).
-   Knowledge covers *what it has read* (sources). They are different questions.
+Where each old screen went: Review → tray + Waiting on you · Conversations → Chats · Duo → the
+Your duo chat · Confirmations → a card in the chat and in Your duo · Corrections → rule cards +
+Profile › Rules · Escalations → a tray in the source chat + Profile › Activity · Mirror →
+Profile › Portrait · Trust → Profile › May do · Knowledge, Channels → Profile › Knows · Audit →
+Profile › Activity · Settings → Settings in sections.
 
 ### 6.3 Addresses
 
-| Surface | Hash | Group |
-|---|---|---|
-| Review | `#review` (default without a workspace) | Inbox |
-| Draft | `#draft/:id` | Inbox (Review stays lit) |
-| Corrections | `#corrections` | Inbox |
-| Confirmations | `#confirmations` | Inbox |
-| Conversations | `#conversations` (default with a workspace) | Conversations |
-| Room / thread | `#room/:id`, `#thread/:room/:root` | Conversations |
-| Ask | `#duo` (keep the hash; relabel only) | Your duo |
-| Mirror / Knowledge / Trust / Escalations | `#mirror`, `#knowledge`, `#trust`, `#escalations` | Your duo |
-| Audit / Channels / Settings | `#audit`, `#channels`, `#settings` | Footer |
-| Asker page | `ask.html?…` | Outside the app |
-| Landing | `/welcome.html` | Outside the app |
+| Surface | Hash |
+|---|---|
+| Chats (home) | `#chats` (the default, with or without a workspace) |
+| A chat / a thread | `#chat/:id`, `#chat/:id/thread/:root` |
+| Your duo | `#duo` |
+| Your duo's profile | `#duo/profile`, `#duo/profile/:tab` (portrait · knows · may · rules · activity) |
+| Settings | `#settings`, `#settings/:section` |
+| Asker page | `ask.html?…` (outside the app) |
+| Landing / style guide | `/welcome.html`, `/design.html` (outside the app) |
+
+Old hashes redirect: `#review` → `#chats` filtered to Waiting on you, `#draft/:id` → that draft's
+chat, `#conversations` → `#chats`, `#room/:id` → `#chat/:id`, `#corrections` → `#duo`,
+`#mirror` → `#duo/profile/portrait`, `#knowledge`/`#channels` → `#duo/profile/knows`, `#trust` →
+`#duo/profile/may`, `#audit`/`#escalations` → `#duo/profile/activity`.
 
 ### 6.4 Phone
 
-The phone layout folds the same map rather than replacing it (§1.5). The sidebar becomes the home
-screen in the same order. Review stays on top with its count, and the provenance rail becomes a
-drawer that is half-open by default on a draft. There is no tab bar.
+A push stack over the same structure: **Chats → Chat → Profile or sheet**, with the system back
+gesture. No tab bar, and Settings sits behind the list header. Swipe a row left to send a
+**confident** draft and right to dismiss it (undoable); a hedged draft or a passed-on question never
+has swipe-send. The tray is thumb-height and **Why?** opens a bottom sheet.
 
 ---
 
@@ -383,10 +388,10 @@ The words are governed by `vocabulary.md`. The design language adds three tone r
 
 1. Name the tokens (§3.2) in `tokens.css` comments. This is a zero-risk change.
 2. Square the draft's leading corners and add the attribution line wherever a duo block lacks one.
-3. Regroup the sidebar (§6.2) and relabel Duo to Ask.
+3. Replace the sidebar with the chat-first shell (§6.2, epic #138).
 4. Add the keyboard map (§5) with a `?` overlay.
 5. Add JetBrains Mono for the identifier role, and Newsreader for the Mirror portrait only.
-6. Add the promotion offer card to Review (§5.4). This depends on the #179 trust-surface ratification.
+6. Add the promotion offer card to Your duo's chat (§5.4). This depends on the #179 trust-surface ratification.
 
 The landing page (`public/welcome.html`) is the first surface built fully in this language, and
 it doubles as its reference implementation.

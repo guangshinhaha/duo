@@ -199,12 +199,22 @@ product has since grown a native message layer (#57, the two-store architecture)
 product answers "where do I talk to people" before "where do I inspect things". The section's two
 original arguments survive that change and get stronger; a third joins them.
 
-**Drafts are not messages.** The Send / Edit / Ignore loop is where the product's value and its
-entire training signal live. In a chat transcript an action has no home: it scrolls away, and an
-ignored draft looks exactly like an unread one. **Review is its own surface with its own count**,
-not a message type (AR-14) — and now it is triage for drafts *wherever they were born*: a question
-asked in a native conversation and a message bridged from Slack land in the same Review, because
-both are "your duo drafted a reply and you have not decided."
+**Drafts are not messages.** The Send / Edit / Dismiss loop is where the product's value and its
+entire training signal live. In a chat transcript an action has no home: it scrolls away, and a
+dismissed draft looks exactly like an unread one. That argument stands and the chat-first redesign
+(epic #138, decided 2026-09-26) keeps it: **a draft never lives in the transcript.** What changed is
+*where it lives instead*. It docks in a **draft tray above the composer of the chat it answers**,
+visible only to the owner, so the decision happens beside its context rather than in a separate
+Review surface. **Review is retired as a place** and becomes the **Waiting on you** filter on the
+chat list, with its own count (AR-14, superseded). Drafts still come from *wherever they were
+born*: a question asked in a native conversation and a message bridged from Slack both surface in
+the tray of their chat, because both are "your duo drafted a reply and you have not decided."
+
+**Why the reversal.** The pilot's named risk is non-use, not wrong answers
+(`digital-duo-direction`). A control panel of queues and settings gives an owner no reason to open
+the app unless a badge forces them to, while a messenger they already live in does. Training
+therefore moves to the background: it arrives as occasional cards in the owner's own duo chat, and
+its depth lives in the duo's profile.
 
 **The duo is not you.** `concept.md` is unambiguous — *"it never poses as you"*, *"always
 labelled."* Slack's grammar is avatar + name + body, identical chrome for a person and a bot.
@@ -219,44 +229,38 @@ owner's side, never on yours.
 
 ```
 ┌──────────────────┬───────────────────────────────┬──────────────┐
-│ Review ③        │  Ana · project-x              │              │
-│                  │                               │              │
-│ Conversations    │  Ana: what's our refund       │  provenance  │
-│  · Ana           │      policy?                  │   rules hit  │
-│  · Bose          │  ┌─ your duo · draft ─┐       │   past pairs │
-│  · project-x     │  │ Refunds within 30  │       │   confidence │
-│  · …             │  │ days…              │       │              │
-│                  │  └────────────────────┘       │  (about the  │
-│ Your duo         │  [Send] [Edit] [Ignore]       │   duo that   │
-│  Mirror          │                               │   drafted)   │
-│  Trust           │  messages: queue offline;     │              │
-│                  │  Send never does (#61)        │              │
-│ Audit            │  [ composer ]                 │              │
-│ Settings         │                               │              │
+│ Chats            │  Aisha · via Slack            │ Why it drafted│
+│ [All][Waiting ③] │                               │  trust reading│
+│                  │  Aisha: how do I get read     │  rule hit     │
+│ ▮ Your duo       │      access to the logs?      │  sources      │
+│ ───────────      │                               │              │
+│  Aisha      ①    │ ┌ █│ your duo · draft ─────┐  │ (inspector,   │
+│  Bala       ①    │ │ Request read-only…       │  │  toggle ⌘I)   │
+│  release    ①    │ │ [Send] [Edit] [Dismiss]  │  │              │
+│  Wei Ling        │ └──────────────────────────┘  │              │
+│  Bose's duo      │ [ Message Aisha…           ↑ ]│              │
 └──────────────────┴───────────────────────────────┴──────────────┘
 ```
 
-- **What is primary.** Two things own the spine. Review sits **above the conversation list**
-  because it is the thing you open the app for (AR-14); Conversations are the default space —
-  people, groups and duos, all entries in that one list.
-- **Where drafts live.** In Review — never in the transcript. The draft you are deciding renders
-  in its conversation, with its provenance rail, *because Review brought you there*; the
-  transcript itself records only outcomes. (#68: the same draft can also be decided from the
-  conversation it answers — in a region beside the composer, outside the transcript, through
-  the same card — and either place clears it from both.) The rail is permanent, not a disclosure triangle:
-  "why did it say that" is the product's core promise and it should cost zero clicks.
-- **Mirror and Trust** are about your own duo, grouped under Your duo, below the conversations.
-- **Audit and Settings** are global and rare; they sit at the bottom, off the spine.
+- **What is primary.** One list of chats owns the spine. **Your duo** is always pinned first, even
+  with no workspace, so there is always something to talk to. People, groups, bridged Slack
+  threads and colleagues' duos are all entries in that one list.
+- **Where drafts live.** In the draft tray, above the composer of their chat — never in the
+  transcript, which records only outcomes (a sent draft appears as the owner's own message with a
+  footnote only the owner sees). The **why** is permanent, not a disclosure triangle: the inspector
+  column on desktop, a bottom sheet on phone, one tap.
+- **Training is background.** Rules learned from edits, trust offers, demotion notices and a weekly
+  digest arrive as cards in Your duo. Everything deeper lives in the duo's **profile**, opened by
+  tapping its name: Portrait, Knows, May do, Rules, Activity. Nothing about it is required to use
+  the app.
+- **Settings** is global and rare, reached from the list header.
 
-**It survives a narrow window.** Phone-width folds the same map, it does not replace it: the
-sidebar becomes the conversation list with Review still on top and its count still its own, the
-provenance rail becomes a drawer on the draft — zero clicks stays zero clicks, one swipe on a
-phone. No tab bar, no second product: a different arrangement of the same structure.
+**Phone** is a push stack over the same structure — Chats → Chat → Profile or sheet — with no tab
+bar and no second product.
 
-The shipped shell — Review, Duo, Trust, Audit, Mirror — was this map's bridge-era cut: a
-conversation list with exactly one entry (your own duo), which is why it read as a viewer. The
-workspace layer has since landed its first slices — sign-in, conversations, a room (#108, #109)
-— and the map above is where the rest of it grows.
+The shipped shell before this change — a flat then a three-group sidebar (#129) of Review, Duo, Trust,
+Audit, Mirror and the rest — was the bridge-era cut, and it read as a viewer for a duo the owner
+never talked to.
 
 ## 1.6 What "sleek" means here, concretely
 
@@ -337,11 +341,18 @@ rather than a decision anyone made.
 generated text. This is a lint rule, not a design guideline.**
 
 ### AR-14 · The draft loop drowns in a chat transcript — HIGH
-Send / Edit / Ignore is the correction loop's only input. In a scrolling transcript, an action has
-no persistent home and an ignored draft is indistinguishable from an unread one — which also
-corrupts `drafts.outcome`, since "ignored" stops meaning a judgement.
-**→ Review as a first-class surface with its own badge count; an untouched draft stays there
-until it is dispositioned.**
+Send / Edit / Dismiss is the correction loop's only input. In a scrolling transcript, an action has
+no persistent home and a dismissed draft is indistinguishable from an unread one — which also
+corrupts `drafts.outcome`, since "dismissed" stops meaning a judgement.
+**→ (original) Review as a first-class surface with its own badge count; an untouched draft stays
+there until it is dispositioned.**
+
+> **Superseded 2026-09-26 (epic #138).** The *problem* stands; the *answer* changed. The draft moves
+> to a tray above its chat's composer (still outside the transcript), and Review becomes the
+> "Waiting on you" filter with the same count. **Kept:** drafts never in the transcript; an untouched
+> draft persists until decided; `outcome` still records a judgement. **Changed:** the decision happens
+> in the chat it answers, not in a separate surface. **Why:** the risk is non-use, and a queue you
+> must visit is a reason not to open the app.
 
 ### AR-15 · The phone is asleep when the Mac is — MEDIUM
 `AR-10` accepted "the duo is asleep when your laptop is" for v1, reasoning that if you were asleep
