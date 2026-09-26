@@ -141,6 +141,8 @@ domain types.
 | `POST` | `/ask-links` | `MintedAskLink` — 201, the token shown once (`{ name, expiresInHours? }`) | `serve/tokens` |
 | `POST` | `/ask-links/:id/revoke` | 204 — the link stops on its next use | `serve/tokens` |
 | `POST` | `/devices` | `MintedDevice` — 201, pairs another device from a paired one; the token shown once | `serve/tokens` |
+| `GET` | `/connector` | `ConnectorStatus` — whether a claude.ai connector exists (its URL is never recoverable), plus the prompt the owner pastes into claude.ai to feed past chats (digital-duo #227) | `serve/mcp`, `serve/tokens` |
+| `POST` | `/connector` | `MintedConnector` — 201, mints the connector URL path shown once and revokes any earlier one (digital-duo #227) | `serve/tokens` |
 | `GET` | `/trust/promotions` | `PromotionOffer[]` — the batched digest (#54) | `trust/promotion` |
 | `POST` | `/trust/promotions/:topicId/:tier` | the moved `TrustCell` — `{ decision: "accept" \| "decline" }`; nothing promotes without it | `trust/promotion` |
 | `POST` | `/trust/grant` | `GrantOutcome` — `{ scopeText, tier, topicId? }`; "ambiguous" returns candidates for a picker, never a guess; T4 absent (trust-surface.md) | `trust/grants` |

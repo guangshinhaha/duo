@@ -574,6 +574,21 @@ export interface MintedDevice {
   readonly token: string;
 }
 
+// `GET /connector` and `POST /connector` (digital-duo#227): the claude.ai connector.
+// GET says whether one exists (its URL is never recoverable) and carries the prompt
+// the owner pastes into claude.ai to feed their past chats; POST answers the URL
+// path exactly once, to be joined to the daemon address.
+export interface ConnectorStatus {
+  readonly connector: { readonly id: string; readonly createdAt: string } | null;
+  readonly historyPrompt: string;
+}
+
+export interface MintedConnector {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly path: string;
+}
+
 // `GET /trust/promotions` — the core's `PromotionOffer`, verbatim.
 export interface PromotionOffer {
   readonly topicId: string;

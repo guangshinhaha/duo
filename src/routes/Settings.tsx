@@ -15,6 +15,7 @@ import {
 import { EndDuoSection } from "../components/EndDuoSection.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { PairedDevices } from "../components/PairedDevices.js";
+import { ConnectToClaude } from "../components/ConnectToClaude.js";
 import { PairAnotherDevice } from "../components/PairAnotherDevice.js";
 import { AskLinks } from "../components/AskLinks.js";
 import { InvitePeople } from "../components/InvitePeople.js";
@@ -316,6 +317,7 @@ export function Settings({
 
       {api && <PairedDevices api={api} onConfigChange={onConfigChange} />}
       {api && <PairAnotherDevice api={api} />}
+      {api && <ConnectToClaude api={api} />}
       {api && <AskLinks api={api} />}
       {api && account?.isAdmin && <InvitePeople api={api} origin={account.origin} />}
 
