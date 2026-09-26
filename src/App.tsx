@@ -10,11 +10,12 @@ import { endedNoticeText, useEndedMarker } from "./api/lifecycle.js";
 import { useDraftReadySocket } from "./api/ws.js";
 import { SyncStatusProvider } from "./sync.js";
 import { OfflineBar } from "./components/OfflineBar.js";
+import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
 import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
 import { setDockBadgeCount } from "./dockBadge.js";
 import { setTrayPendingCount, wireTrayReview } from "./tray.js";
-import { usePendingDrafts } from "./api/queries.js";
+import { usePendingDrafts, usePendingT4 } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Settings } from "./routes/Settings.js";
@@ -28,6 +29,7 @@ import { ThreadView } from "./routes/Thread.js";
 import { Duo } from "./routes/Duo.js";
 import { Trust } from "./routes/Trust.js";
 import { Audit } from "./routes/Audit.js";
+import { Confirmations } from "./routes/Confirmations.js";
 import { Mirror } from "./routes/Mirror.js";
 import { Knowledge } from "./routes/Knowledge.js";
 import { Channels } from "./routes/Channels.js";
@@ -95,6 +97,7 @@ type Route =
   | "review"
   | "conversations"
   | "corrections"
+  | "confirmations"
   | "duo"
   | "trust"
   | "audit"
@@ -174,6 +177,9 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
   }
   if (hash === "#corrections") {
     return "corrections";
+  }
+  if (hash === "#confirmations") {
+    return "confirmations";
   }
   if (hash === "#duo") {
     return "duo";
@@ -289,6 +295,7 @@ function NavLink({
   active,
   href,
   count,
+  badgeTestId = "review-badge",
   onClick,
   children,
 }: {
@@ -296,6 +303,8 @@ function NavLink({
   href: string;
   /** #22: a live count, shown only when non-zero — absent for entries that carry none. */
   count?: number;
+  /** #52: which count this is — Review's by default; a second badge needs its own name for a test (and a reader) to tell them apart. */
+  badgeTestId?: string;
   /** #38: the folded navigation passes this so following a link also
    * dismisses it — an overlay must never outstay the route it chose. */
   onClick?: () => void;
@@ -312,7 +321,7 @@ function NavLink({
       {children}
       {count !== undefined && count > 0 && (
         <span
-          data-testid="review-badge"
+          data-testid={badgeTestId}
           className="ml-auto rounded-full bg-[var(--accent)] px-2 type-identifier text-[var(--bg)]"
         >
           {count}
@@ -353,6 +362,21 @@ function ReviewLink({ api, active, onNavigate }: { api: DuoApiConfig; active: bo
 }
 
 /**
+ * #52: the Confirmations entry and its count — what is waiting on the
+ * owner's explicit yes. The same polled read the watcher and the surface
+ * hold (one query, deduped), so the badge and the notification can never
+ * disagree about what is waiting.
+ */
+function ConfirmationsLink({ api, active, onNavigate }: { api: DuoApiConfig; active: boolean; onNavigate?: () => void }) {
+  const { data } = usePendingT4(api);
+  return (
+    <NavLink active={active} href="#confirmations" count={data?.length ?? 0} badgeTestId="confirmations-badge" onClick={onNavigate}>
+      Confirmations
+    </NavLink>
+  );
+}
+
+/**
  * #38: the phone's notification surrogate (AR-15 — no push can reach a
  * browser tab over Tailscale), so Review's count is read without opening
  * anything. Same query the Review link observes; the badge is the point,
@@ -366,6 +390,20 @@ function TopBarCount({ api }: { api: DuoApiConfig }) {
   }
   return (
     <span data-testid="topbar-count" className="rounded-full bg-[var(--accent)] px-2 type-identifier text-[var(--bg)]">
+      {count}
+    </span>
+  );
+}
+
+/** #52: the phone's top-bar count for confirmations — beside Review's, its own number, because it is its own queue. */
+function TopBarConfirmations({ api }: { api: DuoApiConfig }) {
+  const { data } = usePendingT4(api);
+  const count = data?.length ?? 0;
+  if (count === 0) {
+    return null;
+  }
+  return (
+    <span aria-label={`${count} waiting for your confirmation`} data-testid="topbar-confirmations" className="rounded-full bg-[var(--refused)] px-2 type-identifier text-white">
       {count}
     </span>
   );
@@ -428,6 +466,7 @@ function MobileNav({
         {api ? <DuoRoster api={api} /> : <NoDuoPanel onPairDuo={onPairDuo} condensed />}
         <nav aria-label="Surfaces" className="flex flex-col gap-1">
           {api && <ReviewLink api={api} active={onReview} onNavigate={close} />}
+          {api && <ConfirmationsLink api={api} active={route === "confirmations"} onNavigate={close} />}
           {session && (
             <NavLink
               active={route === "conversations" || (typeof route === "object" && ("room" in route || "thread" in route))}
@@ -571,6 +610,8 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       return <Escalations api={shell.api!} />;
     case "corrections":
       return <Corrections api={shell.api!} />;
+    case "confirmations":
+      return <Confirmations api={shell.api!} />;
     case "duo":
       return <Duo api={shell.api!} />;
     case "trust":
@@ -647,6 +688,13 @@ function AppShell() {
   // (C5) it posts "a new draft is waiting", tagged so a click opens that
   // draft's own address (#25); in a plain browser tab notifyDraftReady
   // quietly no-ops (feature-detected, never throws).
+  const announce = (text: string): void => {
+    setArrivalNotice(text);
+    if (noticeTimer.current !== null) {
+      clearTimeout(noticeTimer.current);
+    }
+    noticeTimer.current = setTimeout(() => setArrivalNotice(""), 5000);
+  };
   useDraftReadySocket(api, (draftId) => {
     // #69: the push names the draft; what the draft IS decides the words.
     // The duo escalating or refusing on the owner's behalf is its own
@@ -681,11 +729,7 @@ function AppShell() {
     // a screen reader. The notice self-clears, because a live region
     // does not repeat identical content: the next arrival needs an empty
     // region to fill.
-    setArrivalNotice("A draft is waiting in the Review queue.");
-    if (noticeTimer.current !== null) {
-      clearTimeout(noticeTimer.current);
-    }
-    noticeTimer.current = setTimeout(() => setArrivalNotice(""), 5000);
+    announce("A draft is waiting in the Review queue.");
   });
 
   // #25/#69: one subscription for the app's life — a clicked notification
@@ -852,6 +896,7 @@ function AppShell() {
         <header className="flex items-center justify-between gap-2 border-b border-[var(--edge)] p-3 md:hidden" data-testid="mobile-topbar">
           <span className="px-1 type-provenance uppercase text-[var(--faint)]">Duo</span>
           {api && <TopBarCount api={api} />}
+          {api && <TopBarConfirmations api={api} />}
           <button
             aria-label="Open navigation"
             className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2"
@@ -907,6 +952,9 @@ function AppShell() {
                   lit entry while one is open, so the way back is always
                   named. */}
               <ReviewLink api={api} active={route === "review" || (typeof route === "object" && "draft" in route)} />
+              {/* #52: what waits on an explicit yes sits right under Review
+                  — the two queues the owner opens the app for. */}
+              <ConfirmationsLink api={api} active={route === "confirmations"} />
             </>
           ) : (
             <NoDuoPanel onPairDuo={openPairDuo} condensed />
@@ -995,6 +1043,11 @@ function AppShell() {
           <p className="sr-only" role="status">
             {arrivalNotice}
           </p>
+          {/* #52: the confirmation moment's ear — while paired, the pending
+              confirmations are read on an interval (the daemon has no push
+              for them); a new one notifies and announces here. It holds no
+              way to confirm anything. */}
+          {api && <ConfirmationWatcher api={api} onArrived={() => announce("An action is waiting for your confirmation.")} />}
           {/* #46: over the screen, never instead of it — the main surface
               stays mounted underneath while search is open. */}
           {searchOpen && api && <SearchOverlay api={api} onClose={() => setSearchOpen(false)} />}

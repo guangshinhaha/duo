@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
 
 /**
  * Native notifications — build step C5 (`client-tech-design.md` §1.7 /
@@ -80,6 +81,30 @@ export async function postNotification(body: string, hash: string): Promise<void
 
 export async function notifyDraftReady(draftId: string): Promise<void> {
   await postNotification("A new draft is waiting for your review.", `#draft/${encodeURIComponent(draftId)}`);
+}
+
+/**
+ * #52: "the duo needs you to confirm before it acts". Deliberately says
+ * nothing about WHAT — the words of a consequence belong on the surface that
+ * can state all of it, where the owner reads them before any control; a
+ * notification banner is the wrong place to summarise an irreversible step.
+ * The click opens the confirmations surface and does nothing else: no
+ * notification is ever a way to confirm.
+ *
+ * The duo's own acts are governed by no conversation's setting, but they
+ * are the owner's to quiet on this device like any other (#69): while
+ * do-not-disturb holds, the words go to the record Settings shows instead,
+ * pointing at the same surface — the request itself stays visible in the
+ * app either way, this only decides whether the shell speaks.
+ */
+export async function notifyConfirmationWaiting(): Promise<void> {
+  const body = "Your duo needs your confirmation before it acts.";
+  const hash = "#confirmations";
+  if (isDndActive(readDndPrefs(), new Date())) {
+    recordMissed({ at: Date.now(), body, hash });
+    return;
+  }
+  await postNotification(body, hash);
 }
 
 /**
