@@ -24,9 +24,11 @@ in this pass).
   composer asks via the existing `POST /drafts` — trimmed question, targeted at the selected group —
   and disposition stays in Review, by design.
 - **`src/routes/Trust.tsx`** (#9) — the trust grid at `#trust`: per topic, the duo's tier, autonomy
-  level, and whether it earned that or was granted it, with aged trust marked stale. Read-only
-  everywhere, not only on mobile (AR-17) — the daemon has no route to change a tier or level, so a
-  control here would be a promise the core would refuse.
+  level, and whether it earned that or was granted it, with aged trust marked stale. The grid is a
+  read; the page's two writes are the deliberate acts the core exposes over its one shared module
+  path (`trust-surface.md`, #179): accept or decline an offered promotion (`/trust/promotions`), and
+  a plain-words grant (`POST /trust/grant`) whose ambiguous match comes back as a picker, never a
+  guess. T4 is never offered.
 - **`src/routes/Audit.tsx`** (#10) — the permissions audit at `#audit`: every question someone asked
   this duo and what it answered, newest first, answer text verbatim, declined entries marked
   declined, unresolved askers marked (the raw reference never reads as a name). The asker's
@@ -46,13 +48,20 @@ in this pass).
   daemon's counts in words plus its own figure as a bar — never a percentage. It never calls
   `POST /escalations/digest`: assembling a digest is the send, and opening a screen must not send.
   The pattern is pure arrangement in `src/escalations/pattern.ts` (identical wording only).
+- **`src/routes/Join.tsx` / `src/api/hosted.ts`** — invite-only hosted mode's front door: an invite
+  link `#join?host=<daemon origin>&invite=<code>` asks the person's name, spends the invite
+  (`POST {host}/hosted/signup`), and pairs this browser to the new duo at `host + /t/<id>` exactly as
+  Setup would, landing on Onboarding. A join hash outranks every other surface, paired or not, and is
+  replaced in history once spent. Hosted duos live under a path, so `normalizeBaseUrl` keeps the
+  address's path (ws and ask links already append to it).
 - **`src/routes/Setup.tsx`** — first run: paste the daemon's tailnet address and a `duo pair new`
   token.
-- **`src/routes/Onboarding.tsx`** (#49) — building a duo from the app: import a pasted export,
-  start and watch the embed job (core #176's routes), watch derivation's effect, and end at the
+- **`src/routes/Onboarding.tsx`** (#49) — building a duo from the app: upload a Claude data export
+  (`conversations.json` → `POST /corpus/import-claude`) or paste one conversation, start and watch
+  the embed job (core #176's routes), then "Build my duo" — the daemon's derive job
+  (`POST`/`GET /corpus/derive`: pairs, topics, rules, voice), shown stage by stage — and end at the
   Mirror's first rules. A paired duo the daemon reports empty opens here; one built in a terminal
-  never does. Derivation itself stays a terminal step (`duo derive`) — the daemon has no route for
-  it, so the app says where it runs and watches, rather than pretending.
+  never does.
 - **`src/routes/Settings.tsx`** (#11) — this device's connection at `#settings`: the daemon address
   and a masked token, the address editable with Setup's own validator and wording, and "Forget this
   device" as a local forget behind a confirmation whose copy says exactly that (it does not revoke).
@@ -61,7 +70,11 @@ in this pass).
   paired device — name, when paired, when last seen, never a token — and revokes one behind a
   confirmation (`src/components/PairedDevices.tsx`). The daemon doesn't say which row is the
   caller, so "This device" is a mark the owner places once and the pairing remembers; revoking
-  that device says so first, revokes before it forgets, and lands on Setup.
+  that device says so first, revokes before it forgets, and lands on Setup. **Pair another device**
+  (`POST /devices`, `src/components/PairAnotherDevice.tsx`) mints a token from here — shown once,
+  beside the address to paste — for a hosted duo with no terminal to run `duo pair new` at. **Ask
+  links** (`src/components/AskLinks.tsx`) mint, list and revoke a colleague's link; the full
+  `ask.html#host=…&token=…` URL is shown once at minting, with a copy button.
 - **`ask.html` / `src/routes/Ask.tsx`** (#1/#2) — the no-install asker page: a colleague opens
   `ask.html#host=…&token=…`, asks one question, and gets one of the daemon's three public-answer
   outcomes, rendered verbatim (the fixed passed-on / refusal strings are the contract — #43 AC3).

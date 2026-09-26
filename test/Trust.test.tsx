@@ -35,7 +35,7 @@ function stubGrid(list: GridRow[]) {
   );
 }
 
-describe("Trust — the read-only trust grid (issue #9)", () => {
+describe("Trust — the trust grid (issue #9)", () => {
   beforeEach(() => {
     stubGrid(rows);
   });

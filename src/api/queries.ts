@@ -2,7 +2,15 @@ import { useCallback, useRef } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 import { apiRequest, type DuoApiConfig } from "./client.js";
 import type {
+  AskLinkRow,
   AuditEntry,
+  ClaudeImportSummary,
+  DeriveJobStatus,
+  GrantOutcome,
+  MintedAskLink,
+  MintedDevice,
+  PromotionOffer,
+  TrustTier,
   ChannelPolicy,
   ChannelSummary,
   CorrectionCandidate,
@@ -75,6 +83,12 @@ export const queryKeys = {
   devices: ["devices"] as const,
   // #49: the daemon's one embed job — runtime state (one job, process-bound), so its own key rather than a corpus read.
   embedJob: ["corpus", "embed"] as const,
+  // Hosted mode: the daemon's one derive job (pairs → topics → rules → voice), runtime state like the embed job.
+  deriveJob: ["corpus", "derive"] as const,
+  // The ask links this duo has minted — never their tokens.
+  askLinks: ["ask-links"] as const,
+  // Under the ["trust"] root: accepting a promotion or granting autonomy moves the grid too.
+  trustPromotions: ["trust", "promotions"] as const,
   // #46: keyed by the submitted query — each distinct search is its own
   // cache entry, so revisiting a recent query is instant and a stale
   // search never blocks a new one.
@@ -525,5 +539,112 @@ export function useConfirmT4(api: DuoApiConfig) {
       apiRequest<PendingT4Request>(api, `/actions/t4/${encodeURIComponent(requestId)}/confirm`, { method: "POST" }),
     // Success or refusal, what is still waiting is the daemon's to say.
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.t4Pending }),
+  });
+}
+
+/**
+ * `POST /corpus/import-claude`: a Claude data export's conversations.json,
+ * sent as its raw text — the daemon parses it exactly as `duo import claude`
+ * does. Like the paste import, a success moves what Knowledge counts.
+ */
+export function useImportClaude(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (exportText: string) =>
+      apiRequest<ClaudeImportSummary>(api, "/corpus/import-claude", { method: "POST", body: JSON.stringify({ export: exportText }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.knowledge });
+    },
+  });
+}
+
+/** The derive job's status, polled only while the daemon says "running" — the embed job's shape. */
+export function useDeriveJob(api: DuoApiConfig, pollMs: number) {
+  return useQuery({
+    queryKey: queryKeys.deriveJob,
+    queryFn: () => apiRequest<DeriveJobStatus>(api, "/corpus/derive"),
+    refetchInterval: (query) => (query.state.data?.state === "running" ? pollMs : false),
+  });
+}
+
+/** `POST /corpus/derive` — starts the one derive job; a 409 (already running) re-reads the status rather than pretending to start a second. */
+export function useStartDerive(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiRequest<DeriveJobStatus>(api, "/corpus/derive", { method: "POST" }),
+    onSuccess: (status) => {
+      queryClient.setQueryData(queryKeys.deriveJob, status);
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.deriveJob });
+    },
+  });
+}
+
+export function useAskLinks(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.askLinks, queryFn: () => apiRequest<AskLinkRow[]>(api, "/ask-links") });
+}
+
+/** `POST /ask-links` — the answer carries the token, once; the caller shows it and the list is re-read (the list never carries it). */
+export function useCreateAskLink(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; expiresInHours?: number }) =>
+      apiRequest<MintedAskLink>(api, "/ask-links", { method: "POST", body: JSON.stringify(input) }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.askLinks });
+    },
+  });
+}
+
+export function useRevokeAskLink(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => apiRequest<void>(api, `/ask-links/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.askLinks });
+    },
+  });
+}
+
+/** `POST /devices` — pair another device from this one; the token comes back once. */
+export function usePairDevice(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name }: { name: string }) => apiRequest<MintedDevice>(api, "/devices", { method: "POST", body: JSON.stringify({ name }) }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.devices });
+    },
+  });
+}
+
+export function useTrustPromotions(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.trustPromotions, queryFn: () => apiRequest<PromotionOffer[]>(api, "/trust/promotions") });
+}
+
+/** Accept or decline one promotion offer — nothing promotes without this explicit call. Invalidates the whole ["trust"] root: offers and grid both move. */
+export function useDecidePromotion(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ topicId, tier, decision }: { topicId: string; tier: TrustTier; decision: "accept" | "decline" }) =>
+      apiRequest<unknown>(api, `/trust/promotions/${encodeURIComponent(topicId)}/${encodeURIComponent(tier)}`, {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["trust"] });
+    },
+  });
+}
+
+/** `POST /trust/grant` — answers the core's `GrantOutcome`; only "applied" moved anything, but the grid is re-read either way. */
+export function useGrantAutonomy(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { scopeText: string; tier: TrustTier; topicId?: string }) =>
+      apiRequest<GrantOutcome>(api, "/trust/grant", { method: "POST", body: JSON.stringify(input) }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["trust"] });
+    },
   });
 }

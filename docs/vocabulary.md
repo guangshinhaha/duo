@@ -102,10 +102,12 @@ handles well will show up here."
 
 ### autonomy level
 
-Per topic, what the duo may do without asking — shown beside its tier, never
-as a control in this cut: the surface stays read-only until the core exposes
-the shared module path (that writes are exposeable in principle is the
-ratified decision, recorded in the core repo's `trust-surface.md`, #179).
+Per topic, what the duo may do without asking — shown beside its tier. The
+grid itself stays a read; the owner changes a level only through the two
+deliberate acts the core exposes over its one shared module path (the
+ratified decision, recorded in the core repo's `trust-surface.md`, #179):
+accepting an offered promotion, and a plain-words grant that refuses an
+ambiguous match rather than guessing. T4 is never offered.
 
 ### workspace
 

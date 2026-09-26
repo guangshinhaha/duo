@@ -135,8 +135,8 @@ function DeviceRow({
  * Setup through the one unpair choke point (`onConfigChange(null)`); a
  * refusal leaves the pairing standing, because the token still works.
  *
- * Pairing a new device is not here: it stays an act at the machine holding
- * the corpus.
+ * Pairing a new device is its own section (`PairAnotherDevice`, over
+ * `POST /devices`), so this list stays a list: who can read, and cutting one off.
  */
 export function PairedDevices({ api, onConfigChange }: { api: DuoApiConfig; onConfigChange: (config: DuoApiConfig | null) => void }) {
   const { data: devices, isLoading, error, refetch } = useDevices(api);
@@ -166,7 +166,7 @@ export function PairedDevices({ api, onConfigChange }: { api: DuoApiConfig; onCo
     <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-devices">
       <h2 className="type-heading">Devices</h2>
       <p className="type-provenance text-[var(--muted)]">
-        The devices paired with your duo. To pair a new one, run <code>duo pair new</code> on your Mac.
+        The devices paired with your duo. To pair a new one, use Pair another device below, or run <code>duo pair new</code> where your duo runs.
       </p>
       {isLoading ? (
         <p className="type-provenance text-[var(--muted)]" data-testid="devices-loading" role="status">

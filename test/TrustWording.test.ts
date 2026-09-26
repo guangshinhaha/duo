@@ -50,12 +50,14 @@ describe("core #214 ratification bundle", () => {
     expect(section).not.toMatch(/CLI could not\.\*\* ?$/);
   });
 
-  it("vocabulary.md's autonomy-level entry keeps read-only for this cut, without the dead reason", () => {
+  it("vocabulary.md's autonomy-level entry names the two deliberate writes over the shared path, without the dead reason", () => {
     const doc = read("docs/vocabulary.md");
     const entry = unwrap(doc.slice(doc.indexOf("### autonomy level"), doc.indexOf("\n## ", doc.indexOf("### autonomy level"))));
-    expect(entry).toContain("never as a control in this cut");
-    expect(entry).toContain("read-only");
+    // Hosted mode exposed the writes the ratified decision allowed: the grid
+    // stays a read, and the writes are accept-a-promotion and a deliberate grant.
+    expect(entry).toContain("The grid itself stays a read");
     expect(entry).toContain("shared module path");
+    expect(entry).toContain("T4 is never offered");
     // The retired justification: writes were never refused-in-principle,
     // so "no route / core would refuse" must not come back as the reason.
     expect(entry).not.toMatch(/no route to change/i);

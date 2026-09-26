@@ -6,7 +6,7 @@ import { App } from "../src/App.js";
 import { Setup } from "../src/routes/Setup.js";
 import { Onboarding, ReviewOrFirstRun } from "../src/routes/Onboarding.js";
 import type { DuoApiConfig } from "../src/api/client.js";
-import type { DuoKnowledge, EmbedJobStatus, PasteImportSummary, Rule, RuleReviewListing } from "../src/api/types.js";
+import type { ClaudeImportSummary, DeriveJobStatus, DuoKnowledge, EmbedJobStatus, PasteImportSummary, Rule, RuleReviewListing } from "../src/api/types.js";
 
 // The shell's notification side effects are Tauri's; the onboarding flow is
 // the client's half and is what this file pins.
@@ -26,9 +26,9 @@ vi.mock("../src/notifications.js", () => ({
  *  - importing goes through the daemon, and progress is visible;
  *  - embedding is a job the app starts and watches, and the daemon's own
  *    counts are what render;
- *  - derivation has no daemon route (`duo derive` is a terminal stage), so
- *    the app watches its facts (GET /knowledge) rather than pretending to
- *    run it — a surface must not add a behaviour;
+ *  - derivation is the daemon's derive job (POST/GET /corpus/derive), started
+ *    from the app and watched stage by stage; its effect is still read off
+ *    GET /knowledge;
  *  - it ends at the Mirror, at the first derived rules, approve and
  *    reject in reach;
  *  - a duo already built in a terminal never sees any of it.
@@ -95,6 +95,15 @@ const embedStatus = (state: EmbedJobStatus["state"], embedded: number, total = 4
   error,
 });
 
+const deriveIdle: DeriveJobStatus = { state: "idle", stage: null, startedAt: null, finishedAt: null, error: null };
+const deriveStatus = (state: DeriveJobStatus["state"], stage: DeriveJobStatus["stage"], error: string | null = null): DeriveJobStatus => ({
+  state,
+  stage,
+  startedAt: "2026-09-26T08:02:00.000Z",
+  finishedAt: state === "done" || state === "error" ? "2026-09-26T08:05:00.000Z" : null,
+  error,
+});
+
 const summary = (over: Partial<PasteImportSummary> = {}): PasteImportSummary => ({
   workRelevant: true,
   written: 3,
@@ -111,6 +120,9 @@ interface FakeDaemon {
   embedGet: () => EmbedJobStatus;
   embedPost?: () => Reply | Promise<Reply>;
   importPost?: (body: { transcript: string }) => Reply | Promise<Reply>;
+  importClaudePost?: (body: { export: string }) => Reply | Promise<Reply>;
+  deriveGet?: () => DeriveJobStatus;
+  derivePost?: () => Reply | Promise<Reply>;
   rules?: () => RuleReviewListing;
 }
 interface Call {
@@ -142,6 +154,15 @@ function fakeDaemon(daemon: FakeDaemon) {
     }
     if (method === "POST" && path === "/corpus/import-paste" && daemon.importPost) {
       return reply(daemon.importPost(body));
+    }
+    if (method === "POST" && path === "/corpus/import-claude" && daemon.importClaudePost) {
+      return reply(daemon.importClaudePost(body));
+    }
+    if (method === "GET" && path === "/corpus/derive") {
+      return reply([200, daemon.deriveGet?.() ?? deriveIdle]);
+    }
+    if (method === "POST" && path === "/corpus/derive" && daemon.derivePost) {
+      return reply(daemon.derivePost());
     }
     if (method === "GET" && path === "/mirror/rules") {
       return reply([200, daemon.rules?.() ?? { awaitingApproval: [], weakSignals: [], inconsistent: [], approved: [], rejected: [] }]);
@@ -319,29 +340,63 @@ describe("#49 AC2 — deriving is observable", () => {
     await waitFor(() => expect(screen.getByTestId("embed-progress")).toHaveTextContent(/5 of 40 records embedded/i));
   });
 
-  it("watches derivation through what the daemon reports of it — the app cannot run it, and says where it runs", async () => {
+  it("starts derivation from the app and shows the daemon's stage as it runs, then its counts", async () => {
     let knowledge = knowledgeFor({ records: { total: 40, bySource: { paste: 40 } } });
-    const daemon = fakeDaemon({ knowledge: () => knowledge, embedGet: () => embedStatus("done", 40) });
+    let derive: DeriveJobStatus = deriveIdle;
+    const daemon = fakeDaemon({
+      knowledge: () => knowledge,
+      embedGet: () => embedStatus("done", 40),
+      deriveGet: () => derive,
+      derivePost: () => {
+        derive = deriveStatus("running", "pairs");
+        return [202, derive];
+      },
+    });
     const onFinish = renderOnboarding();
 
-    const derive = await screen.findByTestId("onboarding-step-derive");
-    await waitFor(() => expect(derive).toHaveAttribute("data-state", "current"));
-    // No route starts derivation (`duo derive` is a terminal stage), so the
-    // app must not offer a button that pretends to — it says where it runs.
-    expect(within(derive).queryByRole("button")).not.toBeInTheDocument();
-    expect(derive).toHaveTextContent(/duo derive/);
-    expect(derive).toHaveTextContent(/on your Mac/i);
-    expect(daemon.calls.some((c) => c.method === "POST" && /derive/.test(c.path))).toBe(false);
+    const step = await screen.findByTestId("onboarding-step-derive");
+    await waitFor(() => expect(step).toHaveAttribute("data-state", "current"));
+    expect(step).not.toHaveTextContent(/on your Mac/i);
+    fireEvent.click(within(step).getByRole("button", { name: "Build my duo" }));
 
-    // The watch: the daemon's own counts move as derivation proceeds.
+    await waitFor(() => expect(daemon.count("POST", "/corpus/derive")).toBe(1));
+    const stages = await screen.findByTestId("derive-stages");
+    expect(stages.querySelector('[data-stage="pairs"]')).toHaveAttribute("data-state", "running");
+    expect(stages.querySelector('[data-stage="voice"]')).toHaveAttribute("data-state", "waiting");
+    // No second start while it runs.
+    expect(within(step).queryByRole("button", { name: "Build my duo" })).not.toBeInTheDocument();
+
+    derive = deriveStatus("running", "rules");
+    await waitFor(() => expect(screen.getByTestId("derive-stages").querySelector('[data-stage="rules"]')).toHaveAttribute("data-state", "running"));
+    expect(screen.getByTestId("derive-stages").querySelector('[data-stage="topics"]')).toHaveAttribute("data-state", "done");
+
     knowledge = knowledgeFor({
       records: { total: 40, bySource: { paste: 40 } },
       corpus: { tooThin: false, minimumQuestionsToCharacterize: 10, totalQuestions: 14, periodStart: null, periodEnd: null, topicBreakdown: [{ topicId: "t1", label: "scheduling", count: 14, share: 1 }] },
     });
     await waitFor(() => expect(screen.getByTestId("derive-progress")).toHaveTextContent(/14 questions found/i));
-    expect(screen.getByTestId("derive-progress")).toHaveTextContent(/1 topic/i);
-    expect(screen.getByTestId("derive-progress")).toHaveTextContent(/0 rules derived/i);
     expect(onFinish).not.toHaveBeenCalled();
+  });
+
+  it("a failed derive shows the daemon's own error and offers to try again", async () => {
+    fakeDaemon({
+      knowledge: importedDuo,
+      embedGet: () => embedStatus("done", 40),
+      deriveGet: () => deriveStatus("error", "topics", "Ollama unreachable at http://ollama:11434"),
+    });
+    renderOnboarding();
+
+    expect((await screen.findByTestId("derive-error")).textContent).toBe("Ollama unreachable at http://ollama:11434");
+    expect(screen.getByTestId("derive-stages").querySelector('[data-stage="topics"]')).toHaveAttribute("data-state", "failed");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+  });
+
+  it("a derive that already ran counts as proof embedding happened, even after the daemon forgot its embed job", async () => {
+    fakeDaemon({ knowledge: importedDuo, embedGet: () => idle, deriveGet: () => deriveStatus("done", "voice") });
+    renderOnboarding();
+
+    await waitFor(() => expect(screen.getByTestId("onboarding-step-embed")).toHaveAttribute("data-state", "done"));
+    expect(await screen.findByTestId("derive-no-rules")).toBeInTheDocument();
   });
 });
 
@@ -499,5 +554,47 @@ describe("#49 — the conventions it inherits (#39 accessibility, #38 responsive
 
     const link = await screen.findByRole("link", { name: /import more history/i });
     expect(link).toHaveAttribute("href", "#onboarding");
+  });
+});
+
+describe("importing a Claude export", () => {
+  it("reads the picked conversations.json and sends its text to the daemon, then says what the daemon counted", async () => {
+    const counted: ClaudeImportSummary = { conversationCount: 12, workRelevantConversationCount: 7, written: 30, skipped: 2, discardedAboveCeiling: 0 };
+    const daemon = fakeDaemon({ knowledge: emptyDuo, embedGet: () => idle, importClaudePost: () => [200, counted] });
+    renderOnboarding();
+
+    const exportText = JSON.stringify([{ uuid: "c1", name: "vendor", chat_messages: [] }]);
+    const file = new File([exportText], "conversations.json", { type: "application/json" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
+
+    await waitFor(() => expect(daemon.count("POST", "/corpus/import-claude")).toBe(1));
+    expect(daemon.calls.find((c) => c.path === "/corpus/import-claude")?.body).toEqual({ export: exportText });
+    const said = await screen.findByTestId("claude-import-summary");
+    expect(said).toHaveTextContent("Read 12 conversations, 7 work-relevant. Imported 30 records. 2 already present.");
+    expect(screen.getByTestId("claude-export")).toHaveTextContent(/Settings → Privacy → Export data/);
+  });
+
+  it("an export with no work conversations says so, instead of a success story", async () => {
+    fakeDaemon({
+      knowledge: emptyDuo,
+      embedGet: () => idle,
+      importClaudePost: () => [200, { conversationCount: 4, workRelevantConversationCount: 0, written: 0, skipped: 0, discardedAboveCeiling: 0 }],
+    });
+    renderOnboarding();
+    const file = new File(["[]"], "conversations.json", { type: "application/json" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
+    expect(await screen.findByTestId("claude-import-summary")).toHaveTextContent(/none were judged work-relevant/);
+  });
+
+  it("a malformed export shows the daemon's own refusal", async () => {
+    fakeDaemon({
+      knowledge: emptyDuo,
+      embedGet: () => idle,
+      importClaudePost: () => [400, { error: { code: "MalformedExportError", message: "Not a Claude export: expected a JSON array of conversations." } }],
+    });
+    renderOnboarding();
+    const file = new File(["{}"], "conversations.json", { type: "application/json" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
+    expect((await screen.findByTestId("mutation-error")).textContent).toBe("Not a Claude export: expected a JSON array of conversations.");
   });
 });

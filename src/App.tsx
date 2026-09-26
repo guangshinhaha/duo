@@ -18,6 +18,7 @@ import { setTrayPendingCount, wireTrayReview } from "./tray.js";
 import { usePendingDrafts, usePendingT4 } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
+import { Join } from "./routes/Join.js";
 import { Settings } from "./routes/Settings.js";
 import { Onboarding, ReviewOrFirstRun } from "./routes/Onboarding.js";
 import { Draft } from "./routes/Draft.js";
@@ -194,6 +195,23 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
     return "settings";
   }
   return fallback;
+}
+
+/**
+ * Invite-only hosted mode: `#join?host=…&invite=…` is an invite link, and it
+ * outranks every other surface — paired or not, a person who opened an
+ * invite sees the Join screen, never Setup or the shell. Tracked apart from
+ * `Route` because it is not a place in the app; it is the way in.
+ */
+function useJoinHash(): string | null {
+  const read = () => (window.location.hash.startsWith("#join") ? window.location.hash : null);
+  const [hash, setHash] = useState<string | null>(read);
+  useEffect(() => {
+    const onHashChange = () => setHash(read());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  return hash;
 }
 
 function useHashRoute(fallback: Route): Route {
@@ -860,6 +878,25 @@ function AppShell() {
   // #62: the default surface follows the shell — Conversations for a
   // signed-in member (§1.5's default space), Review for the owner-only app.
   const route = useHashRoute(session ? "conversations" : "review");
+  const joinHash = useJoinHash();
+
+  if (joinHash) {
+    return (
+      <Join
+        alreadyPaired={!!api}
+        hash={joinHash}
+        onJoined={(config) => {
+          setRevoked(false);
+          setEnded(null);
+          setApi(config);
+          // The invite is spent: its hash must not survive in history or a
+          // reload would offer the Join screen again for a used code.
+          window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#onboarding`);
+          window.dispatchEvent(new HashChangeEvent("hashchange"));
+        }}
+      />
+    );
+  }
 
   if (!api && !session) {
     return (

@@ -32,7 +32,11 @@ export function normalizeBaseUrl(raw: string): string | null {
     if (!parsed.hostname) {
       return null;
     }
-    return parsed.origin;
+    // A hosted duo lives under a path on a shared daemon (`/t/<id>`, the
+    // invite-only hosted mode), so the path is part of the address and is
+    // kept — only its trailing slashes go, since every API path is
+    // appended as `${baseUrl}/route`. A bare origin stays a bare origin.
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
   } catch {
     return null;
   }
@@ -85,6 +89,9 @@ export function Setup({
             Run <code>duo pair new &quot;this device&apos;s name&quot;</code> on your Mac, then paste its address and token here.
           </p>
           <PairDuoForm onConnect={onConnect} />
+          <p className="type-provenance text-[var(--muted)]" data-testid="setup-invite-hint">
+            Have an invite link? Open it directly — it sets up a duo of your own and pairs this browser.
+          </p>
         </section>
       </div>
     </div>

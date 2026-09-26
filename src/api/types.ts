@@ -504,3 +504,87 @@ export interface EndDuoResult {
   /** Files derived from it — rules, voice, refusals, lifecycle records. */
   readonly duoDirPaths: readonly string[];
 }
+
+// Invite-only hosted mode (digital-duo's hosted daemon): `POST
+// {origin}/hosted/signup` answers the new duo's address suffix and the first
+// device token, shown exactly once. `basePath` is appended to the daemon
+// origin to make this device's `baseUrl` (the duo's own path on the daemon).
+export interface HostedSignupResult {
+  readonly tenantId: string;
+  readonly basePath: string;
+  readonly token: string;
+  readonly ownerName: string;
+}
+
+// `POST /corpus/import-claude`: a Claude data export's conversations.json,
+// imported exactly as `duo import claude` does — the daemon's own counts.
+export interface ClaudeImportSummary {
+  readonly conversationCount: number;
+  readonly workRelevantConversationCount: number;
+  readonly written: number;
+  readonly skipped: number;
+  readonly discardedAboveCeiling: number;
+}
+
+export type DeriveStage = "pairs" | "topics" | "rules" | "voice";
+
+// `GET`/`POST /corpus/derive`: the daemon's one derive job — pairs, topics,
+// rules, voice, in that order. `stage` names the step running (or the one
+// that failed); `error` is the failing step's own message, verbatim.
+export interface DeriveJobStatus {
+  readonly state: "idle" | "running" | "done" | "error";
+  readonly stage: DeriveStage | null;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+  readonly error: string | null;
+}
+
+// `GET /ask-links`: every ask link this duo has minted — never its token,
+// which is shown once at minting (`MintedAskLink`) and never again.
+export interface AskLinkRow {
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly revokedAt: string | null;
+  readonly valid: boolean;
+}
+
+export interface MintedAskLink {
+  readonly id: string;
+  readonly name: string;
+  readonly expiresAt: string;
+  readonly token: string;
+}
+
+// `POST /devices`: pairing another device from an already-paired one.
+export interface MintedDevice {
+  readonly id: string;
+  readonly name: string;
+  readonly token: string;
+}
+
+// `GET /trust/promotions` — the core's `PromotionOffer`, verbatim.
+export interface PromotionOffer {
+  readonly topicId: string;
+  readonly topicLabel: string | undefined;
+  readonly tier: TrustTier;
+  readonly currentLevel: AutonomyLevel;
+  readonly offeredLevel: AutonomyLevel;
+  readonly cleanStreak: number;
+}
+
+export interface GrantCandidate {
+  readonly topicId: string;
+  readonly label: string;
+  readonly score: number;
+}
+
+// `POST /trust/grant` — the core's `GrantOutcome`, verbatim. "ambiguous"
+// is the owner's turn: pick a candidate and re-post with its topicId.
+export type GrantOutcome =
+  | { readonly status: "applied"; readonly topicId: string; readonly topicLabel: string; readonly tier: TrustTier }
+  | { readonly status: "ambiguous"; readonly candidates: readonly GrantCandidate[] }
+  | { readonly status: "no_match" }
+  | { readonly status: "topic_not_found"; readonly topicId: string }
+  | { readonly status: "refused"; readonly refusal: { readonly heading: string; readonly reason: string } };

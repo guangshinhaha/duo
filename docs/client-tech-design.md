@@ -134,6 +134,17 @@ domain types.
 | `POST` | `/corpus/import-paste` | `PasteImportSummary` — the transcript text in the body, down `duo import paste`'s own path (#176) | `ingest/paste-import` |
 | `POST` | `/corpus/embed` | `EmbedJobStatus` — 202 (starts the one job); 409 `embed_already_running` (#176) | `serve/embed-job` |
 | `GET` | `/corpus/embed` | `EmbedJobStatus` — the running job's progress (#176) | `serve/embed-job` |
+| `POST` | `/corpus/import-claude` | `ClaudeImportSummary` — a Claude export's `conversations.json` text in the body (`{ export }`), down `duo import claude`'s own path (hosted mode) | `ingest/claude` |
+| `POST` | `/corpus/derive` | `DeriveJobStatus` — 202 (starts the one derive job: pairs → topics → rules → voice); 409 `derive_already_running` (hosted mode) | `serve/derive-job` |
+| `GET` | `/corpus/derive` | `DeriveJobStatus` — the running job's stage, or its error verbatim (hosted mode) | `serve/derive-job` |
+| `GET` | `/ask-links` | `AskLinkRow[]` — never a token (hosted mode) | `serve/tokens` |
+| `POST` | `/ask-links` | `MintedAskLink` — 201, the token shown once (`{ name, expiresInHours? }`) | `serve/tokens` |
+| `POST` | `/ask-links/:id/revoke` | 204 — the link stops on its next use | `serve/tokens` |
+| `POST` | `/devices` | `MintedDevice` — 201, pairs another device from a paired one; the token shown once | `serve/tokens` |
+| `GET` | `/trust/promotions` | `PromotionOffer[]` — the batched digest (#54) | `trust/promotion` |
+| `POST` | `/trust/promotions/:topicId/:tier` | the moved `TrustCell` — `{ decision: "accept" \| "decline" }`; nothing promotes without it | `trust/promotion` |
+| `POST` | `/trust/grant` | `GrantOutcome` — `{ scopeText, tier, topicId? }`; "ambiguous" returns candidates for a picker, never a guess; T4 absent (trust-surface.md) | `trust/grants` |
+| `POST` | `/hosted/signup` | `HostedSignupResult` — at the daemon ORIGIN, not a duo's base URL; no bearer, the invite is the credential (`{ invite, name }`); 403 `invite_invalid` | `hosted` |
 | `GET` | `/search?q=&limit=&cursor=` | `HybridSearchOutcome` — `duo search`'s own hybrid read (#174) | `ingest/embeddings` |
 | `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178); the Escalations screen (#54) never calls it — opening a screen must not send | `escalation/digest` |
 | `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; the Escalations screen walks every page at `limit=100` before it counts | `escalation/digest` |

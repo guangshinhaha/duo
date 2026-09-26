@@ -13,6 +13,8 @@ import {
 import { EndDuoSection } from "../components/EndDuoSection.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { PairedDevices } from "../components/PairedDevices.js";
+import { PairAnotherDevice } from "../components/PairAnotherDevice.js";
+import { AskLinks } from "../components/AskLinks.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import {
   clearMissed,
@@ -304,6 +306,8 @@ export function Settings({
       </section>
 
       {api && <PairedDevices api={api} onConfigChange={onConfigChange} />}
+      {api && <PairAnotherDevice api={api} />}
+      {api && <AskLinks api={api} />}
 
       {api && (
         <section className="shape-container flex flex-col gap-3 p-4">
