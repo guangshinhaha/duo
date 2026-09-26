@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ellipsis, Settings as SettingsIcon, SquarePen } from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
-import { usePendingT4 } from "../api/queries.js";
+import { usePendingT4, useRecordOutcome } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
 import { ConversationSearch } from "../components/ConversationSearch.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
@@ -20,7 +20,11 @@ import type { Route } from "./routes.js";
 import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
 import { bridgedHref, bridgedTitle, useBridgedChats, type BridgedChat } from "./bridged.js";
 import { SourceBadge } from "./BridgedChat.js";
-import { useWaitingItems, waitingWords, type WaitingItem } from "./waiting.js";
+import { useWaitingItems, waitingWords, swipeActionsOf, type WaitingItem } from "./waiting.js";
+import { SwipeRow } from "./SwipeRow.js";
+import { DESKTOP_QUERY, useMediaQuery } from "./useMediaQuery.js";
+import { DuoLine } from "../components/DuoLine.js";
+import { useSyncStatus } from "../sync.js";
 import { useTrainingCount } from "../components/TrainingCards.js";
 import type { HairlineState } from "../components/ConfidenceHairline.js";
 
@@ -174,6 +178,7 @@ export function ChatList({
   footer?: ReactNode;
 }) {
   const queryClient = useQueryClient();
+  const phone = !useMediaQuery(DESKTOP_QUERY);
   const workspaceAccess = useWorkspaceAccess();
   const [newOpen, setNewOpen] = useState(false);
   const [leaveTarget, setLeaveTarget] = useState<RoomSummary | null>(null);
@@ -349,14 +354,13 @@ export function ChatList({
                 : item.kind === "confirmations"
                   ? route === "confirmations"
                   : activeDraft === item.key;
-          return (
+          const row = (
             <Row
               active={isActive}
               avatar={<Avatar kind={kind} title={title} />}
               href={item.href}
               badges={item.source !== null ? <SourceBadge channelKind={item.source} testId="waiting-source" /> : undefined}
               ids={{ entry: "waiting-entry", link: "waiting-link", title: "waiting-title" }}
-              key={`${item.kind}:${item.key}`}
               meta={
                 <>
                   <Timestamp iso={item.oldestAt} />
@@ -372,7 +376,25 @@ export function ChatList({
               }
               previewTestId="waiting-preview"
               title={title}
-            />
+            >
+              {/* A draft that can be swiped away shows what would be sent — behind the duo's line, as it is everywhere — so a swipe is never blind. */}
+              {phone && swipeActionsOf(item).send && (
+                <div className="px-2 pb-2">
+                  <DuoLine attributionTestId="waiting-draft-attribution" compact label="Your duo" state={item.state ?? "neutral"} testId="waiting-draft">
+                    <p className="line-clamp-3 type-body" data-testid="waiting-draft-text">
+                      {swipeActionsOf(item).send!.draftText}
+                    </p>
+                  </DuoLine>
+                </div>
+              )}
+            </Row>
+          );
+          return phone && api ? (
+            <WaitingSwipe api={api} item={item} key={`${item.kind}:${item.key}`}>
+              {row}
+            </WaitingSwipe>
+          ) : (
+            <Fragment key={`${item.kind}:${item.key}`}>{row}</Fragment>
           );
         })}
       </div>
@@ -717,6 +739,28 @@ function ConfirmationsChip({ api, active }: { api: DuoApiConfig; active: boolean
         </span>
       )}
     </a>
+  );
+}
+
+/**
+ * On a phone, a waiting row can be swiped (#153): left sends a confident
+ * draft, right dismisses with an undo window. A row with nothing swipeable
+ * behind it — several drafts, a hedged one, a passed-on question — is just a
+ * row. Offline, nothing is swipeable: a decision is never queued (AR-15).
+ */
+function WaitingSwipe({ api, item, children }: { api: DuoApiConfig; item: WaitingItem; children: ReactNode }) {
+  const record = useRecordOutcome(api);
+  const { reachable } = useSyncStatus();
+  const { send, dismiss } = swipeActionsOf(item);
+  const sendRun = send && reachable ? () => record.mutateAsync({ draftId: send.id, outcome: "sent" }) : null;
+  const dismissRun = dismiss && reachable ? () => record.mutateAsync({ draftId: dismiss.id, outcome: "discarded" }) : null;
+  if (sendRun === null && dismissRun === null) {
+    return <>{children}</>;
+  }
+  return (
+    <SwipeRow dismiss={dismissRun} send={sendRun}>
+      {children}
+    </SwipeRow>
   );
 }
 

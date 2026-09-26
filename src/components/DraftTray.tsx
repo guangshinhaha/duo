@@ -12,6 +12,7 @@ import { useDraftDecision } from "./useDraftDecision.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./primitives/Dialog.js";
 import { WhyPanel } from "../shell/Inspector.js";
 import { useInspectorVisible } from "../shell/InspectorContext.js";
+import { useBackClosesSheet } from "../shell/sheetHistory.js";
 
 /** What the attribution line says the draft is doing, in the vocabulary's words. */
 function stateWords(state: HairlineState): string {
@@ -63,6 +64,8 @@ export function DraftTray({
   // With the inspector beside the chat the why is already on screen; without it (a phone, a narrow window) it is one tap.
   const inspectorVisible = useInspectorVisible();
   const [whyOpen, setWhyOpen] = useState(false);
+  // On a phone the back gesture closes the sheet before it leaves the chat (#153).
+  useBackClosesSheet(whyOpen, () => setWhyOpen(false));
   const state = hairlineState(toDraftPipelineResult(draft));
   const passedOn = draft.escalated && !draft.refused;
   const rules = draft.sources.filter((source) => source.kind === "rule");
