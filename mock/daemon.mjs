@@ -22,9 +22,60 @@ const THRESHOLD = 0.55;
 
 const minutesAgo = (m) => new Date(Date.now() - m * 60_000).toISOString();
 
-function seedState() {
+// #54: the escalation history the seed already lived through — the same
+// judgment question asked again and again (the pattern's whole point), one
+// distinct question, and one urgent escalation, which interrupts live and so
+// is in no digest (digital-duo #178's `checkUrgentEscalations` path).
+const PAY_FIX = "Should I approve Priya's backdated pay fix?";
+const PAY_FIX_REASON = "This touches the payroll correction you said only you decide on.";
+
+function escalatedSeed(id, question, reason, minutes, confidenceScore) {
   return {
+    id,
+    question,
+    threadContext: null,
+    draftText: null,
+    escalated: true,
+    escalationReason: reason,
+    confidenceScore,
+    sources: [],
+    createdAt: minutesAgo(minutes),
+    // Answered long ago — and still asked again, which is the pattern.
+    outcome: "escalation_answered",
+    outcomeRecordedAt: minutesAgo(minutes - 30),
+    sentText: null,
+    refused: false,
+    escalationThreshold: THRESHOLD,
+    provenance: { origin: "owner" },
+    delivery: null,
+  };
+}
+
+// Three sent digests, oldest first, over the escalations above and d-4. Each
+// item is the digest row's wire shape (`EscalationDigestItem`), built from
+// the draft it names so the two can never disagree.
+function seedEscalationDigests(drafts) {
+  const byId = new Map(drafts.map((d) => [d.id, d]));
+  const item = (id) => {
+    const d = byId.get(id);
+    return { draftId: d.id, question: d.question, threadContext: d.threadContext, escalationReason: d.escalationReason, createdAt: d.createdAt };
+  };
+  const digest = (id, minutes, ids) => ({ id, createdAt: minutesAgo(minutes), itemCount: ids.length, items: ids.map(item) });
+  return [digest("dg-1", 60 * 24 * 7, ["e-1", "e-3"]), digest("dg-2", 60 * 24 * 3, ["e-2"]), digest("dg-3", 60, ["d-4"])];
+}
+
+// The daemon's urgency classification is a keyword heuristic over the
+// question and its context (`src/escalation/urgency.ts`); this is the mock's
+// stand-in, enough to give the rate a non-trivial numerator.
+const isUrgent = (draft) => /\b(is down|outage|breach)\b/i.test(`${draft.question} ${draft.threadContext ?? ""}`);
+
+function seedState() {
+  const state = {
     drafts: [
+      escalatedSeed("e-1", PAY_FIX, PAY_FIX_REASON, 60 * 24 * 9, 0.47),
+      escalatedSeed("e-3", "Which vendor do we use for payroll audits?", "Nothing in your records answers this.", 60 * 24 * 8, 0.31),
+      escalatedSeed("e-4", "The invoicing service is down — who do I call?", "This reads as urgent; your duo will not guess.", 60 * 24 * 6, 0.29),
+      escalatedSeed("e-2", PAY_FIX, PAY_FIX_REASON, 60 * 24 * 4, 0.52),
       {
         id: "d-1",
         question: "Can you follow up on the vendor invoice?",
@@ -286,6 +337,8 @@ function seedState() {
     draftSeq: 4,
     candidateSeq: 1,
   };
+  state.escalationDigests = seedEscalationDigests(state.drafts);
+  return state;
 }
 
 function rule(id, topicId, text, status, supportCount, consistency, origin = "derived") {
@@ -660,6 +713,44 @@ export function createMockDaemon() {
             }
           }
           return ok(policy);
+        },
+      ],
+      [
+        "GET",
+        /^\/escalations\/history$/,
+        () => {
+          // #178's route, oldest first, validated in /search's own words
+          // (limit 1..100, default 10; cursor an offset). There is no
+          // POST /escalations/digest here on purpose: assembling is the
+          // send, and no client reads through it.
+          let limit = 10;
+          const rawLimit = url.searchParams.get("limit");
+          if (rawLimit !== null) {
+            limit = Number.parseInt(rawLimit, 10);
+            if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+              return fail(400, "bad_request", "limit must be an integer between 1 and 100");
+            }
+          }
+          let cursor = 0;
+          const rawCursor = url.searchParams.get("cursor");
+          if (rawCursor !== null) {
+            cursor = Number.parseInt(rawCursor, 10);
+            if (!Number.isInteger(cursor) || cursor < 0) {
+              return fail(400, "bad_request", "cursor must be a non-negative integer");
+            }
+          }
+          return ok(state.escalationDigests.slice(cursor, cursor + limit));
+        },
+      ],
+      [
+        "GET",
+        /^\/escalations\/rate$/,
+        () => {
+          // `escalationUrgencyRate`'s arithmetic: all-time over every
+          // escalation, urgent ones included, and 0 — never NaN — on none.
+          const escalated = state.drafts.filter((d) => d.escalated);
+          const urgent = escalated.filter(isUrgent).length;
+          return ok({ total: escalated.length, urgent, rate: escalated.length === 0 ? 0 : urgent / escalated.length });
         },
       ],
       [

@@ -135,9 +135,9 @@ domain types.
 | `POST` | `/corpus/embed` | `EmbedJobStatus` — 202 (starts the one job); 409 `embed_already_running` (#176) | `serve/embed-job` |
 | `GET` | `/corpus/embed` | `EmbedJobStatus` — the running job's progress (#176) | `serve/embed-job` |
 | `GET` | `/search?q=&limit=&cursor=` | `HybridSearchOutcome` — `duo search`'s own hybrid read (#174) | `ingest/embeddings` |
-| `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178) | `escalation/digest` |
-| `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) | `escalation/digest` |
-| `GET` | `/escalations/rate` | `EscalationUrgencyRate` (#178) | `escalation/digest` |
+| `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178); the Escalations screen (#54) never calls it — opening a screen must not send | `escalation/digest` |
+| `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; the Escalations screen walks every page at `limit=100` before it counts | `escalation/digest` |
+| `GET` | `/escalations/rate` | `EscalationUrgencyRate` (#178) — `{ total, urgent, rate }` over every classified escalation, urgent ones included; drawn as counts plus a bar, never a percentage | `escalation/digest` |
 | `GET` | `/audit` | `AuditEntry[]` | `permissions/audit` |
 | `GET` | `/ws` | the one push channel — `draft-ready`; auth by first message (#162) | `serve/ws` |
 

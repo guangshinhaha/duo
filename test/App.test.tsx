@@ -219,6 +219,32 @@ describe("App — hash routing between the surfaces", () => {
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 
+  it("navigates to Escalations on #escalations, with the your-duo surfaces after Knowledge (#54)", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/escalations/rate")) {
+          return new Response(JSON.stringify({ total: 0, urgent: 0, rate: 0 }), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+
+    render(<App />);
+
+    const link = screen.getByRole("link", { name: "Escalations" });
+    expect(link).toHaveAttribute("href", "#escalations");
+    const entries = [...screen.getByRole("navigation").querySelectorAll("a")].map((a) => a.textContent);
+    expect(entries.indexOf("Knowledge")).toBeLessThan(entries.indexOf("Escalations"));
+    expect(entries.indexOf("Escalations")).toBeLessThan(entries.indexOf("Settings"));
+
+    window.location.hash = "#escalations";
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => expect(screen.getByTestId("escalations")).toBeInTheDocument());
+    expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
+  });
+
   it("⌘K opens search over any route and closes back onto the same screen, nothing lost (#46)", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     // Review is the populated route: a draft card is on screen when search

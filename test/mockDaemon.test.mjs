@@ -63,7 +63,7 @@ describe("mock daemon — the drafts loop (D2/D3)", () => {
     const res = await get("/drafts");
     expect(res.status).toBe(200);
     const drafts = await res.json();
-    expect(drafts.map((d) => d.id)).toEqual(["d-1", "d-3", "d-4", "d-2"]);
+    expect(drafts.map((d) => d.id)).toEqual(["e-1", "e-3", "e-4", "e-2", "d-1", "d-3", "d-4", "d-2"]);
     for (const field of ["question", "threadContext", "draftText", "outcome", "refused", "escalationThreshold"]) {
       expect(field in drafts[0]).toBe(true);
     }
@@ -599,5 +599,55 @@ describe("mock daemon — channels and their policy (duo #47, mirroring digital-
     expect((await slash.json()).error.message).toBe(
       'channel must not contain "/" — it scopes a thread within a channel — got "a/b"',
     );
+  });
+});
+
+describe("mock daemon — escalation digests, history, and rate (duo #54, mirroring digital-duo #178)", () => {
+  it("pages history the daemon's way: oldest first, default limit 10, the offset cursor, and its own 400 words", async () => {
+    const all = await (await get("/escalations/history?limit=100")).json();
+    expect(all.length).toBeGreaterThan(1);
+    for (const row of all) {
+      expect(Object.keys(row).sort()).toEqual(["createdAt", "id", "itemCount", "items"]);
+      expect(row.itemCount).toBe(row.items.length);
+    }
+    expect(all.map((d) => d.createdAt)).toEqual(all.map((d) => d.createdAt).slice().sort());
+
+    const rest = await (await get("/escalations/history?limit=1&cursor=1")).json();
+    expect(rest.map((d) => d.id)).toEqual([all[1].id]);
+    expect((await (await get("/escalations/history")).json()).length).toBe(Math.min(10, all.length));
+
+    for (const bad of ["limit=0", "limit=101", "limit=x", "cursor=-1", "cursor=x"]) {
+      const res = await get(`/escalations/history?${bad}`);
+      expect(res.status, bad).toBe(400);
+      expect((await res.json()).error.code).toBe("bad_request");
+    }
+  });
+
+  it("carries the digest items' wire shape, and only drafts the mock actually holds — every one openable", async () => {
+    const all = await (await get("/escalations/history?limit=100")).json();
+    const items = all.flatMap((d) => d.items);
+    for (const item of items) {
+      expect(Object.keys(item).sort()).toEqual(["createdAt", "draftId", "escalationReason", "question", "threadContext"]);
+      const res = await get(`/drafts/${item.draftId}`);
+      expect(res.status).toBe(200);
+      expect((await res.json()).escalated).toBe(true);
+    }
+    // A recurring question is what the view exists to show.
+    const counts = new Map();
+    for (const item of items) {
+      counts.set(item.question, (counts.get(item.question) ?? 0) + 1);
+    }
+    expect(Math.max(...counts.values())).toBeGreaterThan(1);
+  });
+
+  it("reports a rate whose figure is its own counts' quotient, never NaN on nothing", async () => {
+    const rate = await (await get("/escalations/rate")).json();
+    expect(Object.keys(rate).sort()).toEqual(["rate", "total", "urgent"]);
+    expect(rate.total).toBeGreaterThan(0);
+    expect(rate.rate).toBeCloseTo(rate.urgent / rate.total, 10);
+  });
+
+  it("serves no POST /escalations/digest — assembling is the send, and no client reads through it", async () => {
+    expect((await post("/escalations/digest", {})).status).toBe(404);
   });
 });
