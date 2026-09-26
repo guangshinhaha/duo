@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { DuoAuthoredBoundary } from "./DuoMessage.js";
+import { DuoLine } from "./DuoLine.js";
 
 /**
  * A reference to a duo's message from another context (#60): a quote block,
@@ -8,23 +8,19 @@ import { DuoAuthoredBoundary } from "./DuoMessage.js";
  * label — wherever a duo's text is shown, the attribution travels with it,
  * in the same possessive form as `RoomDuoMessage` ("Ana's duo").
  *
- * It sets the same `DuoAuthoredBoundary` as the timeline rendering, so a
- * person-identity component can no more hide inside a quote of a duo's
- * message than inside the message itself.
+ * It renders through the same `DuoLine` (and so sets the same boundary) as
+ * the timeline rendering, so a person-identity component can no more hide
+ * inside a quote of a duo's message than inside the message itself.
  */
 export function DuoMessageReference({ ownerName, children }: { ownerName: string; children: ReactNode }) {
   return (
-    <div
-      data-testid="duo-message-reference"
-      className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)]"
+    <DuoLine
+      label={`${ownerName}'s duo`}
+      testId="duo-message-reference"
+      attributionTestId="duo-message-reference-attribution"
+      compact
     >
-      <div
-        className="mb-1 type-provenance text-[var(--muted)]"
-        data-testid="duo-message-reference-attribution"
-      >
-        {ownerName}&#39;s duo
-      </div>
-      <DuoAuthoredBoundary>{children}</DuoAuthoredBoundary>
-    </div>
+      {children}
+    </DuoLine>
   );
 }
