@@ -63,8 +63,6 @@ function fakeEvent(
     relatesTo?: { rel_type: string; event_id: string; key?: string; is_falling_back?: boolean };
     /** A replacement's new body, under m.new_content. */
     newContent?: { msgtype: string; body: string };
-    /** The user ids the message mentions, under m.mentions — the half the push rules read (#65). */
-    mentions?: string[];
     /** True once the homeserver (or a member) struck the event. */
     redacted?: boolean;
   },
@@ -81,7 +79,6 @@ function fakeEvent(
       "m.mentions": shape.mentions === undefined ? undefined : { user_ids: shape.mentions },
       "m.new_content": shape.newContent,
       "m.relates_to": shape.relatesTo,
-      "m.mentions": shape.mentions ? { user_ids: shape.mentions } : undefined,
     }),
     getTs: () => shape.ts,
     isRedacted: () => shape.redacted ?? false,

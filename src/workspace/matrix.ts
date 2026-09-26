@@ -58,6 +58,15 @@ export interface WorkspaceSession {
 /** What a room IS to the member reading the list — the shape drives how the entry reads, not just how it looks. */
 export type RoomKind = "direct" | "group" | "channel";
 
+/**
+ * What may interrupt the member from one conversation (#69): everything,
+ * mentions alone, or nothing. Server-side state — "nothing" is the
+ * account's own push rule (the mute #63 wrote), the audible modes stand
+ * in the room's account data beside it — so every device answers the
+ * question the same way.
+ */
+export type NotificationMode = "all" | "mentions" | "nothing";
+
 /** One member of a room besides the member themselves — the id is the fact, the name the room's claim. */
 export interface RoomMemberRef {
   readonly userId: string;
@@ -84,6 +93,8 @@ export interface RoomSummary {
   readonly unread: { readonly notifications: number; readonly mentions: number };
   /** The member's own mute rule for this room, held by the account — not a preference of this device. */
   readonly muted: boolean;
+  /** What may interrupt from this room (#69) — the same server answer on every device; `muted` is its "nothing" half. */
+  readonly notifications: NotificationMode;
 }
 
 /** One aggregated reaction under a message: the emoji, how many, and whether this member is among them. */
@@ -143,6 +154,20 @@ export interface RoomMessage {
   readonly pending?: boolean;
 }
 
+/**
+ * A NEW text message arriving live (#69): who spoke (the id is the fact,
+ * the name the room's claim), the words, and whether the message mentions
+ * the member — the structured half the push rules read is the same half
+ * an arrival reads. This is what a notification decides on; the surfaces
+ * that only refresh ignore it and read the projection like everyone else.
+ */
+export interface LiveArrival {
+  readonly senderId: string;
+  readonly senderName: string;
+  readonly body: string;
+  readonly mentionsMe: boolean;
+}
+
 /** The held workspace connection: rooms, timelines, the message verbs, and live arrivals. */
 export interface WorkspaceConnection {
   /** Whose connection this is — the member's own user id, the way the surface tells its own messages (editable, deletable) from everyone else's. */
@@ -190,12 +215,24 @@ export interface WorkspaceConnection {
   startDirect(userId: string): Promise<string>;
   /** Leaves a conversation — the homeserver drops the membership, for every device at once. */
   leave(roomId: string): Promise<void>;
-  /** Sets or clears the account's mute rule for a room — server-side state, the same on every device. */
-  setMuted(roomId: string, muted: boolean): Promise<void>;
+  /**
+   * Sets what may interrupt from one conversation (#69): "nothing" is the
+   * account's own push rule (the mute #63 wrote), the audible modes stand
+   * in the room's account data — server-side state, the same on every
+   * device. Idempotent: a mode another device already wrote costs nothing
+   * to write again.
+   */
+  setNotificationMode(roomId: string, mode: NotificationMode): Promise<void>;
   /** Searches the workspace's people directory: the way to address someone no shared room has introduced yet. */
   searchPeople(query: string): Promise<readonly { userId: string; name: string }[]>;
-  /** One subscription for the app's lifetime; the return value unsubscribes. */
-  subscribe(handler: (roomId: string) => void): () => void;
+  /**
+   * One subscription for the app's lifetime; the return value unsubscribes.
+   * The arrival half (#69) rides only for a NEW text message — sender,
+   * words, and whether it mentions the member, which is what a
+   * notification decides on. An amendment or a reaction is room news,
+   * not message news: the roomId arrives, the arrival doesn't.
+   */
+  subscribe(handler: (roomId: string, arrival?: LiveArrival) => void): () => void;
   /** Stops the connection. Idempotent. */
   stop(): Promise<void>;
 }
@@ -487,11 +524,12 @@ function directRoomIdsOf(client: MatrixClient): Set<string> {
  * One room as the conversations list reads it (#63). Every field is the
  * homeserver's own state: membership, notification accounting (and its
  * highlight half — mentions), the join rule behind group-vs-channel, the
- * account's mute rule. Nothing here is invented client-side, which is the
- * whole of "reflected across their devices" — the list renders the same
- * server answer everywhere.
+ * account's mute rule and the notification mode it half-names (#69).
+ * Nothing here is invented client-side, which is the whole of "reflected
+ * across their devices" — the list renders the same server answer
+ * everywhere.
  */
-function projectRoom(room: MatrixRoom, selfId: string, direct: boolean, muted: boolean): RoomSummary {
+function projectRoom(room: MatrixRoom, selfId: string, direct: boolean, mode: NotificationMode): RoomSummary {
   const latestText = [...room.getLiveTimeline().getEvents()]
     .reverse()
     .find((event) => event.getType() === "m.room.message" && event.getContent()?.msgtype === MsgType.Text);
@@ -508,8 +546,27 @@ function projectRoom(room: MatrixRoom, selfId: string, direct: boolean, muted: b
       notifications: room.getUnreadNotificationCount(NotificationCountType.Total),
       mentions: room.getUnreadNotificationCount(NotificationCountType.Highlight),
     },
-    muted,
+    muted: mode === "nothing",
+    notifications: mode,
   };
+}
+
+/**
+ * The room's notification mode (#69), read the way the server holds it:
+ * the account's mute rule wins ("nothing"), the room's account data says
+ * "mentions" when the member scoped it, and anything else is "all" — the
+ * absence of a rule is the default, not a gap.
+ */
+function notificationModeOf(room: MatrixRoom, muted: boolean): NotificationMode {
+  if (muted) {
+    return "nothing";
+  }
+  try {
+    const content = room.getAccountData("duo.notifications")?.getContent() as { mode?: unknown } | undefined;
+    return content?.mode === "mentions" ? "mentions" : "all";
+  } catch {
+    return "all";
+  }
 }
 
 /** How many people a directory search answers with — enough to pick a colleague out, small enough to read. */
@@ -535,7 +592,9 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
     rooms: async () => {
       // The mute half of the projection lives in the account's push rules —
       // one read for the whole list, and a failed read means "unmuted we
-      // don't know", never a list that won't render.
+      // don't know", never a list that won't render. The mode's audible
+      // half lives in each room's own account data, which the sync already
+      // delivered with the room.
       const pushRules = await client.getPushRules().catch(() => undefined);
       const mutedIds = new Set(
         (pushRules?.global.room ?? [])
@@ -545,7 +604,7 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
       const directIds = directRoomIdsOf(client);
       return client
         .getRooms()
-        .map((room) => projectRoom(room, session.userId, directIds.has(room.roomId), mutedIds.has(room.roomId)))
+        .map((room) => projectRoom(room, session.userId, directIds.has(room.roomId), notificationModeOf(room, mutedIds.has(room.roomId))))
         .sort((a, b) => (b.latest?.at ?? Number.MIN_SAFE_INTEGER) - (a.latest?.at ?? Number.MIN_SAFE_INTEGER));
     },
     timeline: async (roomId) => timelineOf(client, roomId),
@@ -647,12 +706,17 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
     leave: async (roomId) => {
       await client.leave(roomId);
     },
-    setMuted: async (roomId, muted) => {
-      if (muted) {
+    setNotificationMode: async (roomId, mode) => {
+      if (mode === "nothing") {
         await client.addPushRule("global", PushRuleKind.RoomSpecific, roomId, { actions: [], conditions: [] });
-      } else {
-        await client.deletePushRule("global", PushRuleKind.RoomSpecific, roomId);
+        return;
       }
+      // An audible mode stands where the mute rule isn't: clear it if
+      // another device left it, and say the mode in the room's account
+      // data. Both writes idempotently — a rule already gone is not an
+      // error worth surfacing for a setting that changed nothing.
+      await client.deletePushRule("global", PushRuleKind.RoomSpecific, roomId).catch(() => undefined);
+      await client.setRoomAccountData(roomId, "duo.notifications", { mode });
     },
     searchPeople: async (query) => {
       const { results } = await client.searchUserDirectory({ term: query.trim(), limit: PEOPLE_SEARCH_LIMIT });
@@ -662,9 +726,34 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
     },
     subscribe: (handler) => {
       const listener = (event: MatrixEvent, room: MatrixRoom | undefined): void => {
-        if (room && LIVE_EVENT_TYPES.has(event.getType())) {
-          handler(room.roomId);
+        if (!room || !LIVE_EVENT_TYPES.has(event.getType())) {
+          return;
         }
+        // The arrival half (#69): a NEW text message — not an amendment of
+        // an old one, not a reaction — says who spoke and whether it
+        // mentions the member, which is what a notification decides on.
+        // Sender naming goes through membership the same door the timeline
+        // projection's does, so the two can never disagree.
+        let arrival: LiveArrival | undefined;
+        const content = event.getContent() as {
+          msgtype?: string;
+          body?: string;
+          "m.relates_to"?: { rel_type?: string };
+          "m.mentions"?: { user_ids?: string[] };
+        };
+        if (
+          event.getType() === EventType.RoomMessage &&
+          content.msgtype === MsgType.Text &&
+          content["m.relates_to"]?.rel_type !== RelationType.Replace
+        ) {
+          arrival = {
+            senderId: event.getSender() ?? "",
+            senderName: room.getMember(event.getSender() ?? "")?.name || localpartOf(event.getSender() ?? ""),
+            body: String(content.body ?? ""),
+            mentionsMe: content["m.mentions"]?.user_ids?.includes(session.userId) ?? false,
+          };
+        }
+        handler(room.roomId, arrival);
       };
       client.on(RoomEvent.Timeline, listener);
       return () => {

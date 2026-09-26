@@ -331,6 +331,25 @@ same structural rule holding at the last inch, so no display name a sender claim
 somebody's duo), and the list's unread counts arrive homeserver-composed with their mention
 half already in them — the "@ 2" badge is that count, not something the client tallies.
 
+#69 adds the interruption decision — the client's only speaking role beyond rendering. What may
+interrupt is two standings with two homes, on purpose: per-conversation (`all`, `mentions`,
+`nothing` — the #63 mute renamed as the far end of one tri-state, not a separate button) is
+account state and syncs across devices (a push rule for `nothing`, room account data
+`duo.notifications` for the others); do-not-disturb with quiet hours is the member standing at
+this machine and stays on it (`duo.dnd`). The dispatcher hears the seam's live arrivals and the
+daemon's draft-ready push, and decides once, in App: the member's own words never interrupt
+(from any device), the conversation on screen never interrupts about itself, the member's own
+duo acting on their behalf is its own category — fixed words, governed by no conversation's
+standing, because it belongs to no conversation, and no setting offers to turn the category off (the one
+notification the owner can never fully silence; do-not-disturb defers it, never drops it) — and everything else follows its room's
+standing, the sender labelled by the id grammar (`{owner}'s duo`), never a display name.
+Do-not-disturb holds instead of silencing: what it held waits in Settings (`duo.missed`, capped,
+each entry a link back), and it holds the duo's acts the same way. An escalation or refusal
+announces in its own words ("Your duo escalated a question to you."), classified by reading the
+draft the push names; a record that won't answer announces as the waiting draft it most
+conservatively is. The surface adds no behaviour throughout — every standing is read or written
+through the seam, and the classifications read only what the daemon already serves.
+
 ## 3.3 Offline
 
 The query cache persists to storage and rehydrates at launch. Two connections fail for

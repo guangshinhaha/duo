@@ -4,21 +4,23 @@ import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { useApiConfig } from "./api/config.js";
-import { ApiRequestError, type DuoApiConfig } from "./api/client.js";
+import { ApiRequestError, apiRequest, type DuoApiConfig } from "./api/client.js";
 import { useRevokedTokenGuard } from "./api/revocation.js";
 import { useDraftReadySocket } from "./api/ws.js";
 import { SyncStatusProvider } from "./sync.js";
 import { OfflineBar } from "./components/OfflineBar.js";
-import { notifyDraftReady, wireDraftNotificationClicks } from "./notifications.js";
+import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
+import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
 import { setDockBadgeCount } from "./dockBadge.js";
 import { setTrayPendingCount, wireTrayReview } from "./tray.js";
 import { usePendingDrafts } from "./api/queries.js";
+import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Settings } from "./routes/Settings.js";
 import { Review } from "./routes/Review.js";
 import { Draft } from "./routes/Draft.js";
 import { Corrections } from "./routes/Corrections.js";
-import { Conversations } from "./routes/Conversations.js";
+import { Conversations, roomTitle } from "./routes/Conversations.js";
 import { Room } from "./routes/Room.js";
 import { ThreadView } from "./routes/Thread.js";
 import { Duo } from "./routes/Duo.js";
@@ -32,7 +34,8 @@ import { NoDuoPanel } from "./components/NoDuoPanel.js";
 import { PairDuoDialog } from "./components/PairDuoDialog.js";
 import { WorkspaceSignInDialog } from "./components/WorkspaceSignInDialog.js";
 import { useWorkspaceSession } from "./workspace/session.js";
-import type { WorkspaceConnection, WorkspaceSession } from "./workspace/matrix.js";
+import { duoOwnerLabel, isDuoUserId, localpartOf } from "./workspace/identity.js";
+import type { LiveArrival, RoomSummary, WorkspaceConnection, WorkspaceSession } from "./workspace/matrix.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./components/primitives/Dialog.js";
 
 // §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
@@ -176,6 +179,80 @@ function useHashRoute(fallback: Route): Route {
   }, [fallback]);
 
   return route;
+}
+
+/**
+ * #69: the conversation on screen, read from the hash the way the route
+ * itself is. An arrival about the surface the member is already looking at
+ * is not news — the notification module's own rule: a notification the
+ * owner already saw in the open window is noise. A thread's hash carries
+ * its room in the first segment.
+ */
+function openRoomIdFromHash(hash: string): string | null {
+  const decode = (encoded: string): string | null => {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return null; // a malformed escape is no id at all
+    }
+  };
+  if (hash.startsWith("#room/")) {
+    return decode(hash.slice("#room/".length));
+  }
+  if (hash.startsWith("#thread/")) {
+    return decode(hash.slice("#thread/".length).split("/")[0] ?? "");
+  }
+  return null;
+}
+
+/**
+ * #69: the interruption decision, one place, hearing the same live
+ * arrivals every surface hears. The member's own words are not news — from
+ * any device; neither is the conversation on screen about itself. The
+ * member's OWN duo acting on their behalf is its own category, governed by
+ * no conversation's setting, because it isn't a conversation. Every other
+ * message interrupts by its conversation's mode — the server's answer,
+ * read from the same cache the list renders — and do-not-disturb holds any
+ * of it back, recorded, visibly, for afterwards. Nothing here changes what
+ * any surface renders; it only decides whether the shell speaks.
+ */
+async function dispatchArrival(
+  connection: WorkspaceConnection,
+  roomId: string,
+  arrival: LiveArrival | undefined,
+): Promise<void> {
+  if (!arrival || arrival.senderId === connection.userId) {
+    return;
+  }
+  if (openRoomIdFromHash(window.location.hash) === roomId) {
+    return;
+  }
+  const rooms =
+    queryClient.getQueryData<readonly RoomSummary[]>(["workspace", "rooms"]) ?? (await connection.rooms());
+  const room = rooms.find((candidate) => candidate.roomId === roomId);
+  const title = room ? roomTitle(room) : roomId;
+  const hash = `#room/${encodeURIComponent(roomId)}`;
+  // Whose duo it is comes from the id grammar, never a chosen name: the
+  // member's own duo is the one acting on their behalf; a colleague's duo
+  // is a participant like anyone else.
+  const mine = isDuoUserId(arrival.senderId) && duoOwnerLabel(arrival.senderId) === localpartOf(connection.userId);
+  if (!mine) {
+    const mode = room?.notifications ?? "all";
+    if (mode === "nothing" || (mode === "mentions" && !arrival.mentionsMe)) {
+      // The member's standing choice, not something missed: the record is
+      // for what do-not-disturb held back, and nothing else.
+      return;
+    }
+  }
+  const sender = isDuoUserId(arrival.senderId)
+    ? `${duoOwnerLabel(arrival.senderId) ?? localpartOf(arrival.senderId)}'s duo`
+    : arrival.senderName;
+  const body = mine ? `Your duo answered on your behalf in ${title}.` : `${sender} in ${title}: ${arrival.body}`;
+  if (isDndActive(readDndPrefs(), new Date())) {
+    recordMissed({ at: Date.now(), body, hash });
+    return;
+  }
+  await postNotification(body, hash);
 }
 
 /** One sidebar entry: same shape either way, active vs muted — the whole difference between the routes' links. */
@@ -500,7 +577,34 @@ function AppShell() {
   // draft's own address (#25); in a plain browser tab notifyDraftReady
   // quietly no-ops (feature-detected, never throws).
   useDraftReadySocket(api, (draftId) => {
-    void notifyDraftReady(draftId);
+    // #69: the push names the draft; what the draft IS decides the words.
+    // The duo escalating or refusing on the owner's behalf is its own
+    // category — its words come from the record, not the waiting-draft
+    // copy — and do-not-disturb holds it the same way it holds a message,
+    // into the record Settings shows. A record that can't be read
+    // (offline, already actioned) still announces as the waiting draft it
+    // most conservatively is; per-conversation modes never apply, because
+    // the duo's own acts belong to no conversation.
+    void (async () => {
+      const hash = `#draft/${encodeURIComponent(draftId)}`;
+      let body: string | null = null;
+      if (api) {
+        try {
+          body = draftArrivalBody(await apiRequest<DraftRecord>(api, `/drafts/${encodeURIComponent(draftId)}`));
+        } catch {
+          body = null; // announce without naming what only the record could say
+        }
+      }
+      if (body !== null) {
+        if (isDndActive(readDndPrefs(), new Date())) {
+          recordMissed({ at: Date.now(), body, hash });
+        } else {
+          await postNotification(body, hash);
+        }
+        return;
+      }
+      void notifyDraftReady(draftId);
+    })();
     // #39: the same push that fires the OS notification also feeds the
     // app's polite live region — a draft arriving is otherwise silent to
     // a screen reader. The notice self-clears, because a live region
@@ -513,16 +617,29 @@ function AppShell() {
     noticeTimer.current = setTimeout(() => setArrivalNotice(""), 5000);
   });
 
-  // #25: one subscription for the app's life — a clicked notification
-  // routes to the draft it was about. Null outside the shell (nothing to
-  // click there), and the unmount unwire keeps a remount from double-firing.
+  // #25/#69: one subscription for the app's life — a clicked notification
+  // routes to what it was about, a draft or a conversation. Null outside
+  // the shell (nothing to click there), and the unmount unwire keeps a
+  // remount from double-firing.
   useEffect(() => {
     let unwire: (() => void) | null = null;
-    void wireDraftNotificationClicks().then((dispose) => {
+    void wireNotificationClicks().then((dispose) => {
       unwire = dispose;
     });
     return () => unwire?.();
   }, []);
+
+  // #69: the interruption decision's ear — the same live arrivals every
+  // surface hears, held for the connection's life. The decision itself is
+  // dispatchArrival above, beside the routes it speaks for.
+  useEffect(() => {
+    if (!connection) {
+      return;
+    }
+    return connection.subscribe((roomId, arrival) => {
+      void dispatchArrival(connection, roomId, arrival);
+    });
+  }, [connection]);
 
   // #42: the tray's Review item — the same shape as the subscription above
   // it. The Rust half shows and focuses the window; the navigation to

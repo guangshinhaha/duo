@@ -195,16 +195,30 @@ Connecting this device to a duo daemon — "Pair your duo" where it's offered
 state). Pairing is offered, never demanded: a member without one messages
 fully and sees the explanation wherever a duo surface would be.
 
-### start / leave / mute
+### start / leave / set notifications for
 
 The member's verbs over their own conversations, each an operation on the
 member's workspace account — which is why each holds on every device, and
 why the list's reflection after any of them is the workspace's next answer,
 never a flag this device keeps. Starting searches the workspace's people
-("New conversation"); leaving asks first and can be undone by an invite;
-muting silences without leaving. Reading a conversation is the quiet fourth:
-opening it receipts the latest event, and the unread badge clears
-everywhere the member is signed in.
+("New conversation"); leaving asks first and can be undone by an invite.
+Notifications are a standing, not a toggle: "All messages", "Mentions", or
+"Nothing" — mute is the far end of the same control, not a separate button,
+and the standing holds on every device the way starting and leaving do.
+Reading a conversation is the quiet fourth: opening it receipts the latest
+event, and the unread badge clears everywhere the member is signed in.
+
+### do not disturb / quiet hours / what was missed
+
+The member's rule for this device alone: what may interrupt HERE, while the
+per-conversation standings travel with the account. Do not disturb is the
+whole rule; quiet hours are its schedule — a start, an end, and a span that
+may cross midnight. What the rule holds back is never dropped: it waits in
+Settings as "what was missed", each entry a link back to where it happened,
+until the member clears it. The rule holds the duo's own acts too — an
+escalation waits like a mention — because holding is not silencing; the
+per-conversation standings are what never apply to the duo's acts, since
+those belong to no conversation.
 
 ### edit / delete / react / reply in thread
 
@@ -243,4 +257,5 @@ never paraphrased, never "improved":
 These earned their place — reuse them rather than minting synonyms: "Ask
 your duo…", "Waiting on you in Review.", "Queued as a standing-order
 candidate.", "Drew on N sources", "Nothing earned yet.", "Your duo refused
-this one.", "the owner's duo".
+this one.", "the owner's duo", "Your duo escalated a question to you.",
+"Your duo answered on your behalf in …".

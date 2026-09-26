@@ -5,7 +5,7 @@ import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
-import { type RoomSummary, type WorkspaceConnection } from "../workspace/matrix.js";
+import { type NotificationMode, type RoomSummary, type WorkspaceConnection } from "../workspace/matrix.js";
 
 /**
  * The title a room reads under: its name when it has one, its members when
@@ -32,8 +32,10 @@ export function roomTitle(room: RoomSummary): string {
  * `@duo-` grammar of the member id rather than any name the duo chose.
  *
  * The member's verbs live here too (#63): starting a conversation (the
- * workspace directory, searched), leaving one (asked, then done), and
- * muting one. All three are homeserver operations on the member's own
+ * workspace directory, searched), leaving one (asked, then done), and —
+ * widened by #69 into the tri-state — setting what may interrupt from
+ * one: all, mentions only, or nothing (the mute #63 wrote, named by what
+ * it is). All three are homeserver operations on the member's own
  * account — which is why they hold on every device, and why the list's
  * reflection after any of them is the server's next answer, never a flag
  * this device keeps for itself.
@@ -146,14 +148,18 @@ function RoomList({ connection }: { connection: WorkspaceConnection }) {
     );
   }
 
-  const toggleMute = (room: RoomSummary): void => {
+  // #69: what may interrupt from one conversation — all, mentions only,
+  // or nothing (the mute #63 wrote, now named by what it is). One verb,
+  // server-side like every other one: the reflection is the server's next
+  // answer, so every device reads the same mode.
+  const setMode = (room: RoomSummary, mode: NotificationMode): void => {
     if (busyRoomId !== null) {
       return;
     }
     setBusyRoomId(room.roomId);
     setActionError(null);
     connection
-      .setMuted(room.roomId, !room.muted)
+      .setNotificationMode(room.roomId, mode)
       .then(() => setActionError(null))
       .catch(() => setActionError("The workspace didn't take that — try again."))
       .finally(() => {
@@ -208,7 +214,7 @@ function RoomList({ connection }: { connection: WorkspaceConnection }) {
                 busy={busyRoomId === room.roomId}
                 key={room.roomId}
                 onLeave={() => setLeaveTarget(room)}
-                onToggleMute={() => toggleMute(room)}
+                onSetMode={(mode) => setMode(room, mode)}
                 room={room}
               />
             ))}
@@ -270,12 +276,12 @@ function RoomList({ connection }: { connection: WorkspaceConnection }) {
 function ConversationEntry({
   room,
   busy,
-  onToggleMute,
+  onSetMode,
   onLeave,
 }: {
   room: RoomSummary;
   busy: boolean;
-  onToggleMute: () => void;
+  onSetMode: (mode: NotificationMode) => void;
   onLeave: () => void;
 }) {
   const title = roomTitle(room);
@@ -334,16 +340,21 @@ function ConversationEntry({
         )}
       </a>
       <div className="flex flex-col justify-center gap-1">
-        <button
-          aria-label={`${room.muted ? "Unmute" : "Mute"} ${title}`}
-          className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance text-[var(--muted)] disabled:opacity-40"
-          data-testid="room-mute"
+        {/* #69: the tri-state, in the app's select idiom. The label says
+            what the control governs; the options say the three things it
+            can mean — the same words the notification decision uses. */}
+        <select
+          aria-label={`Notifications for ${title}`}
+          className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 type-provenance text-[var(--muted)] disabled:opacity-40"
+          data-testid="room-notifications"
           disabled={busy}
-          onClick={onToggleMute}
-          type="button"
+          onChange={(e) => onSetMode(e.target.value as NotificationMode)}
+          value={room.notifications}
         >
-          {room.muted ? "Unmute" : "Mute"}
-        </button>
+          <option value="all">All messages</option>
+          <option value="mentions">Mentions</option>
+          <option value="nothing">Nothing</option>
+        </select>
         <button
           aria-label={`Leave ${title}`}
           className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance text-[var(--muted)] disabled:opacity-40"

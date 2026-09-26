@@ -47,8 +47,8 @@ describe("#69 AC2 — do not disturb, manual and scheduled", () => {
 
     const night = { manual: false, from: "22:00", to: "07:00" } satisfies DndPrefs;
     expect(isDndActive(night, at("23:00"))).toBe(true);
-    expect(isDndActive(night, at("06:00"), "2026-09-22")).toBe(true); // the far side of midnight
-    expect(isDndActive(night, at("08:00"), "2026-09-22")).toBe(false);
+    expect(isDndActive(night, at("06:00", "2026-09-22"))).toBe(true); // the far side of midnight
+    expect(isDndActive(night, at("08:00", "2026-09-22"))).toBe(false);
   });
 
   it("no schedule and no manual toggle interrupt nothing", () => {
