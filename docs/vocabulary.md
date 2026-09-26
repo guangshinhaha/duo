@@ -223,6 +223,20 @@ The duo declines outright. Owner surfaces: "Your duo refused this one." The
 asker page renders the daemon's refusal message verbatim. Never "couldn't
 answer", "was unable to help" — a refusal is a decision, not a failure.
 
+### confirm
+
+The owner's explicit go-ahead for an irreversible step their duo has staged
+(a T4 action — `concept.md` §6: "never autonomous, product principle, not a
+limitation"). The surface is "Confirmations"; the control that gives it is
+"Confirm", and it is never the first control the owner meets: the card states
+what will happen, to what, and whether it can be undone — the registered
+action's own words, verbatim — and its one control ("Review and confirm…")
+opens a question that says it again above Cancel and Confirm. Cancel is the
+focused answer. Confirming is disabled offline, never queued (AR-15): a
+confirmation firing later against moved context is exactly the failure the
+guard exists to prevent. Never "approve" (that is a rule's or a correction's
+verb), "authorise", "allow", "OK", or a bare "Yes".
+
 ### forget this device
 
 The unpair action, under exactly this name everywhere it appears: the

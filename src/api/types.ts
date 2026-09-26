@@ -353,6 +353,40 @@ export interface PairedDevice {
   revokedAt: string | null;
 }
 
+/**
+ * #52: the action registry's own row, as digital-duo #180's
+ * `GET /actions/t4/pending` joins it to each staged request — the facts a
+ * confirmation is judged on. Verbatim domain types (§1.4): the client
+ * classifies nothing, so `tier` and `reversible` are read, never derived.
+ */
+export interface RegisteredAction {
+  id: string;
+  description: string;
+  reversible: boolean;
+  obligates: boolean;
+  audience: "none" | "owner" | "internal" | "external";
+  topicIds: string[];
+  tier: "T0" | "T1" | "T2" | "T3" | "T4";
+  registeredAt: string;
+  updatedAt: string;
+}
+
+/** #52: a staged irreversible step, awaiting the owner's confirmation. `executedAt` is null while it waits and set once, by the confirmation. */
+export interface PendingT4Request {
+  id: string;
+  actionId: string;
+  topicId: string;
+  /** Why the duo staged it — duo-authored text. */
+  reasoning: string;
+  createdAt: string;
+  executedAt: string | null;
+}
+
+/** #52: what `GET /actions/t4/pending` returns per request. `action` is null only if the registry row is gone, which the daemon says no code path can do — a request in that state cannot say what it would do, so it cannot be confirmed here. */
+export interface PendingT4RequestForJudgement extends PendingT4Request {
+  action: RegisteredAction | null;
+}
+
 export interface ApiError {
   error: { code: string; message: string };
 }

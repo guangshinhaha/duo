@@ -15,6 +15,8 @@ import type {
   EmbedJobStatus,
   GridRow,
   InterruptionPortrait,
+  PendingT4Request,
+  PendingT4RequestForJudgement,
   RefusalsListing,
   PairedDevice,
   PasteImportSummary,
@@ -60,6 +62,8 @@ export const queryKeys = {
   mirrorRefusals: ["mirror", "refusals"] as const,
   trustGrid: ["trust", "grid"] as const,
   audit: ["audit"] as const,
+  // #52: the staged irreversible steps awaiting the owner's confirmation.
+  t4Pending: ["actions", "t4", "pending"] as const,
   knowledge: ["knowledge"] as const,
   // #47: what this duo is reachable through — the mute routes invalidate it, since `muted` on each row is the daemon's re-read of the policy.
   channels: ["channels"] as const,
@@ -456,6 +460,31 @@ export function useEmbedJob(api: DuoApiConfig, pollMs: number) {
 }
 
 /**
+ * #52: how often the pending confirmations are re-read. The daemon's one
+ * push channel carries `draft-ready` and nothing else (§1.7), and a
+ * confirmation that only shows when the owner happens to open its screen is
+ * a safeguard nobody sees — so the client asks, on an interval, the one
+ * question the daemon already answers. The interval is the ceiling on how
+ * long a raised confirmation can wait unnoticed while the app is open.
+ */
+export const T4_POLL_MS = 30_000;
+
+/**
+ * #52: the staged T4 requests, each joined with the registry facts the
+ * owner judges it by (digital-duo #180). Polled — and polled in the
+ * background, because the notification this feeds is for the owner who is
+ * not looking at the window.
+ */
+export function usePendingT4(api: DuoApiConfig) {
+  return useQuery({
+    queryKey: queryKeys.t4Pending,
+    queryFn: () => apiRequest<PendingT4RequestForJudgement[]>(api, "/actions/t4/pending"),
+    refetchInterval: T4_POLL_MS,
+    refetchIntervalInBackground: true,
+  });
+}
+
+/**
  * Starts the daemon's one embed job. A 202 carries the starting status,
  * which becomes the watched state at once. A 409 (`embed_already_running`)
  * means a job is already running — from another device or a terminal — so
@@ -472,5 +501,29 @@ export function useStartEmbed(api: DuoApiConfig) {
     onError: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.embedJob });
     },
+  });
+}
+
+/**
+ * #52: giving the confirmation — `POST /actions/t4/:id/confirm`, the one
+ * route that confirms a T4 request, and this the one hook that calls it
+ * (a test holds both to that). The daemon runs the action exactly once and
+ * records this device against it; a 404 or 409 travels as the mutation's
+ * error for the card to show in the daemon's own words.
+ *
+ * `networkMode: "always"` is the AR-15 half: by default a mutation issued
+ * while the browser believes it is offline is *paused* and fired when the
+ * connection returns — a queued confirmation, hours later, against context
+ * that has moved, which is exactly the failure the T4 guard exists to
+ * prevent. Always means attempt now; an unreachable daemon fails it now.
+ */
+export function useConfirmT4(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    networkMode: "always",
+    mutationFn: (requestId: string) =>
+      apiRequest<PendingT4Request>(api, `/actions/t4/${encodeURIComponent(requestId)}/confirm`, { method: "POST" }),
+    // Success or refusal, what is still waiting is the daemon's to say.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.t4Pending }),
   });
 }

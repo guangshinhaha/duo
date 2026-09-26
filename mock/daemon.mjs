@@ -344,6 +344,32 @@ function seedState() {
       { id: "dev-mac", name: "Mac", createdAt: minutesAgo(60 * 24 * 40), lastSeenAt: minutesAgo(2), revokedAt: null },
       { id: "dev-iphone", name: "iPhone", createdAt: minutesAgo(60 * 24 * 12), lastSeenAt: minutesAgo(60 * 5), revokedAt: null },
     ],
+    // #52: the T4 confirmation moment (digital-duo #180). One registered
+    // irreversible action and one request the duo has staged for it — the
+    // registry row is what GET /actions/t4/pending joins to each request.
+    t4Actions: [
+      {
+        id: "file-court-response",
+        description: "File a response with the court on the owner's behalf",
+        reversible: false,
+        obligates: true,
+        audience: "external",
+        topicIds: ["evictions"],
+        tier: "T4",
+        registeredAt: minutesAgo(60 * 24 * 30),
+        updatedAt: minutesAgo(60 * 24 * 30),
+      },
+    ],
+    t4Requests: [
+      {
+        id: "t4-1",
+        actionId: "file-court-response",
+        topicId: "evictions",
+        reasoning: "The filing deadline is tomorrow and you said to handle it.",
+        createdAt: minutesAgo(25),
+        executedAt: null,
+      },
+    ],
     askLog: [],
     draftSeq: 4,
     candidateSeq: 1,
@@ -809,6 +835,37 @@ export function createMockDaemon({ empty = false, embedTickMs = 400 } = {}) {
           const escalated = state.drafts.filter((d) => d.escalated);
           const urgent = escalated.filter(isUrgent).length;
           return ok({ total: escalated.length, urgent, rate: escalated.length === 0 ? 0 : urgent / escalated.length });
+        },
+      ],
+      [
+        "GET",
+        /^\/actions\/t4\/pending$/,
+        // describePendingT4Requests: every request not yet executed, oldest
+        // first, each joined with the registry row it names.
+        () =>
+          ok(
+            state.t4Requests
+              .filter((request) => request.executedAt === null)
+              .map((request) => ({ ...request, action: state.t4Actions.find((a) => a.id === request.actionId) ?? null })),
+          ),
+      ],
+      [
+        "POST",
+        /^\/actions\/t4\/([^/]+)\/confirm$/,
+        // confirmAndExecuteT4Request: exactly once. Unknown id is the
+        // guard's own not-found (404); a second confirmation is a conflict
+        // (409) and never a re-execution.
+        (m) => {
+          const id = decodeURIComponent(m[1]);
+          const found = state.t4Requests.find((request) => request.id === id);
+          if (!found) {
+            return fail(404, "NoPendingT4RequestError", `No pending T4 request with id "${id}".`);
+          }
+          if (found.executedAt !== null) {
+            return fail(409, "T4RequestAlreadyExecutedError", `T4 request "${id}" was already executed and cannot run again.`);
+          }
+          found.executedAt = new Date().toISOString();
+          return ok(found);
         },
       ],
       [

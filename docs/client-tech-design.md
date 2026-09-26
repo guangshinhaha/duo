@@ -285,6 +285,7 @@ a machine that is already on the tailnet, and that attacker gets to retry.
 /mirror          portrait · rules · weak signals · refusals — a rule opens onto its evidence
 /trust           grid, read-only on mobile (AR-17)
 /audit
+/confirmations   irreversible steps awaiting the owner's explicit yes (#52). badge = requests awaiting
 /settings        daemon address · paired devices (list, revoke) · forget this device · end this duo (#55)
 /onboarding      the first run: import · embed · derive → ends at /mirror (#49)
 ```
@@ -302,6 +303,7 @@ TanStack Query for everything server-shaped. Keys mirror the routes so invalidat
 ["mirror", "rules"]  ["mirror", "rules", id]  ["mirror", "refusals"]  ["mirror", "portrait"]  ["trust", "grid"]  ["audit"]
 ["devices"]                          // GET /devices; a revoke writes the answered row in, then refetches (#48)
 ["corpus", "embed"]                  // the daemon's one embed job (#49) — polled only while it says "running"
+["actions", "t4", "pending"]         // polled (30s, background too); invalidated by a confirm POST (#52)
 ```
 
 The only client-owned state is the composer buffer, UI preferences, and the one label the daemon cannot supply (`deviceId`, which paired device this is, #48). No Zustand, no Redux: there
@@ -552,6 +554,14 @@ nobody applies the wrong rule to the wrong object.
   Two different rules for two different objects: applying the draft rule to messages ships
   an app that refuses to let you type offline; applying the message rule to drafts ships
   exactly the failure AR-15 was written to prevent.
+- **A confirmation is the sharpest case (#52).** `POST /actions/t4/:id/confirm` runs an irreversible
+  action, so it is never enabled from a cache: a request is confirmable only once *this* visit has
+  read the pending list from the daemon and the daemon is still answering, and the mutation runs
+  with `networkMode: "always"` so a browser that believes it is offline fails the call now instead
+  of parking it until the connection returns. The daemon has no push for it, so the client polls
+  `GET /actions/t4/pending` (in the background too) and notifies on a request id it has not yet
+  told the owner about; the notification only navigates — the confirm hook is used in exactly one
+  component, and a test holds the route to one module.
 - Reconnect refetches the daemon's views rather than replaying actions against them.
 
 ## 3.4 The labelling contract

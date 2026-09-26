@@ -48,7 +48,7 @@ const NOUNS = [
   "autonomy level",
 ];
 
-const VERBS = ["ask", "send", "keep", "pass on", "refuse", "forget this device"];
+const VERBS = ["ask", "send", "keep", "pass on", "refuse", "confirm", "forget this device"];
 
 describe("#51 AC1 — the vocabulary is written down", () => {
   it("one doc defines every core noun and verb the product uses", () => {

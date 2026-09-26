@@ -278,7 +278,12 @@ A hard requirement stated as an adjective is not testable. Making it so:
 ## 1.7 Realtime, notifications, and being offline
 
 The daemon's WebSocket carries one thing: *a new draft is waiting*. Everything else on that side
-is request/response, because nothing else in this product is time-critical. The workspace
+is request/response, because nothing else in this product is time-critical — with one exception the
+client reads on an interval instead: a T4 action awaiting the owner's confirmation (#52) is
+time-sensitive but has no push, so the app asks `GET /actions/t4/pending` every 30 seconds, in the
+background too, and notifies once per request. The notification says only that the duo needs a
+confirmation before it acts; the consequence is stated on the Confirmations surface, before any
+control. The workspace
 connection is separate (#58) and brings its own sync, owned by `matrix-js-sdk` (#185).
 
 Notifications are honest about the architecture. On the Mac, the daemon is local and native
