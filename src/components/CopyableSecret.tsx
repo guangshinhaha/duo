@@ -4,15 +4,16 @@ import { useState } from "react";
  * A value shown once for the owner to carry elsewhere (a device token, an
  * ask link) — selectable text plus a copy button. The clipboard can be
  * unavailable (insecure context, denied permission); the text stays
- * selectable either way, and the button says when copying failed.
+ * selectable either way, and the button says when copying failed. `multiline`
+ * keeps the value's line breaks (a prompt, not an address).
  */
-export function CopyableSecret({ label, value, testId }: { label: string; value: string; testId: string }) {
+export function CopyableSecret({ label, value, testId, multiline = false }: { label: string; value: string; testId: string; multiline?: boolean }) {
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   return (
     <div className="flex flex-col gap-1">
       <span className="type-provenance text-[var(--muted)]">{label}</span>
       <div className="flex flex-wrap items-center gap-2">
-        <code className="min-w-0 flex-1 break-all rounded-[var(--r-sm)] bg-[var(--surface-2)] p-2 type-identifier" data-testid={testId}>
+        <code className={`min-w-0 flex-1 rounded-[var(--r-sm)] bg-[var(--surface-2)] p-2 type-identifier ${multiline ? "whitespace-pre-wrap" : "break-all"}`} data-testid={testId}>
           {value}
         </code>
         <button

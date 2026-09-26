@@ -9,6 +9,8 @@ import type {
   DeriveJobStatus,
   GrantOutcome,
   MintedAskLink,
+  ConnectorStatus,
+  MintedConnector,
   MintedDevice,
   PromotionOffer,
   TrustTier,
@@ -88,6 +90,7 @@ export const queryKeys = {
   deriveJob: ["corpus", "derive"] as const,
   // The ask links this duo has minted — never their tokens.
   askLinks: ["ask-links"] as const,
+  connector: ["connector"] as const,
   hostedInvites: ["hosted-invites"] as const,
   // Under the ["trust"] root: accepting a promotion or granting autonomy moves the grid too.
   trustPromotions: ["trust", "promotions"] as const,
@@ -616,6 +619,21 @@ export function usePairDevice(api: DuoApiConfig) {
     mutationFn: ({ name }: { name: string }) => apiRequest<MintedDevice>(api, "/devices", { method: "POST", body: JSON.stringify({ name }) }),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.devices });
+    },
+  });
+}
+
+export function useConnector(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.connector, queryFn: () => apiRequest<ConnectorStatus>(api, "/connector") });
+}
+
+/** `POST /connector` — mints the claude.ai connector URL, revoking any earlier one; the path comes back once and the status is re-read. */
+export function useMintConnector(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiRequest<MintedConnector>(api, "/connector", { method: "POST" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.connector });
     },
   });
 }
