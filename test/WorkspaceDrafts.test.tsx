@@ -172,6 +172,11 @@ function fakeDaemon(initial: DraftRecord[], delivery: DraftRecord["delivery"] = 
       );
       return json({});
     }
+    const single = /\/drafts\/([^/?]+)$/.exec(url);
+    if (single && (init?.method ?? "GET") === "GET") {
+      const found = log.find((draft) => draft.id === single[1]);
+      return found ? json(found) : json({ error: { code: "not_found", message: "no such draft" } }, 404);
+    }
     if (url.includes("/drafts?outcome=pending")) {
       return json(log.filter((draft) => draft.outcome === null));
     }
@@ -408,7 +413,7 @@ describe("#68 AC2 — sending replies in the conversation, and delivery is visib
     const drafts = await screen.findByTestId("room-drafts");
     fireEvent.click(await within(drafts).findByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(within(drafts).queryByTestId("draft-card")).toBeNull());
+    await waitFor(() => expect(within(drafts).queryByTestId("draft-tray")).toBeNull());
     expect(await within(drafts).findByTestId("delivery-state")).toHaveTextContent("Delivered.");
   });
 });
@@ -424,7 +429,7 @@ describe("#68 AC3 — the owner is never pre-empted", () => {
     await renderApp();
     navigate(ROOM_HASH);
     const drafts = await screen.findByTestId("room-drafts");
-    await within(drafts).findByTestId("draft-card");
+    await within(drafts).findByTestId("draft-tray");
     // Give any eager behaviour every chance to fire.
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -446,12 +451,14 @@ describe("#68 AC3 — the owner is never pre-empted", () => {
     await renderApp();
     navigate(ROOM_HASH);
     const drafts = await screen.findByTestId("room-drafts");
-    const card = await within(drafts).findByTestId("draft-card");
+    const card = await within(drafts).findByTestId("draft-tray");
 
     // Structurally the duo's (AR-13): the generated text sits in the duo's
     // own container, attributed, never in a person's.
-    expect(within(card).getByTestId("duo-message-attribution")).toHaveTextContent("Your duo");
-    expect(within(card).getByTestId("duo-message")).toHaveTextContent(DRAFT_TEXT);
+    expect(within(card).getByTestId("draft-tray-attribution")).toHaveTextContent("Your duo");
+    expect(within(card).getByTestId("draft-tray-attribution")).toHaveTextContent("only you can see this");
+    expect(within(card).getByTestId("draft-tray-line")).toHaveTextContent(DRAFT_TEXT);
+    expect(within(card).getByTestId("draft-tray-line")).toHaveAttribute("data-duo-line", "confident");
     expect(within(drafts).getByTestId("room-drafts-notice")).toHaveTextContent("Only you can see your duo’s drafts");
   });
 
@@ -486,13 +493,13 @@ describe("#68 AC3 — the owner is never pre-empted", () => {
     navigate(ROOM_HASH);
     const drafts = await screen.findByTestId("room-drafts");
 
-    await waitFor(() => expect(within(drafts).getAllByTestId("draft-card")).toHaveLength(1));
-    expect(within(drafts).getByTestId("duo-message")).toHaveTextContent("For project-x.");
+    await waitFor(() => expect(within(drafts).getAllByTestId("draft-tray")).toHaveLength(1));
+    expect(within(drafts).getByTestId("draft-tray-line")).toHaveTextContent("For project-x.");
   });
 });
 
 describe("#68 AC4 — dispositioning from the conversation, with Review the durable home", () => {
-  it("a pending draft for the conversation shows there with Send, Edit and Ignore", async () => {
+  it("a pending draft for the conversation shows there, as a tray, with Send, Edit and Dismiss", async () => {
     seed();
     vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" })]).fetchMock);
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
@@ -503,10 +510,12 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
 
     expect(await within(drafts).findByRole("button", { name: "Send" })).toBeInTheDocument();
     expect(within(drafts).getByRole("button", { name: "Edit" })).toBeInTheDocument();
-    expect(within(drafts).getByRole("button", { name: "Ignore" })).toBeInTheDocument();
-    // It answers a message: the words it answers are on the card.
-    expect(within(drafts).getByTestId("owner-message")).toHaveTextContent(BOSE_QUESTION);
-    expect(within(drafts).getByTestId("draft-origin")).toHaveTextContent("Asked by @bose:workspace.example in native");
+    expect(within(drafts).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    // It answers a message that is right above it in the conversation, so the
+    // tray does not repeat the question or who asked it: the transcript has both.
+    expect(within(drafts).queryByTestId("owner-message")).toBeNull();
+    expect(within(drafts).queryByTestId("draft-origin")).toBeNull();
+    expect(within(await screen.findByTestId("room-timeline")).getByText(BOSE_QUESTION)).toBeInTheDocument();
   });
 
   it("opening the conversation dispositions nothing: the draft is still in Review, untouched", async () => {
@@ -517,7 +526,7 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
 
     await renderApp();
     navigate(ROOM_HASH);
-    await within(await screen.findByTestId("room-drafts")).findByTestId("draft-card");
+    await within(await screen.findByTestId("room-drafts")).findByTestId("draft-tray");
     expect(daemon.outcomes).toEqual([]);
 
     navigate("#waiting");
@@ -543,7 +552,7 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
   });
 
-  it("Ignore holds the same undo window it does in Review, and records the discard only when it ends", async () => {
+  it("Dismiss holds the same undo window it did in Review, and records the discard only when it ends", async () => {
     seed();
     const daemon = fakeDaemon([draftFor({ id: "d1" })]);
     vi.stubGlobal("fetch", daemon.fetchMock);
@@ -552,9 +561,9 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
     await renderApp();
     navigate(ROOM_HASH);
     const drafts = await screen.findByTestId("room-drafts");
-    fireEvent.click(await within(drafts).findByRole("button", { name: "Ignore" }));
+    fireEvent.click(await within(drafts).findByRole("button", { name: "Dismiss" }));
 
-    expect(within(drafts).getByTestId("ignore-window")).toHaveTextContent("Ignoring — not sent yet.");
+    expect(within(drafts).getByTestId("ignore-window")).toHaveTextContent("Dismissing — not sent yet.");
     expect(daemon.outcomes).toEqual([]);
     fireEvent.click(within(drafts).getByRole("button", { name: "Undo" }));
     expect(within(drafts).getByRole("button", { name: "Send" })).toBeInTheDocument();
@@ -576,5 +585,32 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
     const drafts = await screen.findByTestId("room-drafts");
 
     expect(await within(drafts).findByTestId("escalation-reason")).toHaveTextContent("No rule covers refunds over 90 days.");
+  });
+});
+
+describe("#142 — an old draft address opens the chat the draft belongs to", () => {
+  it("#draft/:id for a message that arrived in a conversation you hold lands in that chat, on its tray", async () => {
+    seed();
+    vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" })]).fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate("#draft/d1");
+
+    const tray = await within(await screen.findByTestId("room-drafts")).findByTestId("draft-tray");
+    expect(tray).toHaveTextContent(DRAFT_TEXT);
+    expect(window.location.hash).toBe(ROOM_HASH);
+  });
+
+  it("a draft with no conversation of its own (you asked it yourself) keeps its own page", async () => {
+    seed();
+    vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1", provenance: { origin: "owner" } })]).fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate("#draft/d1");
+
+    expect(await screen.findByTestId("draft-page")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#draft/d1");
   });
 });

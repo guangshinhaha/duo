@@ -49,6 +49,19 @@ export function Draft({
     }
   }, [draft.data]);
 
+  // Chat-first (#142): a draft for a message that arrived in a conversation
+  // the member holds belongs in that chat's tray, so its old address opens
+  // the chat. A draft with no such conversation (a bridged Slack question, a
+  // question you asked yourself) keeps this page.
+  const chatHref = draft.data ? conversationLink(draft.data.provenance) : undefined;
+  useEffect(() => {
+    if (chatHref !== undefined && draft.data?.outcome == null) {
+      // In place, no history entry: the old address never becomes a back-button trap.
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${chatHref}`);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
+  }, [chatHref, draft.data?.outcome]);
+
   if (draft.isPending) {
     return <div className="p-6 text-[var(--muted)]">Opening the draft…</div>;
   }

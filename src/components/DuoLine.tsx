@@ -44,12 +44,13 @@ function lineColour(state: DuoLineState): { colour: string; opacity: number } {
  *
  * `label` is the possessive attribution ("Your duo", "Ana's duo" — the
  * three phrasings vocabulary.md pins). `meta` is the state and time after
- * it ("draft · 2m"). Test ids are per call site so each existing surface
+ * it ("draft · 2m"); `aside` sits at the far end of the line. Test ids are per call site so each existing surface
  * keeps the ids its tests already pin.
  */
 export function DuoLine({
   label,
   meta,
+  aside,
   state = "neutral",
   testId,
   attributionTestId,
@@ -57,7 +58,9 @@ export function DuoLine({
   children,
 }: {
   label: string;
-  meta?: string;
+  meta?: ReactNode;
+  /** Right-aligned on the attribution line — who may see this ("only you can see this"). */
+  aside?: ReactNode;
   state?: DuoLineState;
   testId: string;
   attributionTestId: string;
@@ -71,6 +74,7 @@ export function DuoLine({
         <Mark />
         <span>{label}</span>
         {meta ? <span className="text-[var(--faint)]">{meta}</span> : null}
+        {aside ? <span className="ml-auto text-[var(--faint)]">{aside}</span> : null}
       </div>
       <div
         className={`shape-duo-line ${compact ? "py-2 pl-4 pr-3" : "py-3 pl-4 pr-4"} type-body text-[var(--text)]`}
