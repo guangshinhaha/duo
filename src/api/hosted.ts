@@ -53,6 +53,8 @@ export interface HostedInviteRow {
   readonly expiresAt: string;
   readonly usedAt: string | null;
   readonly tenantId: string | null;
+  /** Which org the invite admits its holder into. Absent from a daemon that predates orgs. */
+  readonly orgId?: string;
 }
 
 /** `POST {origin}/hosted/invites` — the only time the invite code (and its link) is ever shown. */
@@ -61,6 +63,8 @@ export interface MintedHostedInvite {
   readonly name: string;
   readonly email: string | null;
   readonly expiresAt: string;
+  /** The org the person lands in. Absent from a daemon that predates orgs. */
+  readonly orgId?: string;
   readonly code: string;
   /** Null when the server doesn't know its own public and web URLs — then the code is all there is to hand over. */
   readonly link: string | null;
@@ -72,6 +76,30 @@ export interface CreateInviteInput {
   /** Locks the invite to this Google account's address. */
   readonly email?: string;
   readonly expiresInHours?: number;
+  /** Which org the invite admits them into; without one the daemon uses its default org. */
+  readonly orgId?: string;
+}
+
+/** A row of `GET {origin}/hosted/orgs` (super admin only). */
+export interface HostedOrg {
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: string;
+  readonly memberCount: number;
+}
+
+/** A row of `GET {origin}/hosted/orgs/:orgId/members`: one person and their duo. `duoId` is `root` for the server's original duo. */
+export interface HostedOrgMember {
+  readonly duoId: string;
+  /** The person's name — the one they gave (or Google gave) when their duo was made. */
+  readonly name: string;
+  /** Their Google account's address, when the duo is bound to one. */
+  readonly email: string | null;
+  /** The server's original duo, the one that predates invites. */
+  readonly isRoot: boolean;
+  readonly joinedAt: string | null;
+  /** Also a super admin of this server. */
+  readonly isAdmin: boolean;
 }
 
 /** Reads a daemon answer the way `apiRequest` does: a non-2xx body becomes an `ApiRequestError` with the daemon's own code. */
@@ -165,6 +193,31 @@ export async function createInvite(
   input: CreateInviteInput,
 ): Promise<MintedHostedInvite> {
   return readAnswer<MintedHostedInvite>(await postJson(`${origin}/hosted/invites`, input, token));
+}
+
+/** A super-admin GET at the daemon's origin, authorised by this device's own token. */
+async function adminGet<T>(url: string, token: string): Promise<T> {
+  return readAnswer<T>(await fetch(url, { headers: { Authorization: `Bearer ${token}` } }));
+}
+
+/** `GET {origin}/hosted/orgs` — super admin only (401 with no credential, 403 for anyone else). */
+export async function listOrgs(origin: string, token: string): Promise<HostedOrg[]> {
+  return adminGet<HostedOrg[]>(`${origin}/hosted/orgs`, token);
+}
+
+/** `POST {origin}/hosted/orgs` — 201 with the new org; 400 for a bad name, 409 when the name is taken (the daemon's own message travels on the error). */
+export async function createOrg(origin: string, token: string, name: string): Promise<HostedOrg> {
+  return readAnswer<HostedOrg>(await postJson(`${origin}/hosted/orgs`, { name }, token));
+}
+
+/** `POST {origin}/hosted/orgs/:orgId/rename` — POST because the daemon's CORS policy allows only GET and POST. */
+export async function renameOrg(origin: string, token: string, orgId: string, name: string): Promise<HostedOrg> {
+  return readAnswer<HostedOrg>(await postJson(`${origin}/hosted/orgs/${encodeURIComponent(orgId)}/rename`, { name }, token));
+}
+
+/** `GET {origin}/hosted/orgs/:orgId/members` — 404 for an org that doesn't exist. */
+export async function listOrgMembers(origin: string, token: string, orgId: string): Promise<HostedOrgMember[]> {
+  return adminGet<HostedOrgMember[]>(`${origin}/hosted/orgs/${encodeURIComponent(orgId)}/members`, token);
 }
 
 /**

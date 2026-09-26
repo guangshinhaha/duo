@@ -518,6 +518,8 @@ export interface HostedSignupResult {
   readonly ownerName: string;
   /** May mint invites from Settings. Absent from a daemon that predates sign-in — read as false. */
   readonly isAdmin?: boolean;
+  /** The org this duo belongs to (null for the root duo of a server with no org for it). Absent from a daemon that predates orgs. */
+  readonly orgId?: string | null;
 }
 
 /** `GET {origin}/hosted/config` — what the sign-in page needs. A null client id means sign-in isn't configured on that server. */
