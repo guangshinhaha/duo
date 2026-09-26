@@ -5,6 +5,8 @@ import type { DraftRecord } from "../api/types.js";
 import { DraftCard } from "../components/DraftCard.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { useConversationLink } from "../workspace/drafts.js";
+import type { WorkspaceConnection } from "../workspace/matrix.js";
 import { corpusSentence, lastImportSentence } from "./Knowledge.js";
 
 /**
@@ -43,8 +45,12 @@ function stateOf(draft: DraftRecord): "draft" | "escalation" | "refusal" {
  * wire — no registry, #43's discipline), and the sidebar badge keeps
  * counting everything, because it reads its own query, not this view.
  */
-export function Review({ api }: { api: DuoApiConfig }) {
+export function Review({ api, connection = null }: { api: DuoApiConfig; connection?: WorkspaceConnection | null }) {
   const { data: drafts, isLoading, error, refetch } = usePendingDrafts(api);
+  // #68: a draft for a message that arrived in one of the member's own
+  // conversations links back into it — resolved against the workspace's
+  // own room list, and absent (never a dead link) when there is none.
+  const conversationLink = useConversationLink(connection);
   // #37: the empty queue's second read — what the duo knows so far, from
   // the same knowledge key the Knowledge screen and search use (deduped,
   // cached). It enriches the empty state only, so it is gated to fire only
@@ -248,7 +254,7 @@ export function Review({ api }: { api: DuoApiConfig }) {
                 }
               }}
             >
-              <DraftCard api={api} draft={draft} />
+              <DraftCard api={api} draft={draft} conversationHref={conversationLink(draft.provenance)} />
             </div>
           ))
         )}

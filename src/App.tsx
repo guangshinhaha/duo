@@ -139,6 +139,12 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
   if (hash === "#conversations") {
     return "conversations";
   }
+  // #68: Review is a named address too, not only the empty hash's default —
+  // with a workspace session the default is Conversations, and the link
+  // that says "#review" must still land on the queue.
+  if (hash === "#review") {
+    return "review";
+  }
   if (hash === "#mirror") {
     return "mirror";
   }
@@ -477,14 +483,18 @@ interface SurfaceContext {
 function routeSurface(route: Route, shell: SurfaceContext) {
   if (typeof route === "object") {
     if ("room" in route) {
-      return <Room connection={shell.connection} roomId={route.room} />;
+      return <Room connection={shell.connection} roomId={route.room} api={shell.api} />;
     }
     if ("thread" in route) {
       return (
         <ThreadView connection={shell.connection} roomId={route.thread.roomId} rootEventId={route.thread.rootEventId} />
       );
     }
-    return shell.api ? <Draft api={shell.api} draftId={route.draft} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
+    return shell.api ? (
+      <Draft api={shell.api} draftId={route.draft} connection={shell.connection} />
+    ) : (
+      <NoDuoPanel onPairDuo={shell.onPairDuo} />
+    );
   }
   // The routes below this line are the duo's own surfaces.
   if (route !== "conversations" && route !== "settings" && !shell.api) {
@@ -526,7 +536,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
     case "audit":
       return <Audit api={shell.api!} />;
     case "review":
-      return <Review api={shell.api!} />;
+      return <Review api={shell.api!} connection={shell.connection} />;
   }
 }
 

@@ -506,7 +506,8 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     window.dispatchEvent(new Event("hashchange"));
     const noDuo = await screen.findByTestId("no-duo");
     expect(noDuo).toHaveTextContent("No duo is connected on this device.");
-    expect(screen.getByTestId("no-duo-pair")).toHaveTextContent("Pair your duo");
+    // The route's own panel and the sidebar's condensed one both offer it (#68 made #review a real address for a member, so both stand).
+    expect(screen.getAllByTestId("no-duo-pair")[0]).toHaveTextContent("Pair your duo");
     // Offered, not demanded: nothing modal is in the way.
     expect(screen.queryByTestId("pair-duo-dialog")).toBeNull();
   });

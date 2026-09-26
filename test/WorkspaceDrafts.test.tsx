@@ -25,6 +25,11 @@ vi.mock("../src/workspace/matrix.js", () => ({
   connect: vi.fn(),
 }));
 
+// Each test mounts the whole app on a fresh module registry (the first one
+// also pays the app's dynamic imports), which a loaded machine stretches
+// past vitest's 5s default.
+vi.setConfig({ testTimeout: 30_000 });
+
 const SESSION: WorkspaceSession = {
   homeserverUrl: "https://workspace.example",
   userId: "@ana:workspace.example",

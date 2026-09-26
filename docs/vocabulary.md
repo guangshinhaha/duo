@@ -47,7 +47,12 @@ says "Your duo" and "{owner}'s duo". These three are the whole set.
 An answer the duo composed, waiting on the owner. Drafts live in Review
 ("Waiting on you in Review."); their verbs are send, edit, and keep. A draft
 is never "a response", "a reply", or "a message from your duo" — it is a
-draft until the owner sends it.
+draft until the owner sends it. When a message arrives in a conversation
+here, the duo drafts for it, and the draft is also shown in that
+conversation, beside the composer and never in the transcript: "Only you can
+see your duo’s drafts — nothing is posted until you send one." It is the same
+draft in both places — deciding it in one clears it from the other — and
+left alone it stays in Review.
 
 ### escalation
 
@@ -102,7 +107,9 @@ surfaces say so rather than demanding pairing.
 
 A room in the workspace — people, groups, and colleagues' duos, all entries
 in one list. Conversations are the default space once you're signed in; your
-own duo's loop keeps its home in Review.
+own duo's loop keeps its home in Review, and a draft for a message that
+arrived in a conversation opens back into it ("Open the conversation") when
+you hold that conversation.
 
 ### member
 
