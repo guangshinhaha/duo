@@ -484,6 +484,12 @@ function AppShell() {
       // credential (the daemon cannot revoke it), then forgotten.
       hosted.signOut();
       writeHostedAccount(null);
+      if (hostedActive) {
+        // A hosted device ignores a stored manual sign-in and Settings offers no
+        // button to clear it, so it must not outlive the account here: signing
+        // out leaves no live workspace token behind in this browser.
+        setSessionRaw(null);
+      }
     }
     setApiRaw(next);
   }

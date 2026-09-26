@@ -388,10 +388,17 @@ export function ChatList({
       // A hosted build has no way in to offer (#127): the workspace connects
       // by itself, so this says where that has got to — never a sign-in button.
       if (isHostedAccess(workspaceAccess)) {
-        if (workspaceAccess.kind === "hosted-connecting" || workspaceAccess.kind === "hosted-connected") {
-          return <RouteLoading variant="rows" />;
-        }
-        return <HostedWorkspaceStatus access={workspaceAccess} className="flex flex-col gap-1 p-4" />;
+        // One persistent live region says where things stand and changes text
+        // in place; the skeleton beside it is only the shape of what is coming.
+        // Until the connection is in hand it is "connecting" whatever the daemon
+        // has already answered.
+        const waiting = workspaceAccess.kind === "hosted-connecting" || workspaceAccess.kind === "hosted-connected";
+        return (
+          <>
+            <HostedWorkspaceStatus access={waiting ? { kind: "hosted-connecting" } : workspaceAccess} className="flex flex-col gap-1 p-4" />
+            {waiting && <RouteLoading slowNote={null} variant="rows" />}
+          </>
+        );
       }
       if (session) {
         // A stored session is still connecting: not "nothing here".

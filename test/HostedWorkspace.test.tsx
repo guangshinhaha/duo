@@ -1,20 +1,28 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useHostedWorkspace, refreshDelayMs } from "../src/workspace/access.js";
-import { fetchWorkspaceSession } from "../src/api/hosted.js";
+import { fetchWorkspaceSession, revokeWorkspaceSession, workspaceSessionUrl, WorkspaceSessionShapeError } from "../src/api/hosted.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 
 /*
  * #127 (auto-connect half): after Google sign-in the app asks the paired
  * daemon for the person's own workspace session (`POST
- * /hosted/workspace/session`, digital-duo#233), holds it in memory, renews it
- * about an hour before it expires, and ends it at the workspace on sign-out.
+ * <basePath>/workspace/session`, digital-duo#233 and #244), holds it in memory,
+ * renews it about an hour before it expires, and ends it at the workspace on
+ * sign-out. When the workspace refuses it (M_UNKNOWN_TOKEN) the daemon's copy
+ * is dropped with `DELETE` before the next ask.
  * These pin the hook that does it against a stubbed fetch and fake timers;
  * the app-level wiring (connect, the surfaces) is in Workspace.test.tsx.
  */
 
 const ORIGIN = "https://duo-daemon.example.org";
-const API: DuoApiConfig = { baseUrl: `${ORIGIN}/d/ada`, token: "device-token-ada" };
+const API: DuoApiConfig = { baseUrl: `${ORIGIN}/t/ada`, token: "device-token-ada" };
+const BOB: DuoApiConfig = { baseUrl: `${ORIGIN}/t/bob`, token: "device-token-bob" };
+/** The root duo has no path: its route is at the bare origin. */
+const ROOT: DuoApiConfig = { baseUrl: ORIGIN, token: "device-token-root" };
+function isSessionRoute(url: string): boolean {
+  return [API, BOB, ROOT].some((config) => workspaceSessionUrl(config) === url);
+}
 const HOMESERVER = "https://workspace.example.org";
 const HOUR = 3_600_000;
 
@@ -53,7 +61,7 @@ interface Call {
   authorization: string | null;
 }
 
-/** A stubbed fetch: daemon session calls answer from `sessionReplies` in order (the last repeats); Matrix logout calls are recorded. */
+/** A stubbed fetch: daemon session `POST`s answer from `sessionReplies` in order (the last repeats), a `DELETE` answers 204; Matrix logout calls are recorded. */
 function stubFetch(sessionReplies: Array<Reply | Error | Promise<Reply>>) {
   const calls: Call[] = [];
   let sessionCalls = 0;
@@ -61,7 +69,10 @@ function stubFetch(sessionReplies: Array<Reply | Error | Promise<Reply>>) {
     const url = String(input);
     const headers = new Headers(init?.headers);
     calls.push({ url, method: init?.method ?? "GET", authorization: headers.get("Authorization") });
-    if (url.endsWith("/hosted/workspace/session")) {
+    if (isSessionRoute(url) && init?.method === "DELETE") {
+      return new Response(null, { status: 204 });
+    }
+    if (isSessionRoute(url)) {
       const picked = sessionReplies[Math.min(sessionCalls, sessionReplies.length - 1)]!;
       sessionCalls += 1;
       if (picked instanceof Error) {
@@ -76,7 +87,8 @@ function stubFetch(sessionReplies: Array<Reply | Error | Promise<Reply>>) {
   vi.stubGlobal("fetch", fn);
   return {
     calls,
-    sessionCalls: () => calls.filter((call) => call.url.endsWith("/hosted/workspace/session")),
+    sessionCalls: () => calls.filter((call) => isSessionRoute(call.url) && call.method === "POST"),
+    drops: () => calls.filter((call) => isSessionRoute(call.url) && call.method === "DELETE"),
     logouts: () => calls.filter((call) => call.url.endsWith("/_matrix/client/v3/logout")),
   };
 }
@@ -131,8 +143,9 @@ describe("asking the daemon for the session", () => {
     const view = await mount();
 
     expect(net.sessionCalls()).toEqual([
-      { url: `${ORIGIN}/hosted/workspace/session`, method: "POST", authorization: "Bearer device-token-ada" },
+      { url: workspaceSessionUrl(API), method: "POST", authorization: "Bearer device-token-ada" },
     ]);
+    expect(workspaceSessionUrl(API)).toBe(`${ORIGIN}/t/ada/workspace/session`);
     expect(view.result.current.access).toEqual({ kind: "hosted-connected" });
     expect(view.result.current.session).toEqual({
       homeserverUrl: HOMESERVER,
@@ -140,6 +153,16 @@ describe("asking the daemon for the session", () => {
       accessToken: "syt_minted_1",
       deviceId: null,
     });
+  });
+
+  it("the root duo's route is at the bare origin, and the old /hosted route is never used", async () => {
+    signInAt();
+    const net = stubFetch([granted()]);
+
+    await mount(ROOT);
+
+    expect(net.sessionCalls().map((call) => call.url)).toEqual([`${ORIGIN}/workspace/session`]);
+    expect(net.calls.some((call) => call.url.includes("/hosted/"))).toBe(false);
   });
 
   it("sends no body: nothing the caller says can name an account", async () => {
@@ -392,7 +415,43 @@ describe("the workspace refusing the credential (M_UNKNOWN_TOKEN)", () => {
     expect(view.result.current.reconnectKey).toBe(key + 1);
   });
 
-  it("is not a reconnect storm: at once, then after 6 seconds, then a minute at a time", async () => {
+  it("has the daemon drop its cached session (DELETE, same auth) before the new ask — the daemon no longer notices a signed-out token itself", async () => {
+    signInAt();
+    const net = stubFetch([granted(), granted()]);
+    const view = await mount();
+    expect(net.drops()).toHaveLength(0);
+
+    act(() => view.result.current.report("rejected"));
+    await flush();
+
+    expect(net.drops()).toEqual([{ url: workspaceSessionUrl(API), method: "DELETE", authorization: "Bearer device-token-ada" }]);
+    // Drop first, then ask: the ask must not be answered from the copy being dropped.
+    expect(net.calls.map((call) => call.method)).toEqual(["POST", "DELETE", "POST"]);
+    // A routine renewal or a plain failure drops nothing.
+    act(() => view.result.current.report("failed"));
+    await advance(5_000);
+    expect(net.drops()).toHaveLength(1);
+  });
+
+  it("if the DELETE cannot be made the ask goes ahead anyway", async () => {
+    signInAt();
+    const net = stubFetch([granted(), granted()]);
+    const view = await mount();
+    const stubbed = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (init?.method === "DELETE") {
+        throw new TypeError("offline");
+      }
+      return stubbed(input, init);
+    });
+
+    act(() => view.result.current.report("rejected"));
+    await flush();
+
+    expect(net.sessionCalls()).toHaveLength(2);
+  });
+
+  it("is not a reconnect storm: at once, then after 11 seconds (the daemon keeps a token under 10s old), then a minute at a time", async () => {
     signInAt();
     const net = stubFetch([granted()]);
     const view = await mount();
@@ -402,7 +461,7 @@ describe("the workspace refusing the credential (M_UNKNOWN_TOKEN)", () => {
     expect(net.sessionCalls()).toHaveLength(2);
 
     act(() => view.result.current.report("rejected"));
-    await advance(5_999);
+    await advance(10_999);
     expect(net.sessionCalls()).toHaveLength(2);
     await advance(1);
     expect(net.sessionCalls()).toHaveLength(3);
@@ -424,7 +483,7 @@ describe("the workspace refusing the credential (M_UNKNOWN_TOKEN)", () => {
     await flush();
     act(() => view.result.current.report("rejected"));
     await flush();
-    await advance(6_000);
+    await advance(11_000);
     // Only the one in-flight ask (plus the first): the timer found it busy.
     expect(net.sessionCalls()).toHaveLength(2);
     release(granted());
@@ -498,6 +557,8 @@ describe("signing out", () => {
     expect(net.logouts()).toEqual([
       { url: `${HOMESERVER}/_matrix/client/v3/logout`, method: "POST", authorization: `Bearer ${token}` },
     ]);
+    // ...and the daemon is told to forget the copy it caches, so signing back in is not handed it.
+    expect(net.drops()).toEqual([{ url: workspaceSessionUrl(API), method: "DELETE", authorization: "Bearer device-token-ada" }]);
     expect(view.result.current.session).toBeNull();
   });
 
@@ -562,17 +623,20 @@ describe("signing out", () => {
     const net = stubFetch([granted(), granted()]);
     const view = await mount();
 
-    view.rerender({ config: { baseUrl: `${ORIGIN}/d/bob`, token: "device-token-bob" } });
+    view.rerender({ config: BOB });
     await flush();
 
     expect(net.logouts()).toHaveLength(1);
+    // The first person's daemon copy is dropped with the first person's device token, at the first person's route.
+    expect(net.drops()).toEqual([{ url: workspaceSessionUrl(API), method: "DELETE", authorization: "Bearer device-token-ada" }]);
+    expect(net.sessionCalls().at(-1)?.url).toBe(workspaceSessionUrl(BOB));
     expect(net.sessionCalls().at(-1)?.authorization).toBe("Bearer device-token-bob");
     expect(view.result.current.session?.accessToken).toBe("syt_minted_2");
   });
 
-  it("signing straight back in inside the daemon's 5s window can be handed the same credential; the refusal is answered by asking again", async () => {
+  it("signing straight back in can be handed the same credential (the daemon keeps a token under 10s old); the refusal is answered by dropping it and asking again", async () => {
     signInAt();
-    // The daemon hands the just-signed-out credential again, then a new one once its own check has run.
+    // The daemon hands the just-signed-out credential again, then a new one once the copy is dropped.
     const same = granted();
     const net = stubFetch([same, same, granted()]);
     const view = await mount();
@@ -589,6 +653,9 @@ describe("signing out", () => {
     await flush();
 
     expect(net.sessionCalls()).toHaveLength(3);
+    // Two drops: one at sign-out, one because of the refusal — the last before the last ask.
+    expect(net.drops()).toHaveLength(2);
+    expect(net.calls.at(-2)?.method).toBe("DELETE");
     expect(view.result.current.session?.accessToken).toBe("syt_minted_2");
   });
 });
@@ -596,7 +663,205 @@ describe("signing out", () => {
 describe("the daemon's answer shape", () => {
   it("fetchWorkspaceSession reads deviceId null and a missing deviceId alike", async () => {
     stubFetch([granted({ deviceId: undefined })]);
-    const session = await fetchWorkspaceSession(ORIGIN, "t");
+    const session = await fetchWorkspaceSession({ baseUrl: ORIGIN, token: "t" });
     expect(session.deviceId).toBeNull();
+  });
+});
+
+describe("Retry-After is followed only inside a sane window", () => {
+  it("a Retry-After of 0 (a proxy in front of the daemon) waits 5 seconds, not a tight loop", async () => {
+    signInAt();
+    const net = stubFetch([refusal(503, "workspace_unavailable", { "Retry-After": "0" }), granted()]);
+    await mount();
+
+    await advance(4_999);
+    expect(net.sessionCalls()).toHaveLength(1);
+    await advance(1);
+    expect(net.sessionCalls()).toHaveLength(2);
+  });
+
+  it("a Retry-After of a day waits 5 minutes at most, so the person is never stuck on the retry note for hours", async () => {
+    signInAt();
+    const net = stubFetch([refusal(429, "rate_limited", { "Retry-After": "86400" }), granted()]);
+    await mount();
+
+    await advance(5 * 60_000 - 1);
+    expect(net.sessionCalls()).toHaveLength(1);
+    await advance(1);
+    expect(net.sessionCalls()).toHaveLength(2);
+  });
+});
+
+describe("a workspace that cannot be connected to is not asked about faster and faster", () => {
+  it("the daemon answering 200 between failures does not send the backoff back to 5 seconds: 5, 10, 20, 40, then a minute", async () => {
+    signInAt();
+    const net = stubFetch([granted()]);
+    const view = await mount();
+    const waits: number[] = [];
+
+    for (const expected of [5_000, 10_000, 20_000, 40_000, 60_000, 60_000]) {
+      const asked = net.sessionCalls().length;
+      // The app connected with what the daemon gave, and the workspace could not be reached.
+      act(() => view.result.current.report("failed"));
+      await advance(expected - 1);
+      expect(net.sessionCalls()).toHaveLength(asked);
+      await advance(1);
+      // The daemon answered again (a 200, which must not reset the run of failures).
+      expect(net.sessionCalls()).toHaveLength(asked + 1);
+      waits.push(expected);
+    }
+    expect(waits).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000]);
+  });
+
+  it("once the connection is up the run is over: the next failure waits 5 seconds again", async () => {
+    signInAt();
+    const net = stubFetch([granted()]);
+    const view = await mount();
+
+    for (const wait of [5_000, 10_000]) {
+      act(() => view.result.current.report("failed"));
+      await advance(wait);
+    }
+    act(() => view.result.current.report("up"));
+    const asked = net.sessionCalls().length;
+    act(() => view.result.current.report("failed"));
+    await advance(4_999);
+    expect(net.sessionCalls()).toHaveLength(asked);
+    await advance(1);
+    expect(net.sessionCalls()).toHaveLength(asked + 1);
+  });
+
+  it("a routine renewal that succeeds ends the run too", async () => {
+    signInAt();
+    // Two failed asks at first, then a granted session that renews once.
+    const net = stubFetch([new TypeError("offline"), new TypeError("offline"), granted(), granted()]);
+    const view = await mount();
+    await advance(5_000);
+    await advance(10_000);
+    expect(view.result.current.access).toEqual({ kind: "hosted-connected" });
+    act(() => view.result.current.report("up"));
+
+    await advance(23 * HOUR);
+    expect(net.sessionCalls()).toHaveLength(4);
+    // A later failure starts from 5s.
+    act(() => view.result.current.report("failed"));
+    await advance(5_000);
+    expect(net.sessionCalls()).toHaveLength(5);
+  });
+});
+
+describe("the workspace address the daemon returns (the token rides it)", () => {
+  it("an http: answer is a shape error: nothing connects and no request carries the workspace token", async () => {
+    signInAt();
+    const net = stubFetch([granted({ homeserverUrl: "http://workspace.example.org" })]);
+
+    const view = await mount();
+
+    expect(view.result.current.session).toBeNull();
+    expect(view.result.current.access).toEqual({ kind: "hosted-retrying", why: "unreachable" });
+    expect(net.calls.every((call) => !(call.authorization ?? "").includes("syt_minted"))).toBe(true);
+    expect(net.logouts()).toEqual([]);
+    await expect(fetchWorkspaceSession(API)).rejects.toBeInstanceOf(WorkspaceSessionShapeError);
+  });
+
+  it("a homeserver that is not an address at all is a shape error too", async () => {
+    stubFetch([granted({ homeserverUrl: "not a url" })]);
+    await expect(fetchWorkspaceSession(API)).rejects.toBeInstanceOf(WorkspaceSessionShapeError);
+  });
+
+  it("is normalised to the same address the manual sign-in uses (its origin), so connecting and signing out name one base URL", async () => {
+    signInAt();
+    const net = stubFetch([granted({ homeserverUrl: "https://workspace.example.org/prefix/" })]);
+    const view = await mount();
+    const held = view.result.current.session!;
+
+    expect(held.homeserverUrl).toBe("https://workspace.example.org");
+    act(() => view.result.current.signOut());
+    await flush();
+
+    // Logout goes where the connection went: no path, no double slash.
+    expect(net.logouts().map((call) => call.url)).toEqual(["https://workspace.example.org/_matrix/client/v3/logout"]);
+  });
+
+  it("revokeWorkspaceSession sends nothing at all for an http: address", async () => {
+    const net = stubFetch([granted()]);
+
+    await revokeWorkspaceSession({ homeserverUrl: "http://workspace.example.org", accessToken: "syt_secret" });
+    await revokeWorkspaceSession({ homeserverUrl: "nonsense", accessToken: "syt_secret" });
+
+    expect(net.calls).toEqual([]);
+  });
+
+  it("revokeWorkspaceSession for a path-prefixed address posts to the same base URL the connection uses", async () => {
+    const net = stubFetch([granted()]);
+
+    await revokeWorkspaceSession({ homeserverUrl: "https://workspace.example.org/prefix", accessToken: "syt_secret" });
+
+    expect(net.logouts().map((call) => call.url)).toEqual(["https://workspace.example.org/_matrix/client/v3/logout"]);
+  });
+});
+
+describe("a reply that lands after the hook has moved on", () => {
+  /** The first ask stays open; returns the signal it was made with and a way to answer it. */
+  async function holdFirstAsk(second?: Reply) {
+    signInAt();
+    let release: (reply: Reply) => void = () => {};
+    const net = stubFetch([new Promise<Reply>((resolve) => (release = resolve)), ...(second ? [second] : [])]);
+    const view = await mount();
+    const signal = vi.mocked(fetch).mock.calls[0]![1]!.signal!;
+    expect(signal.aborted).toBe(false);
+    return { net, view, signal, release };
+  }
+
+  it("signing out with the ask open aborts it, drops the late answer and starts no renewal", async () => {
+    const { net, view, signal, release } = await holdFirstAsk();
+
+    act(() => view.result.current.signOut());
+    view.rerender({ config: null });
+    expect(signal.aborted).toBe(true);
+    release(granted());
+    await flush();
+    // No renewal was scheduled by the answer that arrived too late.
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(30 * HOUR);
+
+    expect(view.result.current.session).toBeNull();
+    expect(view.result.current.access.kind).not.toBe("hosted-connected");
+    expect(net.sessionCalls()).toHaveLength(1);
+    // Nothing was held, so nothing is left to end.
+    expect(net.logouts()).toEqual([]);
+  });
+
+  it("unmounting with the ask open does the same", async () => {
+    const { net, view, signal, release } = await holdFirstAsk();
+
+    view.unmount();
+    expect(signal.aborted).toBe(true);
+    release(granted());
+    await flush();
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(30 * HOUR);
+
+    expect(net.sessionCalls()).toHaveLength(1);
+  });
+
+  it("re-pairing with the ask open drops the late answer and keeps only the new pairing's session", async () => {
+    const { net, view, signal, release } = await holdFirstAsk(granted());
+
+    view.rerender({ config: BOB });
+    await flush();
+    expect(signal.aborted).toBe(true);
+    const bobsToken = view.result.current.session?.accessToken;
+    expect(bobsToken).toBe("syt_minted_1");
+
+    // The first ask's answer arrives now, for the account that is no longer paired.
+    release(granted());
+    await advance(1_000);
+
+    expect(view.result.current.session?.accessToken).toBe(bobsToken);
+    // One renewal timer, for the current session only.
+    expect(vi.getTimerCount()).toBe(1);
+    expect(net.sessionCalls().map((call) => call.url)).toEqual([workspaceSessionUrl(API), workspaceSessionUrl(BOB)]);
+    expect(net.logouts()).toEqual([]);
   });
 });

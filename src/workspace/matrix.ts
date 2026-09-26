@@ -15,6 +15,7 @@ import {
   type Room as MatrixRoom,
 } from "matrix-js-sdk";
 import { localpartOf } from "./identity.js";
+import { normalizeHomeserverUrl } from "../homeserver.js";
 import {
   formattedBodyWithMentions,
   mentionAnchorsFrom,
@@ -368,22 +369,13 @@ export interface WorkspaceConnection {
   stop(): Promise<void>;
 }
 
+export { normalizeHomeserverUrl };
+
 /** The device name the homeserver shows beside this sign-in. */
 const DEVICE_DISPLAY_NAME = "Duo";
 
 /** How long `connect` waits for the first completed sync before giving up on the homeserver. */
 const FIRST_SYNC_TIMEOUT_MS = 20_000;
-
-function normalizeHomeserverUrl(raw: string): string {
-  const url = new URL(raw.trim());
-  if (url.protocol !== "https:") {
-    // The platform record's own rule for workspace URLs, mirrored from the
-    // core's settings validation: the token rides this URL, so plaintext is
-    // not a configuration, it's a leak.
-    throw new Error(`The workspace address must start with https — sign-in details travel it in the clear otherwise (got ${JSON.stringify(url.protocol)}).`);
-  }
-  return url.origin;
-}
 
 /**
  * Sign in with member credentials: one throwaway client that logs in,

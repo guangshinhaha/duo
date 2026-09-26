@@ -1,5 +1,6 @@
 import { ApiRequestError, type DuoApiConfig } from "./client.js";
 import type { ApiError, HostedConfig, HostedSignupResult } from "./types.js";
+import { normalizeHomeserverUrl } from "../homeserver.js";
 
 /**
  * Invite-only hosted mode (digital-duo's hosted daemon): one daemon origin
@@ -281,7 +282,7 @@ export function pairedHostedAccount(api: DuoApiConfig | null): HostedAccount | n
 }
 
 /**
- * `POST {origin}/hosted/workspace/session` answers: the signed-in person's own
+ * `POST {basePath}/workspace/session` answers: the signed-in person's own
  * workspace credential. It lives in memory only (`useHostedWorkspace`) — never
  * stored, never in the query cache — and is fetched again on every load.
  */
@@ -295,7 +296,7 @@ export interface HostedWorkspaceSession {
   readonly expiresAt: string;
 }
 
-/** A refused `POST /hosted/workspace/session`: the daemon's own code, plus how long it asked us to wait (`Retry-After`), if it did. */
+/** A refused `POST <basePath>/workspace/session`: the daemon's own code, plus how long it asked us to wait (`Retry-After`), if it did. */
 export class WorkspaceSessionError extends ApiRequestError {
   readonly retryAfterMs: number | null;
 
@@ -327,15 +328,29 @@ function parseRetryAfter(header: string | null): number | null {
 }
 
 /**
- * Asks the daemon for this device's workspace session. The device token is the
- * only credential and rides only to `origin` — callers pass the paired
- * daemon's origin (`pairedHostedAccount`). No body: nothing the caller sends
- * can name an account.
+ * The one place the per-duo workspace route is named: `POST` fetches this
+ * device's session, `DELETE` drops the one the daemon caches. `api.baseUrl` is
+ * the origin plus the duo's `basePath` (/t/<tenantId>, or nothing for the
+ * root duo), so a tenant's route follows from the pairing.
  */
-export async function fetchWorkspaceSession(origin: string, token: string, signal?: AbortSignal): Promise<HostedWorkspaceSession> {
-  const response = await fetch(`${origin}/hosted/workspace/session`, {
+export function workspaceSessionUrl(api: DuoApiConfig): string {
+  return `${api.baseUrl}/workspace/session`;
+}
+
+/**
+ * Asks the daemon for this device's workspace session. The device token is the
+ * only credential and rides only to the paired daemon — callers pass the
+ * pairing once `pairedHostedAccount` has matched its origin. No body: nothing
+ * the caller sends can name an account.
+ *
+ * The homeserver address in the answer is held to the manual sign-in's rule
+ * (`normalizeHomeserverUrl`: https only, its origin): the workspace token rides
+ * it, so an answer that is not https is a shape error and nothing is sent to it.
+ */
+export async function fetchWorkspaceSession(api: DuoApiConfig, signal?: AbortSignal): Promise<HostedWorkspaceSession> {
+  const response = await fetch(workspaceSessionUrl(api), {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${api.token}` },
     signal,
   });
   if (!response.ok) {
@@ -358,7 +373,30 @@ export async function fetchWorkspaceSession(origin: string, token: string, signa
   if (!nonEmptyString(homeserverUrl) || !nonEmptyString(userId) || !nonEmptyString(accessToken) || !nonEmptyString(expiresAt)) {
     throw new WorkspaceSessionShapeError();
   }
-  return { homeserverUrl, userId, accessToken, deviceId: nonEmptyString(deviceId) ? deviceId : null, expiresAt };
+  let homeserver: string;
+  try {
+    homeserver = normalizeHomeserverUrl(homeserverUrl);
+  } catch {
+    throw new WorkspaceSessionShapeError();
+  }
+  return { homeserverUrl: homeserver, userId, accessToken, deviceId: nonEmptyString(deviceId) ? deviceId : null, expiresAt };
+}
+
+/**
+ * `DELETE {api.baseUrl}/workspace/session` — drops the session the daemon
+ * caches for this device, so the next `fetchWorkspaceSession` mints a new one.
+ * The answer to the workspace refusing the credential (`M_UNKNOWN_TOKEN`): the
+ * daemon no longer checks a cached one against the workspace itself. Best
+ * effort — a refusal here (a 401, a network failure) changes nothing the next
+ * ask will not report — and a session minted under 10 seconds ago is kept by
+ * the daemon, so callers wait a few seconds between rounds.
+ */
+export async function revokeCachedWorkspaceSession(api: DuoApiConfig, signal?: AbortSignal): Promise<void> {
+  try {
+    await fetch(workspaceSessionUrl(api), { method: "DELETE", headers: { Authorization: `Bearer ${api.token}` }, signal });
+  } catch {
+    // Offline, or aborted: the next ask says what is wrong.
+  }
 }
 
 /**
@@ -366,21 +404,19 @@ export async function fetchWorkspaceSession(origin: string, token: string, signa
  * with the session's own credential). The daemon cannot revoke it — only the
  * holder can — so this is the client's half of signing out. Best effort: a
  * device that is offline still forgets it, and the credential then simply runs
- * out at `expiresAt`. Sent only over https, since the credential rides it.
+ * out at `expiresAt`. Sent only to the address connecting uses
+ * (`normalizeHomeserverUrl`, https only), since the credential rides it.
  */
 export async function revokeWorkspaceSession(session: Pick<HostedWorkspaceSession, "homeserverUrl" | "accessToken">): Promise<void> {
   try {
-    const url = new URL(session.homeserverUrl);
-    if (url.protocol !== "https:") {
-      return;
-    }
-    await fetch(`${url.origin}/_matrix/client/v3/logout`, {
+    const base = normalizeHomeserverUrl(session.homeserverUrl);
+    await fetch(`${base}/_matrix/client/v3/logout`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.accessToken}`, "Content-Type": "application/json" },
       body: "{}",
       keepalive: true,
     });
   } catch {
-    // Offline, or the workspace already dropped it: nothing more to do.
+    // Offline, not https, or the workspace already dropped it: nothing more to do.
   }
 }

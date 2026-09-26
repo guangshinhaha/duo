@@ -34,7 +34,7 @@ vi.mock("matrix-js-sdk", () => ({
 }));
 
 import { ClientEvent, createClient, MatrixError, MsgType, ReceiptType, RoomEvent } from "matrix-js-sdk";
-import { connect, signIn } from "../src/workspace/matrix.js";
+import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
 
 const SESSION = {
@@ -374,6 +374,12 @@ describe("a hosted session — no device, and a credential that can end (#127)",
 });
 
 describe("sign-in's wire rules", () => {
+  it("normalizeHomeserverUrl is the one rule for every door: https only, and the origin is what is used (#127)", () => {
+    expect(normalizeHomeserverUrl(" https://workspace.example/some/prefix/ ")).toBe("https://workspace.example");
+    expect(() => normalizeHomeserverUrl("http://workspace.example")).toThrow(/https/);
+    expect(() => normalizeHomeserverUrl("workspace.example")).toThrow();
+  });
+
   it("refuses a non-https homeserver without dialing it — the token must never ride a plaintext URL", async () => {
     const client = fakeClient();
     vi.mocked(createClient).mockReturnValue(client);

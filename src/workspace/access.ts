@@ -5,6 +5,7 @@ import {
   fetchWorkspaceSession,
   pairedHostedAccount,
   readHostedAccount,
+  revokeCachedWorkspaceSession,
   revokeWorkspaceSession,
   WorkspaceSessionError,
   type HostedWorkspaceSession,
@@ -84,18 +85,25 @@ const MAX_TIMER_MS = 2_147_483_647;
 const DEFAULT_RETRY_MS = 60_000;
 /** A 429 is a per-address limiter measured in minutes: waiting a minute again would only be counted against it. */
 const RATE_LIMITED_RETRY_MS = 5 * 60_000;
+/**
+ * Whatever the answer's `Retry-After` says (a proxy in front of the daemon may
+ * say 0, or a day), the wait stays in this window: never a tight loop, never a
+ * person stuck on the retry note for hours with no way to try again.
+ */
+const RETRY_FLOOR_MS = 5_000;
+const RETRY_CEILING_MS = 5 * 60_000;
 /** Retries on a network failure: 5s, 10s, 20s, 40s, then a minute — never faster than that. */
 const BACKOFF_START_MS = 5_000;
 const BACKOFF_CEILING_MS = 60_000;
 /**
- * The workspace refused the credential just handed out. The daemon checks a
- * cached credential against the workspace at most once per 5 seconds, so a
- * person who signed out and in again inside that window can be handed the
- * credential they just signed out: the first refusal asks again at once (a new
- * one, usually), the second waits out that window, and after that it is a
- * minute — a loop can never mint faster than that.
+ * The workspace refused the credential just handed out. The daemon no longer
+ * checks a cached credential against the workspace, so the answer is to drop it
+ * (`DELETE`) and ask again. It keeps one minted under 10 seconds ago, though,
+ * so the first refusal drops and asks at once (a credential that old is the
+ * usual case), the second waits out that window, and after that it is a minute
+ * — a loop can never mint faster than that.
  */
-const REJECTION_DELAYS_MS = [0, 6_000];
+const REJECTION_DELAYS_MS = [0, 11_000];
 
 /** How the connection held by the app went — what `report` is told. */
 export type ConnectionOutcome = "up" | "rejected" | "failed";
@@ -115,6 +123,8 @@ export interface HostedWorkspace {
 interface Held {
   readonly session: WorkspaceSession;
   readonly expiresAt: string;
+  /** The pairing that asked for it, so the daemon's copy can be dropped even after the app has moved on. */
+  readonly pairing: DuoApiConfig;
 }
 
 type Phase = "connecting" | "ready" | "not-set-up" | "pending" | "unreachable" | "signed-out";
@@ -144,8 +154,8 @@ export function refreshDelayMs(expiresAt: string, now: number): number {
  */
 export function useHostedWorkspace(api: DuoApiConfig | null, onUnauthorized: () => void): HostedWorkspace {
   const account = isHostedBuild() ? pairedHostedAccount(api) : null;
-  const origin = account && api ? account.origin : null;
-  const token = origin && api ? api.token : null;
+  const baseUrl = account && api ? api.baseUrl : null;
+  const token = baseUrl && api ? api.token : null;
   // The account record decides whether this is a hosted device at all, even
   // when the paired origin does not match it (then nothing is ever sent).
   const hostedDevice = isHostedBuild() && readHostedAccount() !== null;
@@ -156,11 +166,13 @@ export function useHostedWorkspace(api: DuoApiConfig | null, onUnauthorized: () 
     held: null,
     reconnectKey: 0,
   });
-  const ownerId = origin && token ? `${origin}\n${token}` : "";
+  const ownerId = baseUrl && token ? `${baseUrl}\n${token}` : "";
 
   const heldRef = useRef<Held | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const needsReconnectRef = useRef(false);
+  /** The workspace refused the credential: the daemon's copy is dropped before the next ask. */
+  const rejectedRef = useRef(false);
   const rejectionsRef = useRef(0);
   const failuresRef = useRef(0);
   const loadRef = useRef<(() => void) | null>(null);
@@ -173,6 +185,9 @@ export function useHostedWorkspace(api: DuoApiConfig | null, onUnauthorized: () 
     heldRef.current = null;
     if (held) {
       void revokeWorkspaceSession(held.session);
+      // The daemon keeps the token it minted; tell it this one is finished so
+      // signing straight back in is not handed the credential just ended.
+      void revokeCachedWorkspaceSession(held.pairing);
     }
   }, []);
 
@@ -182,13 +197,15 @@ export function useHostedWorkspace(api: DuoApiConfig | null, onUnauthorized: () 
     // cleanup function on purpose — unmounting the app is not signing out.
     releaseHeld();
     needsReconnectRef.current = false;
+    rejectedRef.current = false;
     rejectionsRef.current = 0;
     failuresRef.current = 0;
-    if (!origin || !token) {
+    if (!baseUrl || !token) {
       loadRef.current = null;
       setState((current) => (current.owner === "" && current.held === null ? current : { owner: "", phase: "connecting", held: null, reconnectKey: current.reconnectKey }));
       return;
     }
+    const pairing: DuoApiConfig = { baseUrl, token };
     let cancelled = false;
     let busy = false;
     const controller = new AbortController();
@@ -210,16 +227,30 @@ export function useHostedWorkspace(api: DuoApiConfig | null, onUnauthorized: () 
       }
       busy = true;
       try {
-        const fresh = await fetchWorkspaceSession(origin, token, controller.signal);
+        if (rejectedRef.current) {
+          // The workspace refused the credential the daemon handed out: have the
+          // daemon drop it, or it would hand the same one out again.
+          rejectedRef.current = false;
+          await revokeCachedWorkspaceSession(pairing, controller.signal);
+          if (cancelled) {
+            return;
+          }
+        }
+        const fresh = await fetchWorkspaceSession(pairing, controller.signal);
         if (cancelled) {
           return;
         }
-        failuresRef.current = 0;
         const session = workspaceSessionOf(fresh);
         const first = heldRef.current === null;
         const reconnect = first || needsReconnectRef.current;
+        if (!reconnect) {
+          // A routine renewal succeeded. Only that (or the connection coming up,
+          // in `report`) ends a run of failures: the daemon answering while the
+          // workspace stays out of reach must not send the backoff back to 5s.
+          failuresRef.current = 0;
+        }
         needsReconnectRef.current = false;
-        const held: Held = { session, expiresAt: fresh.expiresAt };
+        const held: Held = { session, expiresAt: fresh.expiresAt, pairing };
         heldRef.current = held;
         settle("ready", held, reconnect);
         schedule(refreshDelayMs(fresh.expiresAt, Date.now()));
@@ -248,7 +279,8 @@ export function useHostedWorkspace(api: DuoApiConfig | null, onUnauthorized: () 
           if (connectionDown) {
             settle(error.code === "workspace_pending" ? "pending" : "unreachable", heldRef.current, false);
           }
-          schedule(error.retryAfterMs ?? (error.status === 429 ? RATE_LIMITED_RETRY_MS : DEFAULT_RETRY_MS));
+          const asked = error.retryAfterMs ?? (error.status === 429 ? RATE_LIMITED_RETRY_MS : DEFAULT_RETRY_MS);
+          schedule(Math.min(Math.max(asked, RETRY_FLOOR_MS), RETRY_CEILING_MS));
           return;
         }
         // A network failure, a timeout, an answer that is not the documented shape.
@@ -273,7 +305,7 @@ export function useHostedWorkspace(api: DuoApiConfig | null, onUnauthorized: () 
       loadRef.current = null;
     };
     // The credential is the identity: a different account or server starts over.
-  }, [origin, token, ownerId, releaseHeld]);
+  }, [baseUrl, token, ownerId, releaseHeld]);
 
   const report = useCallback((outcome: ConnectionOutcome): void => {
     if (!heldRef.current || !loadRef.current) {
@@ -289,6 +321,7 @@ export function useHostedWorkspace(api: DuoApiConfig | null, onUnauthorized: () 
     const load = loadRef.current;
     let wait: number;
     if (outcome === "rejected") {
+      rejectedRef.current = true;
       const nth = rejectionsRef.current;
       rejectionsRef.current += 1;
       wait = REJECTION_DELAYS_MS[nth] ?? DEFAULT_RETRY_MS;
