@@ -33,7 +33,7 @@ vi.mock("matrix-js-sdk", () => ({
   },
 }));
 
-import { ClientEvent, createClient, MsgType, ReceiptType, RoomEvent } from "matrix-js-sdk";
+import { ClientEvent, createClient, MatrixError, MsgType, ReceiptType, RoomEvent } from "matrix-js-sdk";
 import { connect, signIn } from "../src/workspace/matrix.js";
 import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
 
@@ -351,6 +351,7 @@ describe("the projection from Matrix events to room messages", () => {
         senderId: "@nobody:workspace.example",
         senderName: "nobody",
         body: "refund-policy.pdf",
+        parts: null, // a share's label carries no pills
         file: { name: "refund-policy.pdf", mimeType: "application/pdf", size: 48_000, url: "mxc://workspace.example/policy1", image: false },
         originServerTs: 1_700_000_000_003,
         edited: false,
@@ -1222,21 +1223,65 @@ describe("the share wire (#66)", () => {
     });
   });
 
-  it("translates a reference to the member's own authenticated media URL — or null, honestly", async () => {
+  it("loads a share's bytes with the member's own token in a header — never in the URL — or null, honestly", async () => {
     const client = fakeClient();
-    vi.mocked(client.mxcUrlToHttp).mockReturnValue("https://workspace.example/_matrix/media/v3/download/workspace.example/abc123");
+    vi.mocked(client.mxcUrlToHttp).mockReturnValue("https://workspace.example/_matrix/client/v1/media/download/workspace.example/abc123");
     vi.mocked(createClient).mockReturnValue(client);
     const connection = await connectPrepared(client);
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(new Blob(["hello"], { type: "text/plain" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
 
-    expect(connection.mediaUrl("mxc://workspace.example/abc123")).toBe(
-      "https://workspace.example/_matrix/media/v3/download/workspace.example/abc123",
-    );
-    // Authenticated media (MSC3916): the translation carries this member's
-    // own token on the https URL — the 7th argument is useAuthentication.
+    const blob = await connection.loadMedia("mxc://workspace.example/abc123");
+    expect(await blob?.text()).toBe("hello");
+    // Authenticated media (MSC3916): the 7th argument is useAuthentication,
+    // and an <img>/<a> cannot send a header, so the seam does the fetch —
+    // the token rides Authorization, and no URL ever carries it.
     expect(client.mxcUrlToHttp).toHaveBeenCalledWith("mxc://workspace.example/abc123", undefined, undefined, undefined, undefined, undefined, true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://workspace.example/_matrix/client/v1/media/download/workspace.example/abc123",
+      { headers: { Authorization: `Bearer ${SESSION.accessToken}` } },
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain(SESSION.accessToken);
 
+    // A homeserver that refuses, or a connection that drops, is null — the
+    // card keeps its facts; nothing is faked.
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 404 }));
+    expect(await connection.loadMedia("mxc://workspace.example/gone")).toBeNull();
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    expect(await connection.loadMedia("mxc://workspace.example/abc123")).toBeNull();
+    // A reference the SDK cannot translate is never fetched.
+    fetchMock.mockClear();
     vi.mocked(client.mxcUrlToHttp).mockReturnValue(null);
-    expect(connection.mediaUrl("mxc://workspace.example/gone")).toBeNull();
+    expect(await connection.loadMedia("not-a-reference")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("a refused upload or send states its reason: the workspace's own limit, its own words, or the connection", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const staged = { name: "deck.pdf", mimeType: "application/pdf", size: 3, bytes: new ArrayBuffer(3) };
+    const refused = (errcode: string, message: string): MatrixError => Object.assign(new MatrixError({ errcode, error: message }), { errcode, message });
+
+    // The homeserver's own upload limit — a door this client does not know
+    // the size of, named as the workspace's.
+    client.uploadContent.mockRejectedValueOnce(refused("M_TOO_LARGE", "Upload request body is too large"));
+    await expect(connection.uploadFile(staged)).rejects.toThrow("over the workspace's own upload limit");
+
+    // Any other refusal carries the workspace's own words.
+    client.uploadContent.mockRejectedValueOnce(refused("M_FORBIDDEN", "You are not allowed to upload"));
+    await expect(connection.uploadFile(staged)).rejects.toThrow("You are not allowed to upload");
+
+    // No answer at all is a connection problem, said so.
+    client.uploadContent.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(connection.uploadFile(staged)).rejects.toThrow("couldn't reach the workspace");
+
+    // The same reasons on the send half.
+    client.sendMessage.mockRejectedValueOnce(refused("M_FORBIDDEN", "You don't have permission to post"));
+    await expect(
+      connection.sendFile("!project-x:workspace.example", { name: "deck.pdf", mimeType: "application/pdf", size: 3, url: "mxc://workspace.example/x", image: false }),
+    ).rejects.toThrow("You don't have permission to post");
   });
 
   it("an edited share folds its label only — the reference and the declared facts stand (core #190)", async () => {
@@ -1296,6 +1341,7 @@ describe("the share wire (#66)", () => {
         senderId: "@ana:workspace.example",
         senderName: "ana",
         body: "draft-v2.txt", // the replacement's label
+        parts: null,
         file: { name: "draft-v2.txt", mimeType: "text/plain", size: 900, url: "mxc://workspace.example/draft1", image: false }, // the facts stand
         originServerTs: 1_000,
         edited: true,

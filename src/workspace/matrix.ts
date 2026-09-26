@@ -223,11 +223,14 @@ export interface WorkspaceConnection {
    */
   sendFile(roomId: string, file: SharedFile): Promise<void>;
   /**
-   * The URL this member's browser can load a shared file from — the
-   * homeserver's authenticated media endpoint (MSC3916), this member's own
-   * token riding the https URL. Null when the reference can't translate.
+   * The bytes of a shared file, fetched as this member: the homeserver's
+   * authenticated media endpoint (MSC3916) wants the member's token in a
+   * header, which an `<img>` or `<a href>` cannot send — so the seam does
+   * the fetch and the render holds the blob. Null when the reference can't
+   * translate or the homeserver won't serve it: the card keeps its facts
+   * and says so; nothing is faked.
    */
-  mediaUrl(url: string): string | null;
+  loadMedia(url: string): Promise<Blob | null>;
   /**
    * Amends this member's own message (#64): a replacement event — the new
    * words ride `m.new_content`, the relation points back at the base, and
@@ -326,6 +329,23 @@ export async function signIn(homeserverUrl: string, username: string, password: 
   } finally {
     client.stopClient();
   }
+}
+
+/**
+ * Turns whatever the homeserver or the network did to a share into the
+ * reason the member reads (#66 AC4): the workspace's own upload limit is
+ * named as such (this client can't know its size — the homeserver owns that
+ * door, beside this app's own share limits), any other refusal carries the
+ * workspace's own words, and no answer at all is a connection problem.
+ */
+function shareFailure(error: unknown, name: string): Error {
+  if (error instanceof MatrixError) {
+    if (error.errcode === "M_TOO_LARGE") {
+      return new Error(`${name} is over the workspace's own upload limit.`);
+    }
+    return new Error(`The workspace said: ${error.message}${/[.!?]$/.test(error.message) ? "" : "."}`);
+  }
+  return new Error("The connection dropped — we couldn't reach the workspace.");
 }
 
 /** Resolves when the first sync completes — the room state the homeserver held (including what arrived while away) has caught up. */
@@ -708,11 +728,16 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
     // importing: no upload path reaches any daemon, and the seam offers no
     // operation that could.
     uploadFile: async (staged, onProgress) => {
-      const { content_uri } = await client.uploadContent(new Blob([staged.bytes], { type: staged.mimeType }), {
-        name: staged.name,
-        type: staged.mimeType,
-        ...(onProgress === undefined ? {} : { progressHandler: (progress) => onProgress(progress.loaded, progress.total) }),
-      });
+      let content_uri: string;
+      try {
+        ({ content_uri } = await client.uploadContent(new Blob([staged.bytes], { type: staged.mimeType }), {
+          name: staged.name,
+          type: staged.mimeType,
+          ...(onProgress === undefined ? {} : { progressHandler: (progress) => onProgress(progress.loaded, progress.total) }),
+        }));
+      } catch (error) {
+        throw shareFailure(error, staged.name);
+      }
       return { name: staged.name, mimeType: staged.mimeType, size: staged.size, url: content_uri, image: isImageType(staged.mimeType) };
     },
     sendFile: async (roomId, file) => {
@@ -723,12 +748,30 @@ export async function connect(session: WorkspaceSession): Promise<WorkspaceConne
       // message content by its msgtype literal; a union of the two would
       // not type as either.
       const facts = { body: file.name, filename: file.name, url: file.url, info: { mimetype: file.mimeType, size: file.size } };
-      await client.sendMessage(
-        roomId,
-        file.image ? { ...facts, msgtype: MsgType.Image } : { ...facts, msgtype: MsgType.File },
-      );
+      try {
+        await client.sendMessage(
+          roomId,
+          file.image ? { ...facts, msgtype: MsgType.Image } : { ...facts, msgtype: MsgType.File },
+        );
+      } catch (error) {
+        throw shareFailure(error, file.name);
+      }
     },
-    mediaUrl: (url) => client.mxcUrlToHttp(url, undefined, undefined, undefined, undefined, undefined, true),
+    loadMedia: async (url) => {
+      // 7th argument: useAuthentication — the /client/v1/media path. The
+      // token rides the Authorization header and never a URL (a URL is
+      // logged, copied, and outlives the session).
+      const href = client.mxcUrlToHttp(url, undefined, undefined, undefined, undefined, undefined, true);
+      if (href === null || href === "") {
+        return null;
+      }
+      try {
+        const response = await fetch(href, { headers: { Authorization: `Bearer ${session.accessToken}` } });
+        return response.ok ? await response.blob() : null;
+      } catch {
+        return null;
+      }
+    },
     // The verbs are all homeserver operations on the room — the surface adds
     // no behaviour, it asks the server to move its own state and renders the
     // next answer. Each one maps to the Matrix event the spec prescribes.

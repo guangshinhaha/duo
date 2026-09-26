@@ -294,12 +294,12 @@ export function Room({ connection, roomId }: { connection: WorkspaceConnection |
  */
 export function MessageBody({
   message,
-  mediaUrl,
+  loadMedia,
   onToggleReaction,
 }: {
   message: RoomMessage;
-  /** The member's own authenticated URL for a shared file's bytes — the connection's translation, passed down so this stays a pure render. */
-  mediaUrl: (url: string) => string | null;
+  /** The member's own authenticated fetch of a shared file's bytes — the connection's, passed down so this stays a pure render. */
+  loadMedia: (url: string) => Promise<Blob | null>;
   onToggleReaction?: (message: RoomMessage, key: string, mine: boolean) => void;
 }) {
   const fromDuo = isDuoUserId(message.senderId);
@@ -324,7 +324,7 @@ export function MessageBody({
     message.file === undefined ? (
       messageWords(message)
     ) : (
-      <SharedFileCard file={message.file} mediaUrl={mediaUrl} />
+      <SharedFileCard file={message.file} loadMedia={loadMedia} />
     );
   return (
     <div className="flex flex-col gap-1">
@@ -412,7 +412,7 @@ function RoomEntry({
     <div className="flex flex-col gap-1" data-testid="room-message">
       <MessageBody
         message={message}
-        mediaUrl={connection.mediaUrl}
+        loadMedia={connection.loadMedia}
         onToggleReaction={(target, key, mine) =>
           run(mine ? connection.unreact(roomId, target.eventId, key) : connection.react(roomId, target.eventId, key))
         }
@@ -750,7 +750,7 @@ function RoomComposer({
             setText("");
             setPicks([]);
             setAttachments([]);
-          } catch {
+          } catch (error) {
             // The optimistic copies of what never became the homeserver's
             // record go; what did complete keeps its copy until the
             // subscription's refetch lands the real rows.
@@ -758,7 +758,7 @@ function RoomComposer({
             setAttachments(toShare.slice(sharedCount));
             setError(
               sharedCount < toShare.length
-                ? `The workspace didn't take ${toShare[sharedCount]!.name} — it's still attached and your words are still here. Try again.`
+                ? `The workspace didn't take ${toShare[sharedCount]!.name}. ${error instanceof Error && error.message.length > 0 ? `${error.message} ` : ""}It's still attached and your words are still here. Try again.`
                 : "Couldn't send — try again.",
             );
           } finally {

@@ -353,11 +353,19 @@ through the seam, and the classifications read only what the daemon already serv
 #66 adds the share on the same seam: `uploadFile` (bytes to the homeserver's media store, with
 progress), `sendFile` (the `m.file`/`m.image` message carrying name, declared type, declared
 size, and the `mxc://` reference — the wire shape core #190's association convention reads), and
-`mediaUrl` (the member's own authenticated translation of a reference, MSC3916). The timeline
+`loadMedia` (the bytes of a reference, fetched as the member: MSC3916 authenticated media wants
+the token in a header, which an `<img>` or link cannot send, so the seam fetches and the card
+holds a blob — an image previews from it, a download is a click that fetches on demand, and a
+reference the homeserver won't serve leaves the card's facts standing with the failure said).
+A refused upload or send states its reason — the workspace's own upload limit named as its,
+the workspace's words for any other refusal, a dropped connection as one — with the file kept
+attached and the words kept typed. The timeline
 projection carries shares as conversation turns with their facts declared, folding a same-kind
 replacement's label while the reference stands. Sharing is not importing, structurally: no
 module in the share path imports the daemon's api, pinned by test the way the seam scan is.
-The client's share limits (8 MiB images, 16 MiB files, 3 per message) are its own door, named
+The daemon's `attachment` draft-source kind is mirrored in `DraftSource`, so an attachment the
+duo grounded on appears in the provenance rail as the daemon labelled it (core #190/#183). The
+client's share limits (8 MiB images, 16 MiB files, 3 per message) are its own door, named
 in their refusals — the duo's 32 KiB grounding cap is a different, smaller door the composer's
 hint describes, never a limit this app enforces. Attach-then-ask rides by construction: each
 attachment sends as its own message, in order, before the question — contiguous, same sender,
