@@ -49,6 +49,17 @@ function draftAt(index: number): DraftRecord {
   };
 }
 
+/** #48: Settings lists the paired devices, so it needs a query client and a daemon that answers (an empty list — these tests are about other things). */
+function renderSettings() {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />
+    </QueryClientProvider>,
+  );
+}
+
 function renderReview(drafts: DraftRecord[]) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal(
@@ -144,7 +155,7 @@ describe("#36 AC2 — Escape leaves, discarding nothing that was not already dis
   });
 
   it("Escape closes the unpair dialog and returns focus to its trigger", async () => {
-    render(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
+    renderSettings();
     const trigger = screen.getByTestId("settings-unpair");
     trigger.focus();
     fireEvent.click(trigger);
@@ -220,7 +231,7 @@ describe("#36 AC3 — every interactive element shows focus, at contrast, in bot
 
 describe("#36 AC4 — shortcuts are discoverable in one place", () => {
   it("Settings lists every shortcut that exists and what it does", () => {
-    render(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
+    renderSettings();
     const section = screen.getByText("Keyboard", { selector: "h2" }).closest("section");
     expect(section).not.toBeNull();
 

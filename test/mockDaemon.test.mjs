@@ -599,6 +599,47 @@ describe("mock daemon — channels and their policy (duo #47, mirroring digital-
     expect((await slash.json()).error.message).toBe(
       'channel must not contain "/" — it scopes a thread within a channel — got "a/b"',
     );
+
+// The paired-devices routes (duo #48, mirroring digital-duo #177): GET /devices
+// answers the DeviceToken shape — no token or hash field — and
+// POST /devices/:id/revoke answers the revoked row, idempotently, 404 for a stranger.
+describe("mock daemon — paired devices (duo #48, mirroring digital-duo #177)", () => {
+  it("lists devices in the DeviceToken shape, oldest first, with no token or hash field anywhere", async () => {
+    const res = await get("/devices");
+    expect(res.status).toBe(200);
+    const devices = await res.json();
+    expect(devices.length).toBeGreaterThanOrEqual(2);
+    for (const device of devices) {
+      expect(Object.keys(device).sort()).toEqual(["createdAt", "id", "lastSeenAt", "name", "revokedAt"]);
+    }
+    const times = devices.map((d) => d.createdAt);
+    expect([...times].sort()).toEqual(times);
+    expect(JSON.stringify(devices)).not.toContain("mock-token");
+  });
+
+  it("revokes a device: the revoked row comes back, the list shows it revoked, and revoking twice is a no-op, not an error", async () => {
+    const before = await (await get("/devices")).json();
+    const target = before.find((d) => d.revokedAt === null);
+    const first = await post(`/devices/${target.id}/revoke`);
+    expect(first.status).toBe(200);
+    const revoked = await first.json();
+    expect(revoked.id).toBe(target.id);
+    expect(revoked.revokedAt).not.toBeNull();
+
+    const again = await post(`/devices/${target.id}/revoke`);
+    expect(again.status).toBe(200);
+    expect((await again.json()).revokedAt).toBe(revoked.revokedAt);
+
+    const after = await (await get("/devices")).json();
+    expect(after.find((d) => d.id === target.id).revokedAt).toBe(revoked.revokedAt);
+  });
+
+  it("a device id nobody paired is the daemon's 404, in its own words", async () => {
+    const res = await post("/devices/not-a-real-id/revoke");
+    expect(res.status).toBe(404);
+    const error = (await res.json()).error;
+    expect(error.code).toBe("DeviceTokenNotFoundError");
+    expect(error.message).toBe('No paired device with id "not-a-real-id"');
   });
 });
 

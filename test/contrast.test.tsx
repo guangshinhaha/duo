@@ -162,7 +162,7 @@ describe("#31 — every primary button renders the accessible foreground", () =>
   });
 
   it("Settings' Save", () => {
-    render(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
+    renderWithClient(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
     primaryButton("Save");
   });
 

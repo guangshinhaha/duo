@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 // @ts-expect-error no node types by design
 import { fileURLToPath } from "node:url";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "../src/routes/Settings.js";
@@ -15,6 +16,17 @@ import type { DuoApiConfig } from "../src/api/client.js";
 
 const api: DuoApiConfig = { baseUrl: "http://test:7717", token: "tok" };
 const onConfigChange = vi.fn();
+
+/** #48: Settings lists the paired devices, so it needs a query client and a daemon that answers (an empty list — these tests are about the theme). */
+function renderSettings() {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <Settings api={api} session={null} onConfigChange={onConfigChange} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />
+    </QueryClientProvider>,
+  );
+}
 
 /*
  * #35: the theme is a choice, not an OS default. These tests cover the
@@ -65,12 +77,13 @@ describe("#35 AC1 — the theme can be chosen, applied now, and remembered", () 
     delete document.documentElement.dataset.theme;
   });
   afterEach(() => {
+    vi.unstubAllGlobals();
     localStorage.clear();
     delete document.documentElement.dataset.theme;
   });
 
   it("picking light or dark stamps it immediately; picking system unstamps; each choice is remembered", () => {
-    render(<Settings api={api} session={null} onConfigChange={onConfigChange} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);
+    renderSettings();
     const control = screen.getByLabelText("Theme");
 
     fireEvent.change(control, { target: { value: "light" } });
