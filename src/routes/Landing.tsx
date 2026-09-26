@@ -135,6 +135,9 @@ export function Landing({
         >
           Advanced: connect to a server by address
         </button>
+        <p className="type-provenance text-[var(--faint)]" data-testid="landing-legal">
+          <a className="underline" href="/privacy.html">Privacy</a> · <a className="underline" href="/terms.html">Terms</a>
+        </p>
       </div>
     </div>
   );
