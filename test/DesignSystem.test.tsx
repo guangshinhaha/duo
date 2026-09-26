@@ -163,7 +163,20 @@ describe("#33 — the type scale is set once", () => {
     });
     expect(roleBlock("type-body")).toEqual({ "font-size": "14px", "line-height": "22px", "font-weight": "400" });
     expect(roleBlock("type-provenance")).toEqual({ "font-size": "12px", "line-height": "18px", "font-weight": "400" });
-    expect(roleBlock("type-identifier")).toEqual({ "font-size": "12px", "line-height": "18px", "font-weight": "560" });
+    // Hairline (#140): identifiers are the Record role — JetBrains Mono.
+    expect(roleBlock("type-identifier")).toEqual({
+      "font-family": "var(--font-record)",
+      "font-size": "12px",
+      "line-height": "18px",
+      "font-weight": "560",
+    });
+    // …and the Reflection role (the portrait's serif) is set once, here.
+    expect(roleBlock("type-reflection")).toMatchObject({
+      "font-family": "var(--font-reflection)",
+      "font-size": "20px",
+      "line-height": "28px",
+      "font-weight": "400",
+    });
   });
 
   it("no size or weight utility escapes the roles", () => {

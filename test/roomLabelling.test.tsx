@@ -36,10 +36,13 @@ describe("#60 — a duo in a shared room is never mistaken for its owner", () =>
     render(<Room />);
     const duo = screen.getAllByTestId("room-duo-message")[0];
     const person = screen.getAllByTestId("room-person-message")[0];
-    // Structurally distinct: the duo's container is the dashed one, a
-    // person's never is — and the two class lists are different overall.
-    expect(duo.className).toContain("border-dashed");
-    expect(person.className).not.toContain("border-dashed");
+    // Structurally distinct (Hairline, #140): a duo's message is a
+    // `DuoLine` — a square-edged block behind a line — and a person's never
+    // is. The line is the label, so it survives greyscale.
+    expect(duo).toHaveAttribute("data-duo-line");
+    expect(duo.querySelector(".shape-duo-line")).not.toBeNull();
+    expect(person).not.toHaveAttribute("data-duo-line");
+    expect(person.querySelector(".shape-duo-line")).toBeNull();
     expect(duo.className).not.toBe(person.className);
   });
 
@@ -106,7 +109,8 @@ describe("#60 — a duo in a shared room is never mistaken for its owner", () =>
     // And the reference is still the distinct container, even embedded in a
     // person's message — not the person's own chrome.
     for (const reference of screen.getAllByTestId("duo-message-reference")) {
-      expect(reference.className).toContain("border-dashed");
+      expect(reference).toHaveAttribute("data-duo-line");
+      expect(reference.querySelector(".shape-duo-line")).not.toBeNull();
     }
   });
 });

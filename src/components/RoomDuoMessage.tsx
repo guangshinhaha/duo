@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { DuoAuthoredBoundary } from "./DuoMessage.js";
+import { DuoLine } from "./DuoLine.js";
 
 /**
  * A duo's message in a shared room (#60) — the multi-party half of AR-13,
@@ -9,26 +9,18 @@ import { DuoAuthoredBoundary } from "./DuoMessage.js";
  * `concept.md` exists to prevent.
  *
  * Structurally distinct from `RoomPersonMessage` (§1.6: a different
- * container, not a badge on the same one): dashed border on surface-2,
- * where a person's message is a solid border on surface. There is no
- * `avatar` prop and no `authorName` prop — the author *is* the duo; the
- * owner's name appears only in the possessive attribution ("Ana's duo"),
- * which is what makes whose-duo-it-is unmissable without ever putting the
- * owner's name on the message as its author.
+ * container, not a badge on the same one): the duo's shape — a square
+ * leading edge behind a line — where a person's message is a solid
+ * rounded border. There is no `avatar` prop and no `authorName` prop — the
+ * author *is* the duo; the owner's name appears only in the possessive
+ * attribution ("Ana's duo"), which is what makes whose-duo-it-is
+ * unmissable without ever putting the owner's name on the message as its
+ * author.
  */
 export function RoomDuoMessage({ ownerName, children }: { ownerName: string; children: ReactNode }) {
   return (
-    <div
-      data-testid="room-duo-message"
-      className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] bg-[var(--surface-2)] px-4 py-3 text-[var(--text)]"
-    >
-      <div
-        className="mb-1 type-provenance text-[var(--muted)]"
-        data-testid="room-duo-message-attribution"
-      >
-        {ownerName}&#39;s duo
-      </div>
-      <DuoAuthoredBoundary>{children}</DuoAuthoredBoundary>
-    </div>
+    <DuoLine label={`${ownerName}'s duo`} testId="room-duo-message" attributionTestId="room-duo-message-attribution">
+      {children}
+    </DuoLine>
   );
 }
