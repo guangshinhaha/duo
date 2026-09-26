@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import type { DraftRecord } from "../api/types.js";
 import { toDraftPipelineResult } from "./DraftCard.js";
@@ -9,6 +9,9 @@ import { MutationError } from "./MutationError.js";
 import { StructuredText } from "./StructuredText.js";
 import { Timestamp } from "./Timestamp.js";
 import { useDraftDecision } from "./useDraftDecision.js";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./primitives/Dialog.js";
+import { WhyPanel } from "../shell/Inspector.js";
+import { useInspectorVisible } from "../shell/InspectorContext.js";
 
 /** What the attribution line says the draft is doing, in the vocabulary's words. */
 function stateWords(state: HairlineState): string {
@@ -57,6 +60,9 @@ export function DraftTray({
   keyboard?: boolean;
 }) {
   const d = useDraftDecision(api, draft);
+  // With the inspector beside the chat the why is already on screen; without it (a phone, a narrow window) it is one tap.
+  const inspectorVisible = useInspectorVisible();
+  const [whyOpen, setWhyOpen] = useState(false);
   const state = hairlineState(toDraftPipelineResult(draft));
   const passedOn = draft.escalated && !draft.refused;
   const rules = draft.sources.filter((source) => source.kind === "rule");
@@ -147,13 +153,30 @@ export function DraftTray({
         )}
       </DuoLine>
 
-      {(rules.length > 0 || others > 0) && (
-        <p className="type-provenance text-[var(--muted)]" data-testid="draft-tray-why">
-          {rules.length > 0 && <>Standing order: {rules.map((rule) => rule.label).join(" · ")}</>}
-          {rules.length > 0 && others > 0 && " · "}
-          {others > 0 && <>Drew on {others} source{others === 1 ? "" : "s"}</>}
+      {(rules.length > 0 || others > 0 || !inspectorVisible) && (
+        <p className="flex flex-wrap items-center gap-x-2 type-provenance text-[var(--muted)]" data-testid="draft-tray-why">
+          <span>
+            {rules.length > 0 && <>Standing order: {rules.map((rule) => rule.label).join(" · ")}</>}
+            {rules.length > 0 && others > 0 && " · "}
+            {others > 0 && <>Drew on {others} source{others === 1 ? "" : "s"}</>}
+          </span>
+          {!inspectorVisible && (
+            <button className="inline-flex min-h-11 items-center underline" data-testid="tray-why" onClick={() => setWhyOpen(true)} type="button">
+              Why?
+            </button>
+          )}
         </p>
       )}
+      <Dialog onOpenChange={setWhyOpen} open={whyOpen}>
+        <DialogContent className="top-auto! bottom-0 max-h-[85dvh] overflow-y-auto" data-testid="why-sheet">
+          <DialogTitle className="sr-only">Why your duo drafted this</DialogTitle>
+          <DialogDescription className="sr-only">How sure your duo is, the standing order and sources it used, and who asked.</DialogDescription>
+          <WhyPanel draft={draft} />
+          <DialogClose className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body" data-testid="why-close">
+            Close
+          </DialogClose>
+        </DialogContent>
+      </Dialog>
 
       {!draft.refused && !d.reachable && (
         <p className="type-provenance text-[var(--escalate)]" data-testid="draft-tray-offline" role="status">

@@ -4,8 +4,7 @@ import { useDraft } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
 import { DraftCard } from "../components/DraftCard.js";
 import { MutationError } from "../components/MutationError.js";
-import { useConversationLink } from "../workspace/drafts.js";
-import { isOwnTurn } from "./Duo.js";
+import { isOwnTurn, useConversationLink } from "../workspace/drafts.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 
 /**

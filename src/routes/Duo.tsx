@@ -15,17 +15,10 @@ import { SourceList } from "../components/SourceList.js";
 import { StructuredText } from "../components/StructuredText.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { TrainingCards } from "../components/TrainingCards.js";
+import { isOwnTurn } from "../workspace/drafts.js";
 
-/**
- * Whether a draft is a turn of the owner's own conversation with their duo:
- * a question they asked it. A question somebody else asked belongs to the
- * chat it arrived in, and a row that predates provenance (`unknown`) is not
- * known to be either — it stays where it always was, on its own page and in
- * Waiting on you, rather than being guessed into this chat.
- */
-export function isOwnTurn(draft: DraftRecord): boolean {
-  return draft.provenance?.origin === "owner";
-}
+// Where "your own turn" is decided lives with the provenance readers; re-exported for the surfaces that name it here.
+export { isOwnTurn };
 
 /** What the conversation says for each outcome — the honest record of what actually happened, never a paraphrase. */
 function outcomeLabel(draft: DraftRecord): string {
