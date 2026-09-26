@@ -38,7 +38,7 @@ function isRateShape(value: unknown): value is EscalationUrgencyRate {
  * recomputed from the digests, and with nothing classified there is no bar
  * at all: a zero would read as a measurement of "never urgent".
  */
-function RateSection({ api }: { api: DuoApiConfig }) {
+export function RateSection({ api }: { api: DuoApiConfig }) {
   const rate = useEscalationRate(api);
   let body;
   if (rate.isLoading) {
@@ -139,7 +139,7 @@ function GroupRow({ api, group, total }: { api: DuoApiConfig; group: EscalationG
 }
 
 /** Every page, or an honest note that some are missing — a count over half the history must never pass as the whole. */
-function PatternSection({ api }: { api: DuoApiConfig }) {
+export function PatternSection({ api }: { api: DuoApiConfig }) {
   const history = useEscalationHistory(api);
   const { hasNextPage, isFetchingNextPage, isError, fetchNextPage } = history;
 

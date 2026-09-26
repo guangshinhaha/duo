@@ -20,7 +20,7 @@ import { useSyncStatus } from "../sync.js";
  * editing a candidate's text is out of scope by design: the candidate is
  * evidence of a correction that already happened, not a draft to rewrite.
  */
-function CandidateCard({ api, candidate }: { api: DuoApiConfig; candidate: CorrectionCandidate }) {
+export function CandidateCard({ api, candidate }: { api: DuoApiConfig; candidate: CorrectionCandidate }) {
   const decide = useDecideCandidate(api);
   // AR-15 (§3.3): unreachable daemon means the controls are disabled, never
   // queued — a verdict firing hours later against a queue that moved on is

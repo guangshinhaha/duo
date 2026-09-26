@@ -208,9 +208,9 @@ function adminAccount(api: DuoApiConfig | null) {
   }
 }
 
-/** #49: where onboarding lands — the Mirror, on the rules the daemon just derived. */
-function goToMirror(): void {
-  window.location.hash = "#duo/profile";
+/** #49: where onboarding lands — the duo's Rules, on the ones the daemon just derived, to approve or reject. */
+function goToRules(): void {
+  window.location.hash = "#duo/profile/rules";
 }
 
 /** What each route renders, and what it needs from the shell — one switch, each surface exactly once. */
@@ -288,7 +288,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       return <Duo api={shell.api!} />;
     case "onboarding":
       // #49: the first run, ending at the Mirror once the first rules exist.
-      return <Onboarding api={shell.api!} onFinish={goToMirror} />;
+      return <Onboarding api={shell.api!} onFinish={goToRules} />;
     case "waiting":
       // What is waiting on the owner: the list filtered beside it, and this front door. (#49: an empty duo is taken to its first run by the shell.)
       return <WaitingHome api={shell.api!} connection={shell.connection} />;

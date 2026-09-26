@@ -416,17 +416,17 @@ describe("#49 AC3 — it ends at the Mirror", () => {
     expect(onFinish).toHaveBeenCalledTimes(1);
   });
 
-  it("does not whisk away an owner who opens onboarding on a duo that already has rules — it points at the Mirror instead", async () => {
+  it("does not whisk away an owner who opens onboarding on a duo that already has rules — it points at their Rules instead", async () => {
     fakeDaemon({ knowledge: () => withPendingRules(4), embedGet: () => embedStatus("done", 40) });
     const onFinish = renderOnboarding();
 
-    const link = await screen.findByRole("link", { name: /review your rules in the mirror/i });
-    expect(link).toHaveAttribute("href", "#duo/profile");
+    const link = await screen.findByRole("link", { name: /review your rules/i });
+    expect(link).toHaveAttribute("href", "#duo/profile/rules");
     await new Promise((resolve) => setTimeout(resolve, POLL_MS * 3));
     expect(onFinish).not.toHaveBeenCalled();
   });
 
-  it("in the app, completing onboarding lands on the Mirror, on the first derived rules, with approve and reject in reach", async () => {
+  it("in the app, completing onboarding lands on the duo's Rules, on the first derived rules, with approve and reject in reach", async () => {
     const derived: Rule = {
       id: "r1",
       topicId: "t1",
@@ -453,8 +453,8 @@ describe("#49 AC3 — it ends at the Mirror", () => {
     listing = { ...listing, awaitingApproval: [derived] };
 
     // The default poll is human-paced; the wait is the flow's own.
-    await screen.findByTestId("mirror", undefined, { timeout: 6000 });
-    expect(window.location.hash).toBe("#duo/profile");
+    await screen.findByTestId("rules-tab", undefined, { timeout: 6000 });
+    expect(window.location.hash).toBe("#duo/profile/rules");
     const card = await screen.findByTestId("rule-card");
     expect(card).toHaveTextContent("Money questions get answered the same day.");
     expect(within(card).getByTestId("approve-rule")).toBeEnabled();

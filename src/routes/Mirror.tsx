@@ -62,7 +62,7 @@ function RuleBucketSection({ api, listing, bucket }: { api: DuoApiConfig; listin
  * stays at the terminal (AR-18), so the empty states point there rather than
  * offering a control the daemon has no route for.
  */
-function RefusalsSection({ api }: { api: DuoApiConfig }) {
+export function RefusalsSection({ api }: { api: DuoApiConfig }) {
   const refusals = useMirrorRefusals(api);
 
   let body: React.ReactNode = null;

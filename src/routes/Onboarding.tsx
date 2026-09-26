@@ -364,8 +364,8 @@ function DeriveStep({
             </p>
           )}
           {state === "done" && (
-            <a className="inline-flex min-h-11 items-center self-start underline" href="#duo/profile">
-              Review your rules in the Mirror
+            <a className="inline-flex min-h-11 items-center self-start underline" href="#duo/profile/rules">
+              Review your rules
             </a>
           )}
         </>
