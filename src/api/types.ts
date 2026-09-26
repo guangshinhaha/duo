@@ -14,7 +14,10 @@
 export type DuoSummary = { kind: "personal" } | { kind: "shared"; ownerId: string; ownerName: string };
 
 export interface DraftSource {
-  kind: "rule" | "evidence";
+  // "attachment" (digital-duo #190/#183): a file shared in the conversation
+  // the question rode with; `id` is the workspace's own file reference and
+  // `label` the daemon's filename/type/preview line — rendered as told.
+  kind: "rule" | "evidence" | "attachment";
   id: string;
   label: string;
 }

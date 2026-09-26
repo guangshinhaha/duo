@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
-import type { LiveArrival, NotificationMode, RoomMessage, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
+import type { LiveArrival, NotificationMode, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
+import type { StagedShare } from "../src/workspace/sharing.js";
 
 /*
  * #62: the app's front door becomes two doors — a workspace sign-in (who you
@@ -163,6 +164,23 @@ function fakeConnection(state: {
     ),
     timeline: vi.fn(async (roomId: string) => [...(state.timelines[roomId] ?? [])]),
     send: vi.fn(async () => {}),
+    // #66's share half: the upload resolves the staged bytes to the stable
+    // reference (reporting full progress, the honest single-chunk case),
+    // sendFile is the wire act, and loadMedia is the member's own
+    // authenticated fetch of a reference's bytes (the token rides a header;
+    // an <img> or <a> cannot send one).
+    uploadFile: vi.fn(async (staged: StagedShare, onProgress?: (sent: number, total: number) => void) => {
+      onProgress?.(staged.size, staged.size);
+      return {
+        name: staged.name,
+        mimeType: staged.mimeType,
+        size: staged.size,
+        url: `mxc://workspace.example/${encodeURIComponent(staged.name)}`,
+        image: staged.mimeType.startsWith("image/"),
+      };
+    }),
+    sendFile: vi.fn(async () => {}),
+    loadMedia: vi.fn(async (url: string): Promise<Blob | null> => new Blob([`bytes of ${url}`], { type: "application/octet-stream" })),
     subscribe: vi.fn((handler: (roomId: string, arrival?: LiveArrival) => void) => {
       listeners.add(handler);
       return () => {
@@ -1699,5 +1717,292 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     // words for turning off "duo" / "on your behalf" appear nowhere here.
     expect(within(section).getAllByRole("button").map((b) => b.textContent)).toEqual(["Turn on do not disturb"]);
     expect(section.textContent ?? "").not.toMatch(/on your behalf|mute (my )?duo|turn off duo/i);
+  });
+});
+
+/** #66: one share's facts as a timeline row carries them. */
+function sharedMessageFor(over: Partial<RoomMessage> & Pick<RoomMessage, "eventId" | "senderId"> & { file: SharedFile }): RoomMessage {
+  return messageFor({ ...over, body: over.file.name });
+}
+
+describe("#66 — sharing files and images in a conversation", () => {
+  const ROOM = "!project-x:workspace.example";
+  const PDF_SHARE: SharedFile = { name: "refund-policy.pdf", mimeType: "application/pdf", size: 48_000, url: "mxc://workspace.example/policy1", image: false };
+  const IMAGE_SHARE: SharedFile = { name: "whiteboard.png", mimeType: "image/png", size: 204_800, url: "mxc://workspace.example/img1", image: true };
+
+  // jsdom has neither object URLs nor navigation: the blob URLs are numbered
+  // stand-ins, and a download is the anchor click the card makes — captured.
+  const downloads: { download: string; href: string }[] = [];
+  let anchorClick: { mockRestore: () => void } | undefined;
+  beforeEach(() => {
+    downloads.length = 0;
+    let sequence = 0;
+    Object.assign(URL, { createObjectURL: () => `blob:mock/${(sequence += 1)}`, revokeObjectURL: () => {} });
+    anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push({ download: this.download, href: this.href });
+    });
+  });
+  afterEach(() => {
+    anchorClick?.mockRestore();
+  });
+
+  /** Opens project-x (Bose, carol's duo) with the given timelines. */
+  async function openRoom(timelines: Record<string, RoomMessage[]> = { [ROOM]: [...PROJECT_TIMELINE] }) {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    return fake;
+  }
+
+  /** Puts files in the member's hand and picks them, the way the input does — settled when each is a chip or a refusal naming it. */
+  async function pick(files: File[]): Promise<void> {
+    fireEvent.change(screen.getByTestId("attach-file-input"), { target: { files } });
+    await waitFor(() => {
+      for (const file of files) {
+        const staged = screen.queryAllByTestId("attachment-chip").some((chip) => chip.textContent?.includes(file.name));
+        const refused = screen.queryByTestId("room-composer-error")?.textContent?.includes(file.name) ?? false;
+        expect(staged || refused).toBe(true);
+      }
+    });
+  }
+
+  it("a shared file renders an honest card — name, size, type, download — and an image renders a thumbnail", async () => {
+    const fake = await openRoom({
+      [ROOM]: [
+        ...PROJECT_TIMELINE,
+        sharedMessageFor({ eventId: "$f1", senderId: "@bose:workspace.example", senderName: "Bose", file: PDF_SHARE }),
+        sharedMessageFor({ eventId: "$f2", senderId: "@carol:workspace.example", senderName: "Carol", file: IMAGE_SHARE }),
+      ],
+    });
+
+    const shares = await screen.findAllByTestId("room-file");
+    expect(shares).toHaveLength(2);
+
+    const fileShare = within(shares[0]!);
+    expect(fileShare.queryByTestId("room-file-image")).toBeNull(); // a PDF is not previewed — no preview is faked
+    expect(fileShare.getByTestId("room-file-name")).toHaveTextContent("refund-policy.pdf");
+    expect(fileShare.getByTestId("room-file-facts")).toHaveTextContent("47 KiB");
+    expect(fileShare.getByTestId("room-file-facts")).toHaveTextContent("application/pdf");
+    // Nothing is fetched until the member asks: a 16 MiB file is not
+    // pulled into every reader's browser just for being in the flow.
+    expect(fake.connection.loadMedia).not.toHaveBeenCalledWith("mxc://workspace.example/policy1");
+    await act(async () => {
+      fireEvent.click(fileShare.getByTestId("room-file-download"));
+    });
+    await waitFor(() => expect(downloads).toEqual([{ download: "refund-policy.pdf", href: expect.stringMatching(/^blob:mock\//) }]));
+    expect(fake.connection.loadMedia).toHaveBeenCalledWith("mxc://workspace.example/policy1");
+
+    // The stack makes thumbnails cheap: the img is the thumbnail, its bytes
+    // loaded through the member's own authenticated fetch.
+    const imageShare = within(shares[1]!);
+    await waitFor(() => expect(imageShare.getByTestId("room-file-image")).toHaveAttribute("src", expect.stringMatching(/^blob:mock\//)));
+    expect(imageShare.getByTestId("room-file-image")).toHaveAttribute("alt", "whiteboard.png");
+    expect(fake.connection.loadMedia).toHaveBeenCalledWith("mxc://workspace.example/img1");
+    expect(imageShare.getByTestId("room-file-download")).toBeInTheDocument();
+  });
+
+  it("bytes this member can't load keep the facts and say so — no broken thumbnail, no silent dead link", async () => {
+    seedSession();
+    const fake = fakeConnection({
+      rooms: roomsFixture(),
+      timelines: { [ROOM]: [...PROJECT_TIMELINE, sharedMessageFor({ eventId: "$f1", senderId: "@bose:workspace.example", senderName: "Bose", file: IMAGE_SHARE })] },
+    });
+    vi.mocked(fake.connection.loadMedia).mockResolvedValue(null);
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-file");
+
+    await waitFor(() => expect(fake.connection.loadMedia).toHaveBeenCalled());
+    expect(screen.queryByTestId("room-file-image")).toBeNull(); // no bytes, no thumbnail — the card, honestly
+    expect(screen.getByTestId("room-file-facts")).toHaveTextContent("whiteboard.png");
+    expect(screen.getByTestId("room-file-facts")).toHaveTextContent("image/png");
+    // The download says why it did nothing, and can be tried again.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("room-file-download"));
+    });
+    expect(await screen.findByTestId("room-file-error")).toHaveTextContent("Couldn't load whiteboard.png");
+    expect(downloads).toEqual([]);
+  });
+
+  it("a duo's share is attributed to its owner in the duo's own container — a file is a message, and AR-13 holds for it", async () => {
+    await openRoom({
+      [ROOM]: [...PROJECT_TIMELINE, sharedMessageFor({ eventId: "$f1", senderId: "@duo-carol:workspace.example", senderName: "duo-carol", file: PDF_SHARE })],
+    });
+    const share = await screen.findByTestId("room-file");
+    const container = share.closest('[data-testid="room-duo-message"]');
+    expect(container).not.toBeNull();
+    expect(within(container as HTMLElement).getByTestId("room-duo-message-attribution")).toHaveTextContent("carol's duo");
+    expect(share.closest('[data-testid="room-person-message"]')).toBeNull();
+  });
+
+  it("a share offers a download and nothing that imports it — importing is another act, owned and labelled elsewhere", async () => {
+    await openRoom({
+      [ROOM]: [...PROJECT_TIMELINE, sharedMessageFor({ eventId: "$f1", senderId: "@bose:workspace.example", senderName: "Bose", file: PDF_SHARE })],
+    });
+    const share = await screen.findByTestId("room-file");
+    expect(within(share).queryAllByRole("button").map((button) => button.textContent)).toEqual(["Download"]);
+    expect(within(share).queryByText(/import|corpus|learn/i)).toBeNull();
+  });
+
+  it("attaching and sending shares the file: upload through the seam, m.file on the wire, the share in the flow", async () => {
+    const fake = await openRoom();
+
+    await pick([new File([new Uint8Array([104, 101, 108, 108, 111])], "notes.txt", { type: "text/plain" })]);
+    expect(screen.getByTestId("attachment-chip")).toHaveTextContent("notes.txt");
+    expect(screen.getByTestId("attachment-chip")).toHaveTextContent("5 B");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+
+    expect(fake.connection.uploadFile).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "notes.txt", mimeType: "text/plain", size: 5 }),
+      expect.any(Function),
+    );
+    await waitFor(() =>
+      expect(fake.connection.sendFile).toHaveBeenCalledWith(ROOM, {
+        name: "notes.txt",
+        mimeType: "text/plain",
+        size: 5,
+        url: "mxc://workspace.example/notes.txt",
+        image: false,
+      }),
+    );
+    // The share renders at once as this member's marked copy.
+    expect(await screen.findByTestId("room-file")).toBeInTheDocument();
+    // And the composer lets go of it — the room is the record.
+    await waitFor(() => expect(screen.queryByTestId("attachment-chip")).toBeNull());
+  });
+
+  it("attach, then ask: the files ride immediately before the question — the association convention the backend reads", async () => {
+    const fake = await openRoom();
+
+    await pick([
+      new File([new Uint8Array([1])], "one.txt", { type: "text/plain" }),
+      new File([new Uint8Array([2])], "two.txt", { type: "text/plain" }),
+    ]);
+    // The room has a duo member, and the composer says what that means.
+    const note = screen.getByTestId("attachment-note");
+    expect(note).toHaveTextContent("carol's duo");
+    expect(note).toHaveTextContent("32 KiB");
+    expect(note).toHaveTextContent("can't read images yet — an open provider decision");
+    expect(note).toHaveTextContent("never imports");
+
+    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "what do these say?" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+
+    // Contiguous, same sender, same room: upload → m.file → m.file → the
+    // question, in exactly the order the wire carries them.
+    const [uploadOne, uploadTwo] = vi.mocked(fake.connection.uploadFile).mock.invocationCallOrder;
+    const [fileOne, fileTwo] = vi.mocked(fake.connection.sendFile).mock.invocationCallOrder;
+    const [question] = vi.mocked(fake.connection.send).mock.invocationCallOrder;
+    expect(fileOne).toBeGreaterThan(uploadOne);
+    expect(uploadTwo).toBeGreaterThan(fileOne);
+    expect(fileTwo).toBeGreaterThan(uploadTwo);
+    expect(question).toBeGreaterThan(fileTwo);
+    expect(fake.connection.send).toHaveBeenCalledWith(ROOM, "what do these say?");
+    // Both shares and the question left the composer.
+    await waitFor(() => expect(screen.queryByTestId("attachment-chip")).toBeNull());
+    expect(screen.getByLabelText("Message project-x")).toHaveValue("");
+  });
+
+  it("the upload's progress is visible while it runs, and the composer rests when it ends", async () => {
+    const fake = await openRoom();
+    let report: (sent: number, total: number) => void = () => {};
+    let finish: (shared: SharedFile) => void = () => {};
+    vi.mocked(fake.connection.uploadFile).mockImplementationOnce(
+      (_staged, onProgress) =>
+        new Promise<SharedFile>((resolve) => {
+          report = onProgress ?? (() => {});
+          finish = resolve;
+        }),
+    );
+
+    await pick([new File([new Uint8Array(1000)], "report.pdf", { type: "application/pdf" })]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    expect(screen.getByTestId("room-composer-status")).toHaveTextContent("Uploading report.pdf…");
+
+    act(() => report(250, 1000));
+    expect(screen.getByTestId("room-composer-status")).toHaveTextContent("Uploading report.pdf… 25%");
+    act(() => report(1000, 1000));
+    expect(screen.getByTestId("room-composer-status")).toHaveTextContent("Uploading report.pdf… 100%");
+
+    await act(async () => {
+      finish({ name: "report.pdf", mimeType: "application/pdf", size: 1000, url: "mxc://workspace.example/report", image: false });
+    });
+    await waitFor(() => expect(screen.queryByTestId("room-composer-status")).toBeNull());
+    expect(fake.connection.sendFile).toHaveBeenCalled();
+  });
+
+  it("a room with no duo says so — the share is for the people here", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!announce:workspace.example": [] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#room/!announce%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    await pick([new File([new Uint8Array([1])], "announce.txt", { type: "text/plain" })]);
+    expect(screen.getByTestId("attachment-note")).toHaveTextContent("no duo is here");
+    expect(screen.getByTestId("attachment-note")).toHaveTextContent("never imports");
+  });
+
+  it("share limits refuse by naming the limit, and keep the message", async () => {
+    await openRoom();
+
+    // A 9 MiB image against this app's 8 MiB image limit.
+    await pick([new File([new Uint8Array(9 * 1024 * 1024)], "big.png", { type: "image/png" })]);
+    expect(screen.getByTestId("room-composer-error")).toHaveTextContent("big.png is 9 MiB — conversation image shares cap at 8 MiB.");
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+
+    // A 17 MiB file against this app's 16 MiB file limit — and the refusal
+    // names THIS limit, not the duo's 32 KiB reading cap.
+    await pick([new File([new Uint8Array(17 * 1024 * 1024)], "deck.pdf", { type: "application/pdf" })]);
+    expect(screen.getByTestId("room-composer-error")).toHaveTextContent("deck.pdf is 17 MiB — conversation file shares cap at 16 MiB.");
+    expect(screen.getByTestId("room-composer-error").textContent).not.toContain("32 KiB");
+
+    // A fourth attachment names the count — the door a duo grounds by.
+    await pick([
+      new File([new Uint8Array([1])], "one.txt", { type: "text/plain" }),
+      new File([new Uint8Array([1])], "two.txt", { type: "text/plain" }),
+      new File([new Uint8Array([1])], "three.txt", { type: "text/plain" }),
+    ]);
+    expect(screen.getAllByTestId("attachment-chip")).toHaveLength(3);
+    await pick([new File([new Uint8Array([1])], "four.txt", { type: "text/plain" })]);
+    expect(screen.getByTestId("room-composer-error")).toHaveTextContent("four.txt wasn't added — a message carries at most 3 attachments.");
+    expect(screen.getAllByTestId("attachment-chip")).toHaveLength(3);
+    expect(screen.getAllByTestId("attachment-chip").some((chip) => chip.textContent?.includes("four.txt"))).toBe(false);
+  });
+
+  it("an upload the workspace refuses states the file, keeps the attachment, and never sends the question past it", async () => {
+    const fake = await openRoom();
+    vi.mocked(fake.connection.uploadFile).mockRejectedValueOnce(new Error("notes.txt is over the workspace's own upload limit."));
+
+    await pick([new File([new Uint8Array([1, 2, 3])], "notes.txt", { type: "text/plain" })]);
+    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "what does this say?" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+
+    // The reason the workspace gave is the reason stated — not a bare "failed".
+    await waitFor(() => expect(screen.getByTestId("room-composer-error")).toHaveTextContent("The workspace didn't take notes.txt"));
+    expect(screen.getByTestId("room-composer-error")).toHaveTextContent("notes.txt is over the workspace's own upload limit.");
+    // Nothing is lost: the file stays attached, the words stay typed, and
+    // the question was not sent riding the wrong (empty) set of files.
+    expect(screen.getByTestId("attachment-chip")).toHaveTextContent("notes.txt");
+    expect(screen.getByLabelText("Message project-x")).toHaveValue("what does this say?");
+    expect(fake.connection.sendFile).not.toHaveBeenCalled();
+    expect(fake.connection.send).not.toHaveBeenCalled();
   });
 });

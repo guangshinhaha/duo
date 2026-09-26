@@ -1,14 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Paperclip, X } from "lucide-react";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { roomTitle } from "./Conversations.js";
-import type { RoomMemberRef, RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
 import { addressed, mentionLabelOf, type MessageMention } from "../workspace/mentions.js";
+import type { RoomMemberRef, RoomMessage, SharedFile, WorkspaceConnection } from "../workspace/matrix.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
+import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 
 /**
@@ -286,12 +289,17 @@ export function Room({ connection, roomId }: { connection: WorkspaceConnection |
  * under it. Shared by the conversation's flow and the thread view (#64),
  * so a message reads identically wherever it's read; the conversation's
  * rows add the verbs around it, the thread view adds its own composer.
+ * #66: a share renders as the SharedFileCard inside the same attribution
+ * containers — a file message is a message, by whoever shared it.
  */
 export function MessageBody({
   message,
+  loadMedia,
   onToggleReaction,
 }: {
   message: RoomMessage;
+  /** The member's own authenticated fetch of a shared file's bytes — the connection's, passed down so this stays a pure render. */
+  loadMedia: (url: string) => Promise<Blob | null>;
   onToggleReaction?: (message: RoomMessage, key: string, mine: boolean) => void;
 }) {
   const fromDuo = isDuoUserId(message.senderId);
@@ -312,12 +320,18 @@ export function MessageBody({
       </div>
     );
   }
+  const content =
+    message.file === undefined ? (
+      messageWords(message)
+    ) : (
+      <SharedFileCard file={message.file} loadMedia={loadMedia} />
+    );
   return (
     <div className="flex flex-col gap-1">
       {fromDuo ? (
-        <RoomDuoMessage ownerName={duoOwnerLabel(message.senderId) ?? message.senderName}>{messageWords(message)}</RoomDuoMessage>
+        <RoomDuoMessage ownerName={duoOwnerLabel(message.senderId) ?? message.senderName}>{content}</RoomDuoMessage>
       ) : (
-        <RoomPersonMessage authorName={message.senderName}>{messageWords(message)}</RoomPersonMessage>
+        <RoomPersonMessage authorName={message.senderName}>{content}</RoomPersonMessage>
       )}
       <p className="type-provenance text-[var(--faint)]">
         <Timestamp iso={new Date(message.originServerTs).toISOString()} />
@@ -398,6 +412,7 @@ function RoomEntry({
     <div className="flex flex-col gap-1" data-testid="room-message">
       <MessageBody
         message={message}
+        loadMedia={connection.loadMedia}
         onToggleReaction={(target, key, mine) =>
           run(mine ? connection.unreact(roomId, target.eventId, key) : connection.react(roomId, target.eventId, key))
         }
@@ -422,7 +437,7 @@ function RoomEntry({
         <a className={rowActionClass} href={threadHref(roomId, message.eventId)}>
           Reply in thread
         </a>
-        {own && !message.redacted && (
+        {own && !message.redacted && message.file === undefined && (
           <button
             className={rowActionClass}
             disabled={busy}
@@ -561,6 +576,17 @@ let echoSequence = 0;
  * failed send takes the copy back and keeps the text. #65: an "@" the
  * member types offers the room's members — people and the duos present,
  * clearly distinguished — and the picks ride the wire as m.mentions.
+ * failed send takes the copy back and keeps the text.
+ *
+ * #66 adds the share: files attach here, refuse or stage by this app's own
+ * named share limits, then ride the submit — each attachment uploads and
+ * sends as its own `m.file`/`m.image` message, in order, BEFORE the text.
+ * That order is the backend's association convention made visible (core
+ * #190: the asker's own contiguous file messages immediately preceding
+ * their question in the same room), so "attach, then ask" is exactly what
+ * the wire carries. Sharing is not importing — the upload goes to the
+ * homeserver's media store for the people in the room, and nothing here
+ * can reach any daemon's corpus.
  */
 function RoomComposer({
   connection,
@@ -574,8 +600,11 @@ function RoomComposer({
   members: readonly RoomMemberRef[];
 }) {
   const queryClient = useQueryClient();
+  const fileInput = useRef<HTMLInputElement | null>(null);
   const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<StagedShare[]>([]);
   const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The picks made from the offer; only those whose addressed words still
   // stand in the text at send time ride the wire — what the message
@@ -584,7 +613,63 @@ function RoomComposer({
   // from the id's grammar alone.
   const [picks, setPicks] = useState<readonly MessageMention[]>([]);
   const trimmed = text.trim();
-  const disabled = trimmed.length === 0 || pending;
+  const disabled = (trimmed.length === 0 && attachments.length === 0) || pending;
+  const duos = members.filter((member) => isDuoUserId(member.userId));
+
+  const appendEcho = (row: RoomMessage): void => {
+    queryClient.setQueryData<readonly RoomMessage[]>(["workspace", "timeline", roomId], (current) => [...(current ?? []), row]);
+  };
+  const dropEchoes = (ids: readonly string[]): void => {
+    if (ids.length === 0) {
+      return;
+    }
+    const drop = new Set(ids);
+    queryClient.setQueryData<readonly RoomMessage[]>(["workspace", "timeline", roomId], (current) =>
+      (current ?? []).filter((row) => !drop.has(row.eventId)),
+    );
+  };
+  const echoRow = (eventId: string, shared: SharedFile): RoomMessage => ({
+    eventId,
+    roomId,
+    senderId: connection.userId,
+    senderName: localpartOf(connection.userId),
+    body: shared.name,
+    parts: null,
+    file: shared,
+    originServerTs: Date.now(),
+    edited: false,
+    redacted: false,
+    reactions: [],
+    thread: null,
+    threadRootEventId: null,
+    pending: true,
+  });
+
+  /** Stages what this app will share and says why about what it won't — the refusal names the limit and keeps everything. */
+  const stage = (files: FileList): void => {
+    // Snapshot before the first await: resetting the input's value after
+    // handing its FileList over empties the live list, and the member's
+    // pick must not depend on that timing.
+    const picked = [...files];
+    void (async () => {
+      const staged: StagedShare[] = [];
+      const refusals: string[] = [];
+      for (const file of picked) {
+        const refusal = shareRefusalOf({ name: file.name, size: file.size, mimeType: file.type }, attachments.length + staged.length);
+        if (refusal === null) {
+          staged.push(await stageFile(file));
+        } else {
+          refusals.push(refusal);
+        }
+      }
+      if (staged.length > 0) {
+        setAttachments((current) => [...current, ...staged]);
+      }
+      if (refusals.length > 0) {
+        setError(refusals.join(" "));
+      }
+    })();
+  };
 
   const token = mentionTokenAtEnd(text);
   const offer =
@@ -611,47 +696,127 @@ function RoomComposer({
           return;
         }
         const body = trimmed;
+        const toShare = attachments;
         const livePicks = picks.filter((pick) => text.includes(addressed(pick.userId, pick.label)));
-        const echoId = `pending-${(echoSequence += 1)}`;
         setPending(true);
         setError(null);
-        // The optimistic copy: this device's words, on their way. The
-        // subscription's refetch lands the homeserver's record — a real
-        // event id — in place of it; nothing else ever shows it.
-        queryClient.setQueryData<readonly RoomMessage[]>(["workspace", "timeline", roomId], (current) => [
-          ...(current ?? []),
-          {
-            eventId: echoId,
-            roomId,
-            senderId: connection.userId,
-            senderName: localpartOf(connection.userId),
-            body,
-            parts: null,
-            originServerTs: Date.now(),
-            edited: false,
-            redacted: false,
-            reactions: [],
-            thread: null,
-            threadRootEventId: null,
-            pending: true,
-          },
-        ]);
-        const sending = livePicks.length > 0 ? connection.send(roomId, body, livePicks) : connection.send(roomId, body);
-        sending
-          .then(() => {
+        // The share walks one attachment at a time, in the order staged,
+        // and stops at the first thing the workspace refuses: the rest stay
+        // attached and the words stay typed, because a question sent past a
+        // failed share would ride the wrong set of files — the member
+        // decides again, with the reason stated (#66 AC4).
+        void (async () => {
+          let completedEchoes: string[] = [];
+          const unfinishedEchoes: string[] = [];
+          let sharedCount = 0;
+          try {
+            for (const staged of toShare) {
+              setStatus(`Uploading ${staged.name}…`);
+              const shared = await connection.uploadFile(staged, (sent, total) => {
+                setStatus(total > 0 ? `Uploading ${staged.name}… ${Math.round((sent / total) * 100)}%` : `Uploading ${staged.name}…`);
+              });
+              const echoId = `pending-${(echoSequence += 1)}`;
+              unfinishedEchoes.push(echoId);
+              appendEcho(echoRow(echoId, shared));
+              setStatus(`Sharing ${staged.name}…`);
+              await connection.sendFile(roomId, shared);
+              completedEchoes = [...completedEchoes, echoId];
+              sharedCount += 1;
+            }
+            if (body.length > 0) {
+              // The question goes last and contiguous: the association
+              // convention is the asker's own file messages immediately
+              // preceding their text, same sender, same room.
+              const echoId = `pending-${(echoSequence += 1)}`;
+              unfinishedEchoes.push(echoId);
+              appendEcho({
+                eventId: echoId,
+                roomId,
+                senderId: connection.userId,
+                senderName: localpartOf(connection.userId),
+                body,
+                parts: null,
+                originServerTs: Date.now(),
+                edited: false,
+                redacted: false,
+                reactions: [],
+                thread: null,
+                threadRootEventId: null,
+                pending: true,
+              });
+              await (livePicks.length > 0 ? connection.send(roomId, body, livePicks) : connection.send(roomId, body));
+              completedEchoes = [...completedEchoes, echoId];
+            }
             setText("");
             setPicks([]);
-          })
-          .catch(() => {
-            setError("Couldn't send — try again.");
-            queryClient.setQueryData<readonly RoomMessage[]>(["workspace", "timeline", roomId], (current) =>
-              (current ?? []).filter((row) => row.eventId !== echoId),
+            setAttachments([]);
+          } catch (error) {
+            // The optimistic copies of what never became the homeserver's
+            // record go; what did complete keeps its copy until the
+            // subscription's refetch lands the real rows.
+            dropEchoes(unfinishedEchoes.filter((id) => !completedEchoes.includes(id)));
+            setAttachments(toShare.slice(sharedCount));
+            setError(
+              sharedCount < toShare.length
+                ? `The workspace didn't take ${toShare[sharedCount]!.name}. ${error instanceof Error && error.message.length > 0 ? `${error.message} ` : ""}It's still attached and your words are still here. Try again.`
+                : "Couldn't send — try again.",
             );
-          })
-          .finally(() => setPending(false));
+          } finally {
+            setPending(false);
+            setStatus(null);
+          }
+        })();
       }}
     >
+      {attachments.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1" data-testid="attachment-row">
+          {attachments.map((attachment, index) => (
+            <span
+              className="inline-flex min-h-9 items-center gap-1 rounded-full border border-[var(--edge)] px-2 type-provenance text-[var(--text)]"
+              data-testid="attachment-chip"
+              key={`${attachment.name}-${index}`}
+            >
+              <Paperclip aria-label="Attachment" className="size-3.5 shrink-0" />
+              <span className="break-all">
+                {attachment.name} · {formatBytes(attachment.size)}
+              </span>
+              <button
+                className="inline-flex items-center rounded-full px-1 text-[var(--muted)]"
+                data-testid="attachment-remove"
+                disabled={pending}
+                onClick={() => setAttachments((current) => current.filter((_, at) => at !== index))}
+                type="button"
+              >
+                <X aria-label={`Remove ${attachment.name}`} className="size-3.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex items-start gap-2">
+        <input
+          aria-label="Attach files"
+          className="sr-only"
+          data-testid="attach-file-input"
+          multiple
+          ref={fileInput}
+          type="file"
+          onChange={(e) => {
+            if (e.currentTarget.files !== null) {
+              stage(e.currentTarget.files);
+            }
+            // Reset so picking the same file again after removing it fires.
+            e.currentTarget.value = "";
+          }}
+        />
+        <button
+          className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)] disabled:opacity-40"
+          disabled={pending}
+          onClick={() => fileInput.current?.click()}
+          type="button"
+        >
+          <Paperclip aria-label="Attach files" className="size-4" />
+        </button>
         <textarea
           aria-label={`Message ${roomName}`}
           className="min-h-11 flex-1 resize-none rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
@@ -698,6 +863,18 @@ function RoomComposer({
             </button>
           ))}
         </div>
+      )}
+      {status !== null && (
+        <p className="mt-2 type-provenance text-[var(--muted)]" data-testid="room-composer-status">
+          {status}
+        </p>
+      )}
+      {attachments.length > 0 && (
+        <p className="mt-2 type-provenance text-[var(--muted)]" data-testid="attachment-note">
+          {duos.length > 0
+            ? `${duos.map((duo) => `${duoOwnerLabel(duo.userId) ?? localpartOf(duo.userId)}'s duo`).join(", ")} can read what you attach here when you ask next — text files up to 32 KiB ground the answer (the duo's own reading cap, smaller than this app's share limits); images are shared for people, and a duo can't read images yet — an open provider decision. Sharing never imports: nothing enters any duo's corpus.`
+            : "Attachments share with the people in this conversation — no duo is here. Sharing never imports: nothing enters any duo's corpus."}
+        </p>
       )}
       {error && (
         <p className="mt-2 type-body text-[var(--refused)]" data-testid="room-composer-error">

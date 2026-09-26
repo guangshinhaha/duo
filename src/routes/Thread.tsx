@@ -132,12 +132,12 @@ export function ThreadView({
             // Same row testid as the conversation's rows: a message is a
             // message wherever it's read (#64).
             <div data-testid="room-message">
-              <MessageBody message={root} onToggleReaction={toggleReaction} />
+              <MessageBody message={root} loadMedia={connection.loadMedia} onToggleReaction={toggleReaction} />
             </div>
           )}
           {replies.map((reply) => (
             <div data-testid="room-message" key={reply.eventId}>
-              <MessageBody message={reply} onToggleReaction={toggleReaction} />
+              <MessageBody message={reply} loadMedia={connection.loadMedia} onToggleReaction={toggleReaction} />
             </div>
           ))}
         </section>
