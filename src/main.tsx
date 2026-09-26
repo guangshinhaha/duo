@@ -1,6 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
+import { isTrayWindow } from "./shell/native.js";
+import { TrayApp } from "./tray/TrayPopover.js";
 import { initTheme } from "./theme.js";
 import "@fontsource-variable/newsreader/opsz.css";
 import "@fontsource/jetbrains-mono/400.css";
@@ -18,6 +20,6 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    {isTrayWindow() ? <TrayApp /> : <App />}
   </StrictMode>,
 );

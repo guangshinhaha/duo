@@ -192,3 +192,37 @@ export function useWaitingCount(api: DuoApiConfig | null): number {
   const confirmations = usePendingT4(api);
   return (drafts.data?.length ?? 0) + (confirmations.data?.length ?? 0);
 }
+
+/**
+ * Whether a draft may be sent from outside the app — the menu-bar tray now,
+ * a notification or a swipe later (#151, #153, #154). Only a confident draft
+ * for a message somebody else sent: a hedged one wants your eyes on its
+ * reasoning, a passed-on question or a refusal has nothing to send, and a
+ * question you asked your own duo is answered in its chat, not sent. The
+ * decision is the same one the draft tray's Send makes; only where the
+ * button lives changes.
+ */
+export function canSendOutside(draft: DraftRecord): boolean {
+  return (
+    draft.outcome === null &&
+    !draft.escalated &&
+    !draft.refused &&
+    draft.draftText !== null &&
+    draft.draftText.trim() !== "" &&
+    !isOwnTurn(draft) &&
+    hairlineState(toDraftPipelineResult(draft)) === "confident"
+  );
+}
+
+/** Where a waiting draft is decided in the app — the chat it belongs to, Your duo, its bridged chat, or its own page. Pure, for surfaces with no workspace connection to look rooms up in. */
+export function draftHref(draft: DraftRecord): string {
+  const conversation = conversationOf(draft.provenance);
+  if (conversation !== null) {
+    return roomHref(conversation.roomId);
+  }
+  if (isOwnTurn(draft)) {
+    return "#duo";
+  }
+  const bridged = bridgedIdOf(draft);
+  return bridged !== null ? bridgedHref(bridged) : `#draft/${encodeURIComponent(draft.id)}`;
+}
