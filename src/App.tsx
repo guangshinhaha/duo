@@ -24,7 +24,7 @@ import { Onboarding } from "./routes/Onboarding.js";
 import { WaitingHome } from "./shell/WaitingHome.js";
 import { Draft } from "./routes/Draft.js";
 import { ChatShell } from "./shell/ChatShell.js";
-import { canonicalHash, isLegacyHash, roomOfRoute, routeFromHash, type Route } from "./shell/routes.js";
+import { canonicalHash, isLegacyHash, roomOfRoute, routeFromHash, type Route, type SettingsSectionId } from "./shell/routes.js";
 import { roomTitle } from "./shell/roomTitle.js";
 import { roomHref } from "./workspace/links.js";
 import { Room } from "./routes/Room.js";
@@ -226,6 +226,22 @@ interface SurfaceContext {
   onDuoEnded: () => void;
 }
 
+/** Settings: the index of its sections, or one section alone (#148). */
+function settingsSurface(section: SettingsSectionId | "index", shell: SurfaceContext) {
+  return (
+    <Settings
+      api={shell.api}
+      onConfigChange={shell.setApi}
+      onDuoEnded={shell.onDuoEnded}
+      onPairDuo={shell.onPairDuo}
+      onSignOut={shell.signOutWorkspace}
+      onWorkspaceSignIn={shell.onWorkspaceSignIn}
+      section={section}
+      session={shell.session}
+    />
+  );
+}
+
 /** The route tree as one switch — each route's surface, exactly once. Settings also mutates the connections, through App's single choke points. A duo surface reached without a pairing (a member's URL) explains and offers instead — #62's "offered rather than demanded". The chat list itself (`chats`) is the shell's own, so it has no entry here. */
 function routeSurface(route: Route, shell: SurfaceContext) {
   if (typeof route === "object") {
@@ -255,6 +271,9 @@ function routeSurface(route: Route, shell: SurfaceContext) {
     if ("profile" in route) {
       return shell.api ? <ProfilePane api={shell.api} tab={route.profile} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
     }
+    if ("settings" in route) {
+      return settingsSurface(route.settings, shell);
+    }
     return shell.api ? (
       <Draft api={shell.api} draftId={route.draft} connection={shell.connection} />
     ) : (
@@ -269,17 +288,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
     case "chats":
       return null;
     case "settings":
-      return (
-        <Settings
-          api={shell.api}
-          session={shell.session}
-          onConfigChange={shell.setApi}
-          onSignOut={shell.signOutWorkspace}
-          onPairDuo={shell.onPairDuo}
-          onWorkspaceSignIn={shell.onWorkspaceSignIn}
-          onDuoEnded={shell.onDuoEnded}
-        />
-      );
+      return settingsSurface("index", shell);
     case "admin":
       return <Admin api={shell.api!} origin={adminAccount(shell.api)?.origin ?? null} orgId={null} />;
     case "confirmations":

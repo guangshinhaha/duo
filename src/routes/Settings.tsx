@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import type { WorkspaceSession } from "../workspace/matrix.js";
 import { useWorkspaceAccess } from "../workspace/access.js";
@@ -31,6 +31,7 @@ import {
   type MissedArrival,
 } from "../notificationPrefs.js";
 import { normalizeBaseUrl } from "./Setup.js";
+import { SETTINGS_SECTIONS, type SettingsSectionId } from "../shell/routes.js";
 
 /** Masked to the last few characters — a paired token is a bearer credential, and a settings screen is exactly where screens get shared. */
 function maskedToken(token: string): string {
@@ -57,7 +58,14 @@ export function Settings({
   onPairDuo,
   onWorkspaceSignIn,
   onDuoEnded,
+  section,
 }: {
+  /**
+   * Which part of the settings is open: `"index"` is the list of sections, a
+   * section id is that section alone, and no value at all is every section in
+   * one page (what a caller that just wants the settings gets).
+   */
+  section?: SettingsSectionId | "index";
   api: DuoApiConfig | null;
   session: WorkspaceSession | null;
   onConfigChange: (config: DuoApiConfig | null) => void;
@@ -83,11 +91,166 @@ export function Settings({
     setDnd(next);
   };
 
-  return (
-    <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-testid="settings">
-      {/* #39: the page's h1 above its sections' h2s — the sections name
-          themselves; the page did not. */}
-      <h1 className="type-heading sr-only">Settings</h1>
+  const blocks: Record<SettingsSectionId, ReactNode> = {
+    notifications: (
+      <>
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-notifications">
+        <h2 className="type-heading">Notifications</h2>
+        {/* #69: this device's own rule — what may interrupt HERE. The
+            per-conversation half lives on the conversations themselves
+            (server-side, every device); do-not-disturb is the member
+            standing at this machine, so it stays on this machine. */}
+        <p className="type-provenance text-[var(--muted)]" data-testid="dnd-status">
+          {isDndActive(dnd, new Date()) ? "Do not disturb is on." : "Do not disturb is off."}
+        </p>
+        <button
+          aria-pressed={dnd.manual}
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+          data-testid="dnd-toggle"
+          onClick={() => writeDnd({ ...dnd, manual: !dnd.manual })}
+          type="button"
+        >
+          {dnd.manual ? "Turn off do not disturb" : "Turn on do not disturb"}
+        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="type-provenance text-[var(--muted)]" htmlFor="dnd-from-input">
+            Quiet hours start
+          </label>
+          <input
+            aria-label="Quiet hours start"
+            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
+            data-testid="dnd-from"
+            id="dnd-from-input"
+            onChange={(e) => writeDnd({ ...dnd, from: e.target.value || null })}
+            type="time"
+            value={dnd.from ?? ""}
+          />
+          <span className="type-provenance text-[var(--muted)]">to</span>
+          <label className="type-provenance text-[var(--muted)]" htmlFor="dnd-to-input">
+            Quiet hours end
+          </label>
+          <input
+            aria-label="Quiet hours end"
+            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
+            data-testid="dnd-to"
+            id="dnd-to-input"
+            onChange={(e) => writeDnd({ ...dnd, to: e.target.value || null })}
+            type="time"
+            value={dnd.to ?? ""}
+          />
+        </div>
+        {/* What the rule held back stays visible afterwards — the record,
+            not the interruptions, replayed. */}
+        <div className="flex flex-col gap-2" data-testid="missed-list">
+          {missed.length === 0 ? (
+            <p className="type-provenance text-[var(--muted)]">Nothing was held back.</p>
+          ) : (
+            <>
+              {missed.map((entry) => (
+                <a
+                  className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 type-body text-[var(--text)]"
+                  data-testid="missed-entry"
+                  href={entry.hash}
+                  key={`${entry.at}-${entry.hash}-${entry.body}`}
+                >
+                  <span className="mr-2 type-provenance text-[var(--muted)]">
+                    <Timestamp iso={new Date(entry.at).toISOString()} />
+                  </span>
+                  {entry.body}
+                </a>
+              ))}
+              <button
+                className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
+                data-testid="missed-clear"
+                onClick={() => {
+                  clearMissed();
+                  setMissed([]);
+                }}
+                type="button"
+              >
+                Clear what was missed
+              </button>
+            </>
+          )}
+        </div>
+      </section>
+
+      </>
+    ),
+    appearance: (
+      <>
+      <section className="shape-container flex flex-col gap-3 p-4">
+        <h2 className="type-heading">Appearance</h2>
+        {/* #35: light, dark, or follow the system — applied the moment it
+            is picked and remembered for the next launch. "System" is the
+            absence of a stamp: the OS's own prefers-color-scheme media
+            query carries the palette from there, without a reload. */}
+        <label className="type-provenance text-[var(--muted)]" htmlFor="settings-theme-input">
+          Theme
+        </label>
+        <select
+          aria-label="Theme"
+          className="min-h-11 self-start rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
+          data-testid="settings-theme"
+          id="settings-theme-input"
+          value={theme}
+          onChange={(e) => {
+            const next = e.target.value as ThemePreference;
+            setThemePreference(next);
+            setTheme(next);
+          }}
+        >
+          <option value="system">Follow the system</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4">
+        <h2 className="type-heading">Keyboard</h2>
+        {/* #36: the one place the shortcuts are listed — only what
+            exists, so the list can never promise a key nothing answers
+            to. */}
+        <dl className="flex flex-col gap-2 type-provenance text-[var(--muted)]">
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">⌘K</dt>
+            <dd>Search what your duo knows.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">J K</dt>
+            <dd>Move to the next or previous chat — in Waiting on you, to the next one waiting.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">⌘ 1–9</dt>
+            <dd>Open the first nine chats, your duo first.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">⏎ E X</dt>
+            <dd>On your duo's draft: send it, edit it, dismiss it.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">Tab</dt>
+            <dd>Reach a draft's actions.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">Esc</dt>
+            <dd>Leave an open editor, dialog or menu.</dd>
+          </div>
+        </dl>
+      </section>
+
+      </>
+    ),
+    devices: api ? (
+      <>
+        <PairedDevices api={api} onConfigChange={onConfigChange} />
+        <PairAnotherDevice api={api} />
+      </>
+    ) : null,
+    links: api ? <AskLinks api={api} /> : null,
+    claude: api ? <ConnectToClaude api={api} /> : null,
+    advanced: (
+      <>
       <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-workspace">
         <h2 className="type-heading">Workspace</h2>
         {session ? (
@@ -182,153 +345,7 @@ export function Settings({
         </section>
       )}
 
-      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-notifications">
-        <h2 className="type-heading">Notifications</h2>
-        {/* #69: this device's own rule — what may interrupt HERE. The
-            per-conversation half lives on the conversations themselves
-            (server-side, every device); do-not-disturb is the member
-            standing at this machine, so it stays on this machine. */}
-        <p className="type-provenance text-[var(--muted)]" data-testid="dnd-status">
-          {isDndActive(dnd, new Date()) ? "Do not disturb is on." : "Do not disturb is off."}
-        </p>
-        <button
-          aria-pressed={dnd.manual}
-          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
-          data-testid="dnd-toggle"
-          onClick={() => writeDnd({ ...dnd, manual: !dnd.manual })}
-          type="button"
-        >
-          {dnd.manual ? "Turn off do not disturb" : "Turn on do not disturb"}
-        </button>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="type-provenance text-[var(--muted)]" htmlFor="dnd-from-input">
-            Quiet hours start
-          </label>
-          <input
-            aria-label="Quiet hours start"
-            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
-            data-testid="dnd-from"
-            id="dnd-from-input"
-            onChange={(e) => writeDnd({ ...dnd, from: e.target.value || null })}
-            type="time"
-            value={dnd.from ?? ""}
-          />
-          <span className="type-provenance text-[var(--muted)]">to</span>
-          <label className="type-provenance text-[var(--muted)]" htmlFor="dnd-to-input">
-            Quiet hours end
-          </label>
-          <input
-            aria-label="Quiet hours end"
-            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
-            data-testid="dnd-to"
-            id="dnd-to-input"
-            onChange={(e) => writeDnd({ ...dnd, to: e.target.value || null })}
-            type="time"
-            value={dnd.to ?? ""}
-          />
-        </div>
-        {/* What the rule held back stays visible afterwards — the record,
-            not the interruptions, replayed. */}
-        <div className="flex flex-col gap-2" data-testid="missed-list">
-          {missed.length === 0 ? (
-            <p className="type-provenance text-[var(--muted)]">Nothing was held back.</p>
-          ) : (
-            <>
-              {missed.map((entry) => (
-                <a
-                  className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 type-body text-[var(--text)]"
-                  data-testid="missed-entry"
-                  href={entry.hash}
-                  key={`${entry.at}-${entry.hash}-${entry.body}`}
-                >
-                  <span className="mr-2 type-provenance text-[var(--muted)]">
-                    <Timestamp iso={new Date(entry.at).toISOString()} />
-                  </span>
-                  {entry.body}
-                </a>
-              ))}
-              <button
-                className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
-                data-testid="missed-clear"
-                onClick={() => {
-                  clearMissed();
-                  setMissed([]);
-                }}
-                type="button"
-              >
-                Clear what was missed
-              </button>
-            </>
-          )}
-        </div>
-      </section>
-
-      <section className="shape-container flex flex-col gap-3 p-4">
-        <h2 className="type-heading">Appearance</h2>
-        {/* #35: light, dark, or follow the system — applied the moment it
-            is picked and remembered for the next launch. "System" is the
-            absence of a stamp: the OS's own prefers-color-scheme media
-            query carries the palette from there, without a reload. */}
-        <label className="type-provenance text-[var(--muted)]" htmlFor="settings-theme-input">
-          Theme
-        </label>
-        <select
-          aria-label="Theme"
-          className="min-h-11 self-start rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
-          data-testid="settings-theme"
-          id="settings-theme-input"
-          value={theme}
-          onChange={(e) => {
-            const next = e.target.value as ThemePreference;
-            setThemePreference(next);
-            setTheme(next);
-          }}
-        >
-          <option value="system">Follow the system</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
-      </section>
-
-      <section className="shape-container flex flex-col gap-3 p-4">
-        <h2 className="type-heading">Keyboard</h2>
-        {/* #36: the one place the shortcuts are listed — only what
-            exists, so the list can never promise a key nothing answers
-            to. */}
-        <dl className="flex flex-col gap-2 type-provenance text-[var(--muted)]">
-          <div className="flex gap-2">
-            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">⌘K</dt>
-            <dd>Search what your duo knows.</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">J K</dt>
-            <dd>Move to the next or previous chat — in Waiting on you, to the next one waiting.</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">⌘ 1–9</dt>
-            <dd>Open the first nine chats, your duo first.</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">⏎ E X</dt>
-            <dd>On your duo's draft: send it, edit it, dismiss it.</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">Tab</dt>
-            <dd>Reach a draft's actions.</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-16 shrink-0 type-identifier text-[var(--text)]">Esc</dt>
-            <dd>Leave an open editor, dialog or menu.</dd>
-          </div>
-        </dl>
-      </section>
-
-      {api && <PairedDevices api={api} onConfigChange={onConfigChange} />}
-      {api && <PairAnotherDevice api={api} />}
-      {api && <ConnectToClaude api={api} />}
-      {api && <AskLinks api={api} />}
-      {api && account?.isAdmin && <InvitePeople api={api} origin={account.origin} />}
-
+        {api && account?.isAdmin && <InvitePeople api={api} origin={account.origin} />}
       {api && account && (
         <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-account">
           <h2 className="type-heading">Account</h2>
@@ -387,9 +404,73 @@ export function Settings({
           </AlertDialog>
         </section>
       )}
+      </>
+    ),
+    end: api ? (
+      <>
       {/* #55: the kill switch — the one Settings control that acts on the
           daemon itself, not on this device. Last, and its own section. */}
       {api && <EndDuoSection api={api} session={session} onEnded={onDuoEnded} />}
+      </>
+    ) : null,
+  };
+  const visible = SETTINGS_SECTIONS.filter((entry) => !entry.needsDuo || api !== null);
+
+  // The whole page, every section in order — what a caller that names no section gets.
+  if (section === undefined) {
+    return (
+      <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-testid="settings">
+        <h1 className="type-heading sr-only">Settings</h1>
+        {visible.map((entry) => (
+          <div className="flex flex-col gap-6" key={entry.id}>
+            {blocks[entry.id]}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // The index: what the settings are, in plain words, one line each.
+  if (section === "index" || !visible.some((entry) => entry.id === section)) {
+    return (
+      <div className="mx-auto flex max-w-xl flex-col gap-4 p-6" data-testid="settings-index">
+        <h1 className="type-heading">Settings</h1>
+        {api === null && (
+          <p className="type-provenance text-[var(--muted)]" data-testid="settings-index-no-duo">
+            No duo is connected on this device.{" "}
+            <a className="underline" href="#settings/advanced">
+              Pair your duo under Advanced
+            </a>
+            .
+          </p>
+        )}
+        <nav aria-label="Settings sections" className="flex flex-col gap-2">
+          {visible.map((entry) => (
+            <a
+              className="shape-entry flex min-h-11 flex-col gap-1 px-4 py-3"
+              data-testid={`settings-link-${entry.id}`}
+              href={`#settings/${entry.id}`}
+              key={entry.id}
+            >
+              <span className="type-body text-[var(--text)]">{entry.label}</span>
+              <span className="type-provenance text-[var(--muted)]">{entry.about}</span>
+            </a>
+          ))}
+        </nav>
+      </div>
+    );
+  }
+
+  const current = visible.find((entry) => entry.id === section)!;
+  return (
+    <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-section={section} data-testid="settings">
+      <div className="flex flex-col gap-1">
+        <a className="inline-flex min-h-11 items-center self-start type-provenance text-[var(--muted)] underline" data-testid="settings-back" href="#settings">
+          All settings
+        </a>
+        <h1 className="type-heading">{current.label}</h1>
+      </div>
+      {blocks[section]}
     </div>
   );
 }
