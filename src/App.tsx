@@ -20,7 +20,8 @@ import { Join } from "./routes/Join.js";
 import { Landing } from "./routes/Landing.js";
 import { configuredDaemonOrigin, readHostedAccount, writeHostedAccount } from "./api/hosted.js";
 import { Settings } from "./routes/Settings.js";
-import { Onboarding, ReviewOrFirstRun } from "./routes/Onboarding.js";
+import { Onboarding } from "./routes/Onboarding.js";
+import { WaitingHome } from "./shell/WaitingHome.js";
 import { Draft } from "./routes/Draft.js";
 import { ChatShell } from "./shell/ChatShell.js";
 import { canonicalHash, isLegacyHash, roomOfRoute, routeFromHash, type Route } from "./shell/routes.js";
@@ -289,8 +290,8 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       // #49: the first run, ending at the Mirror once the first rules exist.
       return <Onboarding api={shell.api!} onFinish={goToMirror} />;
     case "waiting":
-      // #49: what is waiting on the owner — the drafts queue — unless the daemon says this duo is empty, then its first run.
-      return <ReviewOrFirstRun api={shell.api!} connection={shell.connection} />;
+      // What is waiting on the owner: the list filtered beside it, and this front door. (#49: an empty duo is taken to its first run by the shell.)
+      return <WaitingHome api={shell.api!} connection={shell.connection} />;
   }
 }
 

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { App } from "../src/App.js";
 import { stubPhone } from "./desktop.js";
-import { Review } from "../src/routes/Review.js";
+import { DraftTray } from "../src/components/DraftTray.js";
 import { Corrections } from "../src/routes/Corrections.js";
 import { Duo } from "../src/routes/Duo.js";
 import { Setup } from "../src/routes/Setup.js";
@@ -104,7 +104,7 @@ const candidate: CorrectionCandidate = {
 
 const gridRow: GridRow = { topicId: "t1", topicLabel: "Refunds", tier: "T1", level: "approve", source: "earned", stale: false };
 
-/** The paired shell: config in storage, fetch stubbed, settled on Review. */
+/** The paired shell: config in storage, fetch stubbed, settled on its chats. */
 async function renderApp(routes: Record<string, unknown>) {
   localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
   const fetchMock = stubFetch(routes);
@@ -192,7 +192,7 @@ describe("#38 AC2 — navigation adapts", () => {
 
   it("the home screen is the list: what is waiting on you reads without opening anything", async () => {
     stubPhone();
-    await renderApp({ "/drafts?outcome=pending": [draftFor("d1")] });
+    await renderApp({ "/drafts?outcome=pending": [draftFor("d1", { provenance: { origin: "owner" } })] });
 
     // The phone's notification surrogate (AR-15: no push) — the count is on
     // the first screen, and the list is the page's one main landmark.
@@ -216,7 +216,7 @@ describe("#38 AC3 — §3.1's mobile rules hold", () => {
     cleanup();
 
     // A pushed screen: the pane, no list.
-    window.location.hash = "#waiting";
+    window.location.hash = "#duo";
     await renderApp({ "/drafts?outcome=pending": [] });
     expect(screen.getByTestId("pane")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-list")).toBeNull();
@@ -226,7 +226,7 @@ describe("#38 AC3 — §3.1's mobile rules hold", () => {
     // The one free-text affordance that authors a standing-order: gated
     // out of narrow widths, still itself on the desktop it belongs to.
     vi.stubGlobal("fetch", stubFetch({ "/drafts?outcome=pending": [escalatedDraft] }));
-    renderWithClient(<Review api={api} />);
+    renderWithClient(<DraftTray api={api} draft={escalatedDraft} />);
     const answerInput = await screen.findByLabelText("Answer it yourself — becomes a standing-order candidate");
     const authoring = answerInput.closest("div");
     expect(authoring?.className).toMatch(/(^|\s)hidden\b/);
@@ -251,10 +251,15 @@ describe("#38 AC3 — §3.1's mobile rules hold", () => {
 
 describe("#38 AC4 — touch targets are real", () => {
   it("every control on the reading surfaces is at least 44 CSS pixels tall", async () => {
-    // Review with both card kinds — the surface the phone exists for.
-    vi.stubGlobal("fetch", stubFetch({ "/drafts?outcome=pending": [draftFor("d1"), escalatedDraft] }));
-    const review = renderWithClient(<Review api={api} />);
-    await screen.findAllByTestId("draft-card");
+    // The draft tray with both kinds — the surface the phone exists for.
+    vi.stubGlobal("fetch", stubFetch({}));
+    const review = renderWithClient(
+      <>
+        <DraftTray api={api} draft={draftFor("d1")} />
+        <DraftTray api={api} draft={escalatedDraft} />
+      </>,
+    );
+    await screen.findAllByTestId("draft-tray");
     expectTouchTargets(review.container);
     cleanup();
 

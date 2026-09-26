@@ -1,11 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Review } from "../src/routes/Review.js";
+import { WaitingHome } from "../src/shell/WaitingHome.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 
 /*
- * #37: the states between the states. An empty Review is the app's
+ * #37: the states between the states. An empty waiting queue is the app's
  * opening screen for weeks (AR-19), so it makes the product's argument
  * rather than apologising; a load shows the shape of what's coming and
  * says so when it's slow; an error says what happened and what to try,
@@ -14,11 +14,11 @@ import type { DuoApiConfig } from "../src/api/client.js";
 
 const api: DuoApiConfig = { baseUrl: "http://test:7717", token: "tok" };
 
-function renderReview() {
+function renderWaiting() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <Review api={api} />
+      <WaitingHome api={api} />
     </QueryClientProvider>,
   );
 }
@@ -46,7 +46,7 @@ function knowledgeFor(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** One stub serving both reads Review makes: the queue and the knowledge enrichment. */
+/** One stub serving the reads the waiting front door makes: the queues and the knowledge enrichment. */
 function stubReviewFetch(handlers: { drafts?: () => Response; knowledge?: () => Response }) {
   return vi.fn((url: string): Promise<Response> => {
     if (String(url).includes("/knowledge")) {
@@ -61,10 +61,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("#37 AC1 — the empty Review makes the case", () => {
+describe("#37 AC1 — the empty queue makes the case", () => {
   it("keeps the headline and states what the duo knows and the one thing that would teach it more — nothing imported yet", async () => {
     vi.stubGlobal("fetch", stubReviewFetch({}));
-    renderReview();
+    renderWaiting();
 
     // The headline the app has always opened with, still the headline.
     expect(await screen.findByText("Nothing waiting on you.")).toBeInTheDocument();
@@ -72,7 +72,7 @@ describe("#37 AC1 — the empty Review makes the case", () => {
     // What it knows so far: the daemon's own counts, no import yet —
     // Knowledge's own sentences, not paraphrased, because they are the
     // product's argument already written.
-    const facts = await screen.findByTestId("review-empty-knowledge");
+    const facts = await screen.findByTestId("waiting-home-knowledge");
     expect(facts).toHaveTextContent("0 records");
     expect(facts).toHaveTextContent("No import yet — importing your records is what gives the duo something to answer from.");
     expect(facts).toHaveTextContent("Not enough history yet — the corpus starts to mean something at 10 questions, and this duo has 0. Importing more records is what thickens it.");
@@ -104,9 +104,9 @@ describe("#37 AC1 — the empty Review makes the case", () => {
           ),
       }),
     );
-    renderReview();
+    renderWaiting();
 
-    const facts = await screen.findByTestId("review-empty-knowledge");
+    const facts = await screen.findByTestId("waiting-home-knowledge");
     expect(facts).toHaveTextContent("312 records");
     // Knowledge's own last-import sentence, verbatim.
     expect(facts).toHaveTextContent("Last import");
@@ -126,13 +126,13 @@ describe("#37 AC1 — the empty Review makes the case", () => {
         return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
       }),
     );
-    renderReview();
+    renderWaiting();
 
     expect(await screen.findByText("Nothing waiting on you.")).toBeInTheDocument();
-    expect(screen.getByTestId("review-empty-knowledge")).toHaveTextContent("⌘K searches what your duo knows.");
+    expect(screen.getByTestId("waiting-home-knowledge")).toHaveTextContent("⌘K searches what your duo knows.");
     // No half-rendered facts: the block either has the daemon's numbers or
     // does not pretend to.
-    expect(screen.getByTestId("review-empty-knowledge").textContent).not.toMatch(/\d+ records/);
+    expect(screen.getByTestId("waiting-home-knowledge").textContent).not.toMatch(/\d+ records/);
   });
 });
 
@@ -140,7 +140,7 @@ describe("#37 AC2 — loading has shape, and a slow load says so", () => {
   it("shows the shape of the queue to come, silent until the load is actually slow", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
-    const { rerender } = renderReview();
+    const { rerender } = renderWaiting();
 
     // The skeleton is the queue's own shape: entry blocks, not a word.
     expect(screen.getByTestId("route-loading")).toBeInTheDocument();
@@ -164,7 +164,7 @@ describe("#37 AC2 — loading has shape, and a slow load says so", () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify([]), { status: 200 }))));
     rerender(<div />);
     vi.useRealTimers();
-    renderReview();
+    renderWaiting();
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
     expect(screen.queryByTestId("route-loading")).toBeNull();
   });
@@ -179,7 +179,7 @@ describe("#37 AC3 — errors say what happened and what to try", () => {
       return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
     });
     vi.stubGlobal("fetch", fetchMock);
-    renderReview();
+    renderWaiting();
 
     const errorState = await screen.findByTestId("route-error");
     expect(errorState).toHaveTextContent("Can't reach the daemon at http://test:7717");
@@ -202,7 +202,7 @@ describe("#37 AC3 — errors say what happened and what to try", () => {
           ),
       ),
     );
-    renderReview();
+    renderWaiting();
 
     const errorState = await screen.findByTestId("route-error");
     expect(errorState).toHaveTextContent("The daemon had a problem.");
@@ -215,7 +215,7 @@ describe("#37 AC3 — errors say what happened and what to try", () => {
       "fetch",
       vi.fn(() => Promise.resolve(new Response(JSON.stringify({ error: { code: "not_found", message: "No draft with that id." } }), { status: 404 }))),
     );
-    renderReview();
+    renderWaiting();
 
     const errorState = await screen.findByTestId("route-error");
     expect(errorState).toHaveTextContent("The daemon doesn't have this.");
@@ -224,7 +224,7 @@ describe("#37 AC3 — errors say what happened and what to try", () => {
 
   it("when the daemon sends no code, there is no chip — 'unknown' is the absence of an identifier, not one", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({ error: { message: "Bad ask." } }), { status: 400 }))));
-    renderReview();
+    renderWaiting();
 
     const errorState = await screen.findByTestId("route-error");
     expect(errorState.textContent).not.toMatch(/unknown/);

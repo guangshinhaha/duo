@@ -15,7 +15,8 @@ import { App } from "../src/App.js";
 import { OfflineBar } from "../src/components/OfflineBar.js";
 import { MutationError } from "../src/components/MutationError.js";
 import { SyncStatusProvider, type SyncTarget } from "../src/sync.js";
-import { Review } from "../src/routes/Review.js";
+import { WaitingHome } from "../src/shell/WaitingHome.js";
+import { DraftTray } from "../src/components/DraftTray.js";
 import { Corrections } from "../src/routes/Corrections.js";
 import { Duo } from "../src/routes/Duo.js";
 import { Draft } from "../src/routes/Draft.js";
@@ -215,8 +216,8 @@ describe("#39 AC1 — the page has structure", () => {
 
   it("every route starts at its own h1 and never skips a level", async () => {
     const cases: Array<{ name: string; ui: ReactElement; routes: Record<string, unknown> }> = [
-      { name: "Review — queue", ui: <Review api={api} />, routes: { "/drafts?outcome=pending": [draftFor("d1"), escalatedDraft] } },
-      { name: "Review — empty", ui: <Review api={api} />, routes: { "/drafts?outcome=pending": [], "/knowledge": knowledgeFor() } },
+      { name: "Waiting on you — queue", ui: <WaitingHome api={api} />, routes: { "/drafts?outcome=pending": [draftFor("d1"), escalatedDraft] } },
+      { name: "Waiting on you — empty", ui: <WaitingHome api={api} />, routes: { "/drafts?outcome=pending": [], "/knowledge": knowledgeFor() } },
       { name: "Corrections — list", ui: <Corrections api={api} />, routes: { "/review?status=pending": [candidate] } },
       { name: "Corrections — empty", ui: <Corrections api={api} />, routes: { "/review?status=pending": [] } },
       { name: "Duo", ui: <Duo api={api} />, routes: { "/drafts?limit=50": [] } },
@@ -398,8 +399,13 @@ describe("#39 AC3 — controls are named", () => {
 
   it("every control on the reading surfaces says what it does — including the icon-quiet ones", async () => {
     vi.stubGlobal("fetch", stubFetch({ "/drafts?outcome=pending": [draftFor("d1"), escalatedDraft], "/knowledge": knowledgeFor() }));
-    const { container } = renderWithClient(<Review api={api} />);
-    await screen.findAllByTestId("draft-card");
+    const { container } = renderWithClient(
+      <>
+        <DraftTray api={api} draft={draftFor("d1")} />
+        <DraftTray api={api} draft={escalatedDraft} />
+      </>,
+    );
+    await screen.findAllByTestId("draft-tray");
 
     vi.stubGlobal("fetch", stubFetch({}));
     const settings = renderWithClient(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);

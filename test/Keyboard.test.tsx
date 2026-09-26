@@ -12,14 +12,14 @@ import { fileURLToPath } from "node:url";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Review } from "../src/routes/Review.js";
+import { DraftTray } from "../src/components/DraftTray.js";
 import { Settings } from "../src/routes/Settings.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { DraftRecord } from "../src/api/types.js";
 
 /*
- * #36: the keyboard layer. Four laws, each pinned: the queue is
- * walkable entry by entry with the arrows; Escape leaves whatever
+ * #36: the keyboard layer. Four laws, each pinned: a draft is decidable
+ * with single keys and native buttons; Escape leaves whatever
  * opened — discarding nothing that was not already discardable — and
  * hands focus back to the opener; one focus law rings every control in
  * the accent at contrast, in both themes; and Settings is the one place
@@ -60,15 +60,15 @@ function renderSettings() {
   );
 }
 
-function renderReview(drafts: DraftRecord[]) {
+function renderTray(draft: DraftRecord) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal(
     "fetch",
-    vi.fn((): Promise<Response> => Promise.resolve(new Response(JSON.stringify(drafts), { status: 200 }))),
+    vi.fn((): Promise<Response> => Promise.resolve(new Response(JSON.stringify({}), { status: 200 }))),
   );
   return render(
     <QueryClientProvider client={client}>
-      <Review api={api} />
+      <DraftTray api={api} draft={draft} keyboard />
     </QueryClientProvider>,
   );
 }
@@ -77,65 +77,37 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("#36 AC1 — Review is navigable from the keyboard", () => {
-  it("exactly one entry is the tab stop, and the tab stop follows real focus", async () => {
-    renderReview([draftAt(1), draftAt(2), draftAt(3)]);
-    const entries = await screen.findAllByTestId("review-entry");
+describe("#36 AC1 — a draft is decidable from the keyboard", () => {
+  it("its actions are native buttons, reachable with Tab, and each has a single key", async () => {
+    renderTray(draftAt(1));
+    const tray = await screen.findByTestId("draft-tray");
 
-    // The roving tab stop: one entry is reachable by Tab, the rest by
-    // arrow — the queue is one tab stop, not N.
-    expect(entries.map((entry) => entry.tabIndex)).toEqual([0, -1, -1]);
-
-    entries[2].focus();
-    await waitFor(() => expect(entries[2].tabIndex).toBe(0));
-    expect(entries.map((entry) => entry.tabIndex)).toEqual([-1, -1, 0]);
+    // Reachable without a pointer: real buttons, so Tab walks straight into them.
+    const actions = [...tray.querySelectorAll("button")].map((button) => button.textContent);
+    expect(actions).toEqual(["Send⏎", "EditE", "DismissX"]);
+    // The key hints are a courtesy for sighted keyboard users; the accessible names stay plain.
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
   });
 
-  it("the arrows move focus entry by entry and clamp at both ends", async () => {
-    renderReview([draftAt(1), draftAt(2), draftAt(3)]);
-    const entries = await screen.findAllByTestId("review-entry");
-
-    entries[0].focus();
-    fireEvent.keyDown(entries[0], { key: "ArrowDown" });
-    expect(document.activeElement).toBe(entries[1]);
-    fireEvent.keyDown(entries[1], { key: "ArrowDown" });
-    expect(document.activeElement).toBe(entries[2]);
-    // Past the end is a no-op, not a wrap and not a loss of focus.
-    fireEvent.keyDown(entries[2], { key: "ArrowDown" });
-    expect(document.activeElement).toBe(entries[2]);
-
-    fireEvent.keyDown(entries[2], { key: "ArrowUp" });
-    expect(document.activeElement).toBe(entries[1]);
-    fireEvent.keyDown(entries[1], { key: "ArrowUp" });
-    expect(document.activeElement).toBe(entries[0]);
-    fireEvent.keyDown(entries[0], { key: "ArrowUp" });
-    expect(document.activeElement).toBe(entries[0]);
-  });
-
-  it("the focused entry's actions are native buttons inside it, and arrows in an editor are the caret's", async () => {
-    renderReview([draftAt(1), draftAt(2)]);
-    const entries = await screen.findAllByTestId("review-entry");
-
-    // Reachable without a pointer: the focused entry's actions are real
-    // buttons inside the focusable entry, so Tab walks straight into
-    // them once the entry has focus.
-    const actions = entries[0].querySelectorAll("button");
-    expect(actions.length).toBeGreaterThan(0);
-
-    // An open editor's arrows belong to the text caret, not the queue.
-    fireEvent.click(screen.getAllByText("Edit")[0]);
+  it("keys typed in an open editor are the text's, never the tray's", async () => {
+    renderTray(draftAt(1));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
     const editor = screen.getByRole("textbox");
     editor.focus();
-    fireEvent.keyDown(editor, { key: "ArrowDown" });
+    fireEvent.keyDown(editor, { key: "x" });
+    fireEvent.keyDown(editor, { key: "e" });
+    fireEvent.keyDown(editor, { key: "Enter" });
     expect(document.activeElement).toBe(editor);
+    expect(screen.queryByTestId("ignore-window")).toBeNull();
   });
 });
 
 describe("#36 AC2 — Escape leaves, discarding nothing that was not already discardable", () => {
   it("Escape on a card's editor is Cancel, and focus returns to the Edit that opened it", async () => {
-    renderReview([draftAt(1)]);
-    const entries = await screen.findAllByTestId("review-entry");
-    expect(entries).toHaveLength(1);
+    renderTray(draftAt(1));
+    await screen.findByTestId("draft-tray");
 
     const edit = screen.getByText("Edit");
     edit.focus();
@@ -235,14 +207,17 @@ describe("#36 AC4 — shortcuts are discoverable in one place", () => {
     const section = screen.getByText("Keyboard", { selector: "h2" }).closest("section");
     expect(section).not.toBeNull();
 
-    // What exists today, all of it: the search opener, the queue arrows,
-    // how an entry's actions are reached, and the way out of anything.
+    // What exists today, all of it: the search opener, moving between chats,
+    // the draft's keys, how its actions are reached, and the way out of anything.
     expect(section).toHaveTextContent("⌘K");
-    expect(section).toHaveTextContent("↑ ↓");
+    expect(section).toHaveTextContent("J K");
+    expect(section).toHaveTextContent("⌘ 1–9");
+    expect(section).toHaveTextContent("⏎ E X");
     expect(section).toHaveTextContent("Tab");
     expect(section).toHaveTextContent("Esc");
     expect(section).toHaveTextContent("Search what your duo knows");
-    expect(section).toHaveTextContent("Move through the Review queue, entry by entry");
+    expect(section).toHaveTextContent("Move to the next or previous chat");
+    expect(section).toHaveTextContent("send it, edit it, dismiss it");
     expect(section).toHaveTextContent("Leave an open editor, dialog or menu");
   });
 });
