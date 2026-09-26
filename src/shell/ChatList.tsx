@@ -18,6 +18,8 @@ import { roomHref } from "../workspace/links.js";
 import type { NotificationMode, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
 import type { Route } from "./routes.js";
 import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
+import { bridgedHref, bridgedTitle, useBridgedChats, type BridgedChat } from "./bridged.js";
+import { SourceBadge } from "./BridgedChat.js";
 import { useWaitingItems, waitingWords, type WaitingItem } from "./waiting.js";
 import { useTrainingCount } from "../components/TrainingCards.js";
 import type { HairlineState } from "../components/ConfidenceHairline.js";
@@ -237,13 +239,18 @@ export function ChatList({
   const waiting = useWaitingItems(api, connection);
   const waitingByRoom = useMemo(() => new Map(waiting.items.filter((item) => item.roomId !== null).map((item) => [item.roomId!, item])), [waiting.items]);
   const duoWaiting = waiting.items.find((item) => item.kind === "duo") ?? null;
+  const bridged = useBridgedChats(api).chats;
+  const bridgedWaiting = useMemo(() => new Map(waiting.items.filter((item) => item.kind === "bridged").map((item) => [item.key, item])), [waiting.items]);
   const roomRows = rooms.data ?? [];
   const activeRoom = typeof route === "object" && "chat" in route ? route.chat : typeof route === "object" && "thread" in route ? route.thread.roomId : null;
 
   // The addresses in list order — what J/K and ⌘1–9 walk.
   const hrefs = useMemo(
-    () => (filterWaiting ? waiting.items.map((item) => item.href) : [...(api ? ["#duo"] : []), ...roomRows.map((room) => roomHref(room.roomId))]),
-    [api, roomRows, filterWaiting, waiting.items],
+    () =>
+      filterWaiting
+        ? waiting.items.map((item) => item.href)
+        : [...(api ? ["#duo", ...bridged.map((chat) => bridgedHref(chat.id))] : []), ...roomRows.map((room) => roomHref(room.roomId))],
+    [api, bridged, roomRows, filterWaiting, waiting.items],
   );
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -335,6 +342,8 @@ export function ChatList({
           const isActive =
             item.kind === "chat"
               ? activeRoom === item.roomId
+              : item.kind === "bridged"
+                ? activeRoom === item.key
               : item.kind === "duo"
                 ? duoActive
                 : item.kind === "confirmations"
@@ -345,6 +354,7 @@ export function ChatList({
               active={isActive}
               avatar={<Avatar kind={kind} title={title} />}
               href={item.href}
+              badges={item.source !== null ? <SourceBadge channelKind={item.source} testId="waiting-source" /> : undefined}
               ids={{ entry: "waiting-entry", link: "waiting-link", title: "waiting-title" }}
               key={`${item.kind}:${item.key}`}
               meta={
@@ -599,6 +609,9 @@ export function ChatList({
             {api ? (
               <>
                 <DuoRow active={duoActive} api={api} waiting={duoWaiting} />
+                {bridged.map((chat) => (
+                  <BridgedRow active={activeRoom === chat.id} chat={chat} key={chat.id} waiting={bridgedWaiting.get(chat.id) ?? null} />
+                ))}
                 <div className="mx-2 my-1 h-px bg-[var(--edge)]" />
               </>
             ) : (
@@ -704,6 +717,40 @@ function ConfirmationsChip({ api, active }: { api: DuoApiConfig; active: boolean
         </span>
       )}
     </a>
+  );
+}
+
+/** A question from another platform, as a chat (#150): its source is on the row, so it never reads as a native one. */
+function BridgedRow({ chat, waiting, active }: { chat: BridgedChat; waiting: WaitingItem | null; active: boolean }) {
+  const title = bridgedTitle(chat);
+  const last = chat.drafts[chat.drafts.length - 1]!;
+  return (
+    <Row
+      active={active}
+      avatar={<Avatar kind="person" title={title} />}
+      badges={<SourceBadge channelKind={chat.channelKind} />}
+      href={bridgedHref(chat.id)}
+      ids={{ entry: "bridged-entry", link: "bridged-link", title: "bridged-row-title" }}
+      meta={
+        <>
+          <Timestamp iso={chat.lastAt} />
+          {waiting && <CountPill label={`${waiting.count} waiting on you`} n={waiting.count} testId="bridged-count" />}
+        </>
+      }
+      preview={
+        waiting ? (
+          <>
+            <DraftLine state={waiting.state} />
+            {waitingWords(waiting)}
+            {` · ${last.question}`}
+          </>
+        ) : (
+          plainPreview(last.sentText ?? last.question)
+        )
+      }
+      previewTestId="bridged-preview"
+      title={title}
+    />
   );
 }
 

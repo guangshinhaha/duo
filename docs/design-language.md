@@ -325,6 +325,12 @@ row. The three-group sidebar shipped in #132 is replaced by this.
 
 1. **Chats is home.** People, groups, bridged Slack threads and colleagues' duos in one list.
    Filters: **All · Waiting on you (n)**. A duo's row carries the mark, never initials or a photo.
+   A bridged question (Slack) is a chat with whoever asked — one per thread, or per asker when
+   the channel names no thread — and its row, header and every message carry the platform
+   ("Slack"), so it never reads as a native chat. The daemon keeps drafts, not conversations, and
+   offers no thread history (digital-duo files that gap), so the chat holds the questions your
+   duo was asked and your replies, and says so; there is no composer, because the only way to
+   post back through the bridge is to decide a draft. When history exists the chat fills in.
 2. **Your duo is a chat.** Pinned first, always present, works with no workspace. Ask it anything;
    answers arrive behind the hairline with their sources. Training arrives here as occasional
    cards: rules to confirm, trust offers, "I got that wrong" notices, a weekly digest.

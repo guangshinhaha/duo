@@ -620,7 +620,7 @@ describe("#142 — an old draft address opens the chat the draft belongs to", ()
     expect(window.location.hash).toBe("#duo");
   });
 
-  it("a draft with no chat of its own (a bridged question) keeps its own page", async () => {
+  it("a question bridged from another platform opens its own chat (#150)", async () => {
     seed();
     vi.stubGlobal(
       "fetch",
@@ -631,7 +631,7 @@ describe("#142 — an old draft address opens the chat the draft belongs to", ()
     await renderApp();
     navigate("#draft/d1");
 
-    expect(await screen.findByTestId("draft-page")).toBeInTheDocument();
-    expect(window.location.hash).toBe("#draft/d1");
+    expect(await screen.findByTestId("bridged-chat")).toBeInTheDocument();
+    expect(window.location.hash).toBe(`#chat/${encodeURIComponent("bridge:slack:U1")}`);
   });
 });
