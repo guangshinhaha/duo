@@ -30,7 +30,7 @@ vi.mock("../src/notifications.js", () => ({
  * web client reached over Tailscale in mobile Safari). The layout folds
  * at the desktop breakpoint, the navigation re-arranges rather than
  * shrinking (§1.5: "no tab bar, no second product"), §3.1's mobile rules
- * hold (Trust and Audit share one "More" section; rule authoring is gone
+ * hold (the folded navigation carries the same three sections as the sidebar, #129; rule authoring is gone
  * — AR-18), and every control is a real touch target.
  *
  * happy-dom does not apply media queries, so these tests pin the
@@ -230,22 +230,33 @@ describe("#38 AC2 — navigation adapts", () => {
 });
 
 describe("#38 AC3 — §3.1's mobile rules hold", () => {
-  it("Trust and Audit fold into one secondary section at narrow width, and stay flat on the desktop sidebar", async () => {
+  it("the folded navigation keeps the sidebar's three sections — same map, each screen in exactly one (#129)", async () => {
     const view = await renderApp({ "/drafts?outcome=pending": [] });
 
     // The desktop sidebar first — its queries must run before the folded
     // navigation opens, because the dialog primitive marks everything
     // outside itself aria-hidden while it is open (#34's focus contract).
     const sidebar = view.container.querySelector('nav[aria-label="Surfaces"]') as HTMLElement;
-    expect(within(sidebar).getByRole("link", { name: "Trust" }));
-    expect(within(sidebar).getByRole("link", { name: "Audit" }));
+    const sectionLinks = (root: HTMLElement) =>
+      Object.fromEntries(
+        ["people", "answering", "training"].map((id) => [
+          id,
+          [...within(root.querySelector(`[data-testid="nav-section-${id}"]`) as HTMLElement).queryAllByRole("link")].map(
+            (link) => link.getAttribute("href"),
+          ),
+        ]),
+      );
+    const desktop = sectionLinks(sidebar);
     expect(within(sidebar).queryByText("More")).toBeNull();
 
-    // One "More" section, exactly the two rare surfaces in it.
+    // The phone folds the same three groups: no "More" bucket pulling
+    // Trust and Audit out of the sections they belong to.
     const nav = await openMobileNav();
-    const more = within(nav).getByText("More").closest("section") as HTMLElement;
-    const moreLinks = within(more).getAllByRole("link");
-    expect(moreLinks.map((link) => link.textContent)).toEqual(["Trust", "Audit"]);
+    expect(within(nav).queryByText("More")).toBeNull();
+    expect(sectionLinks(nav)).toEqual(desktop);
+    // Long enough to outgrow a short phone, so the panel scrolls inside the screen.
+    expect(nav.className).toMatch(/overflow-y-auto/);
+    expect(nav.className).toMatch(/max-h-/);
   });
 
   it("no rule-authoring affordance appears on a phone (AR-18) — read, approve, reject, promote stay", async () => {
