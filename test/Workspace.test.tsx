@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
-import type { RoomMessage, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
+import type { LiveArrival, NotificationMode, RoomMessage, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
 
 /*
  * #62: the app's front door becomes two doors — a workspace sign-in (who you
@@ -17,6 +17,22 @@ vi.mock("../src/workspace/matrix.js", () => ({
   signIn: vi.fn(),
   connect: vi.fn(),
 }));
+
+/*
+ * #69: the notification plugin, mocked the same way — with browser-parity
+ * defaults (every call rejects, permission resolves "denied"), so the
+ * suite's existing behavior is exactly what a plain tab produces. The
+ * dispatch tests flip the permission to granted and read the posted
+ * notifications off `sendNotification`.
+ */
+const notificationPlugin = {
+  isPermissionGranted: vi.fn<() => Promise<boolean>>(),
+  requestPermission: vi.fn<() => Promise<string>>(),
+  sendNotification: vi.fn<(options: { id?: number; title: string; body: string }) => void>(),
+  onAction: vi.fn<(cb: (notification: { id?: number }) => void) => Promise<{ unregister: () => void }>>(),
+};
+
+vi.mock("@tauri-apps/plugin-notification", () => notificationPlugin);
 
 const SESSION: WorkspaceSession = {
   homeserverUrl: "https://workspace.example",
@@ -43,6 +59,7 @@ function roomsFixture(): RoomSummary[] {
       latest: { at: now - hour, body: "lunch?" },
       unread: { notifications: 0, mentions: 0 },
       muted: false,
+      notifications: "all",
     },
     {
       roomId: "!project-x:workspace.example",
@@ -55,6 +72,7 @@ function roomsFixture(): RoomSummary[] {
       latest: { at: now - 2 * hour, body: "ship it" },
       unread: { notifications: 3, mentions: 0 },
       muted: false,
+      notifications: "all",
     },
     {
       roomId: "!announce:workspace.example",
@@ -64,6 +82,7 @@ function roomsFixture(): RoomSummary[] {
       latest: { at: now - 3 * hour, body: "all-hands friday" },
       unread: { notifications: 0, mentions: 0 },
       muted: false,
+      notifications: "all",
     },
   ];
 }
@@ -127,7 +146,10 @@ function fakeConnection(state: {
   timelines: Record<string, RoomMessage[]>;
   people?: Array<{ userId: string; name: string }>;
 }) {
-  let listener: ((roomId: string) => void) | null = null;
+  // Every surface that subscribes hears every arrival — the way the real
+  // seam's client.on does. (#69's dispatcher subscribes beside the list
+  // and the room, so a single stored listener would no longer model it.)
+  const listeners = new Set<(roomId: string, arrival?: LiveArrival) => void>();
   const roomAt = (roomId: string): number => state.rooms.findIndex((room) => room.roomId === roomId);
   const timelineOf = (roomId: string): RoomMessage[] => (state.timelines[roomId] ??= []);
   const messageAt = (roomId: string, eventId: string): number => timelineOf(roomId).findIndex((message) => message.eventId === eventId);
@@ -141,10 +163,10 @@ function fakeConnection(state: {
     ),
     timeline: vi.fn(async (roomId: string) => [...(state.timelines[roomId] ?? [])]),
     send: vi.fn(async () => {}),
-    subscribe: vi.fn((handler: (roomId: string) => void) => {
-      listener = handler;
+    subscribe: vi.fn((handler: (roomId: string, arrival?: LiveArrival) => void) => {
+      listeners.add(handler);
       return () => {
-        listener = null;
+        listeners.delete(handler);
       };
     }),
     stop: vi.fn(async () => {}),
@@ -166,6 +188,7 @@ function fakeConnection(state: {
         latest: null,
         unread: { notifications: 0, mentions: 0 },
         muted: false,
+        notifications: "all",
       });
       return roomId;
     }),
@@ -175,10 +198,13 @@ function fakeConnection(state: {
         state.rooms.splice(at, 1);
       }
     }),
-    setMuted: vi.fn(async (roomId: string, muted: boolean) => {
+    // #69: the tri-state the surfaces write — the homeserver's own state
+    // moves under it the way another device would see it move. ("nothing"
+    // IS the mute #63 wrote; one verb now, for one action.)
+    setNotificationMode: vi.fn(async (roomId: string, mode: NotificationMode) => {
       const at = roomAt(roomId);
       if (at >= 0) {
-        state.rooms[at] = { ...state.rooms[at]!, muted };
+        state.rooms[at] = { ...state.rooms[at]!, notifications: mode, muted: mode === "nothing" };
       }
     }),
     searchPeople: vi.fn(async (query: string) =>
@@ -247,7 +273,9 @@ function fakeConnection(state: {
     connection,
     // A live arrival: an unseen event id appends, a seen one replaces —
     // exactly what a homeserver sync does with an edit or a redaction.
-    deliver: (message: RoomMessage) => {
+    // The arrival half (#69) says who spoke and whether it mentioned the
+    // member — what a notification decides on.
+    deliver: (message: RoomMessage, mentionsMe = false) => {
       const list = timelineOf(message.roomId);
       const at = list.findIndex((existing) => existing.eventId === message.eventId);
       if (at >= 0) {
@@ -273,7 +301,10 @@ function fakeConnection(state: {
           }
         }
       }
-      listener?.(message.roomId);
+      const arrival: LiveArrival = { senderId: message.senderId, senderName: message.senderName, body: message.body, mentionsMe };
+      for (const listener of listeners) {
+        listener(message.roomId, arrival);
+      }
     },
   };
 }
@@ -327,6 +358,15 @@ beforeEach(() => {
   localStorage.clear();
   vi.mocked(signIn).mockReset();
   vi.mocked(connect).mockReset();
+  // Browser parity by default (#69): the shell's plugin calls reject the
+  // way they do in a plain tab, so nothing notifies unless a test grants it.
+  notificationPlugin.isPermissionGranted.mockReset();
+  notificationPlugin.requestPermission.mockReset();
+  notificationPlugin.sendNotification.mockReset();
+  notificationPlugin.onAction.mockReset();
+  notificationPlugin.isPermissionGranted.mockRejectedValue(new Error("window.__TAURI_INTERNALS__ is undefined"));
+  notificationPlugin.requestPermission.mockResolvedValue("denied");
+  notificationPlugin.onAction.mockRejectedValue(new Error("window.__TAURI_INTERNALS__ is undefined"));
 });
 
 afterEach(() => {
@@ -665,7 +705,7 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
     expect(screen.queryByTestId("new-conversation-dialog")).toBeNull();
   });
 
-  it("muting is the server's fact — the badge changes shape on the list, both directions", async () => {
+  it("the notification setting is the server's fact — nothing mutes as before, both directions read back (#69 AC1)", async () => {
     seedSession();
     const rooms = roomsFixture();
     const fake = fakeConnection({ rooms, timelines: {} });
@@ -675,18 +715,22 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
     await screen.findByTestId("conversations-list");
     const beforeKeys = JSON.stringify(Object.keys(localStorage).sort());
 
-    fireEvent.click(screen.getByRole("button", { name: "Mute project-x" }));
+    const setting = within(entryFor("project-x")).getByTestId("room-notifications");
+    expect(setting).toHaveValue("all");
 
-    await waitFor(() => expect(fake.connection.setMuted).toHaveBeenCalledWith("!project-x:workspace.example", true));
+    fireEvent.change(setting, { target: { value: "nothing" } });
+
+    await waitFor(() => expect(fake.connection.setNotificationMode).toHaveBeenCalledWith("!project-x:workspace.example", "nothing"));
     // The reflection is the connection's next answer — what any of the
     // member's devices would render from the same server-side rule.
     await waitFor(() => expect(within(entryFor("project-x")).getByTestId("room-muted")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByRole("button", { name: "Unmute project-x" })).toBeInTheDocument());
+    await waitFor(() => expect(within(entryFor("project-x")).getByTestId("room-notifications")).toHaveValue("nothing"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Unmute project-x" }));
+    fireEvent.change(within(entryFor("project-x")).getByTestId("room-notifications"), { target: { value: "mentions" } });
 
-    await waitFor(() => expect(fake.connection.setMuted).toHaveBeenCalledWith("!project-x:workspace.example", false));
+    await waitFor(() => expect(fake.connection.setNotificationMode).toHaveBeenCalledWith("!project-x:workspace.example", "mentions"));
     await waitFor(() => expect(within(entryFor("project-x")).queryByTestId("room-muted")).toBeNull());
+    await waitFor(() => expect(within(entryFor("project-x")).getByTestId("room-notifications")).toHaveValue("mentions"));
     // Cross-device is server-side by construction: no local store appeared.
     expect(JSON.stringify(Object.keys(localStorage).sort())).toBe(beforeKeys);
   });
@@ -1298,5 +1342,362 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     await waitFor(() => expect(within(screen.getByTestId("thread-timeline")).queryByText("thanks!")).toBeNull());
     expect(screen.getByTestId("thread-composer-error")).toHaveTextContent("Couldn't send — try again.");
     expect(screen.getByLabelText("Reply in thread")).toHaveValue("thanks!");
+  });
+});
+
+/*
+ * #69: what interrupts the member becomes a setting with three voices —
+ * the per-conversation mode (server-side, so every device answers the
+ * same), do-not-disturb (this device's own rule, holding everything back
+ * and recording what it held), and the duo's own acts as a category no
+ * conversation setting can silence. The dispatch lives in the app shell:
+ * it hears the same live arrivals every surface hears and decides, before
+ * the shell posts anything, whether this arrival interrupts.
+ */
+describe("#69 AC1 — an arrival interrupts by the conversation's setting", () => {
+  it("all lets everything through, mentions holds the plain, nothing holds all", async () => {
+    seedSession();
+    const rooms = roomsFixture();
+    rooms[1] = { ...rooms[1]!, notifications: "mentions" };
+    rooms[2] = { ...rooms[2]!, muted: true, notifications: "nothing" };
+    const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    notificationPlugin.isPermissionGranted.mockResolvedValue(true);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    // project-x is mentions-only: plain words never interrupt…
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$n1", senderId: "@bose:workspace.example", senderName: "Bose", body: "plain words" }));
+    });
+    expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
+    // …a mention does, under the app's name, saying who, where, and what.
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$n2", senderId: "@bose:workspace.example", senderName: "Bose", body: "@ana — ping" }), true);
+    });
+    await waitFor(() =>
+      expect(notificationPlugin.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Duo", body: "Bose in project-x: @ana — ping" }),
+      ),
+    );
+
+    // announce is nothing: not even a mention interrupts.
+    await act(async () => {
+      fake.deliver(
+        messageFor({ eventId: "$n3", roomId: "!announce:workspace.example", senderId: "@dee:workspace.example", senderName: "Dee", body: "@ana, all-hands" }),
+        true,
+      );
+    });
+    expect(notificationPlugin.sendNotification).toHaveBeenCalledTimes(1);
+
+    // direct is all (the default): plain words interrupt.
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$n4", roomId: "!direct:workspace.example", senderId: "@bose:workspace.example", senderName: "Bose", body: "lunch?" }));
+    });
+    await waitFor(() =>
+      expect(notificationPlugin.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "Bose in Bose: lunch?" }),
+      ),
+    );
+  });
+
+  it("the member's own words never interrupt, and an open conversation is not interrupted about itself", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    notificationPlugin.isPermissionGranted.mockResolvedValue(true);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    // Own words — sent from this device or any other — are not news.
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$o1", senderId: SESSION.userId, senderName: "ana", body: "from my other device" }));
+    });
+    expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
+
+    // The room the member is looking at does not interrupt about itself —
+    // a notification for what the open window already shows is noise.
+    navigate("#room/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$n5", senderId: "@bose:workspace.example", senderName: "Bose", body: "while you watch" }), true);
+    });
+    await waitFor(() => expect(messageRow("while you watch")).toBeInTheDocument());
+    expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
+  });
+});
+
+describe("#69 AC2 — do not disturb holds everything back, visibly", () => {
+  it("a manual do-not-disturb keeps the interruption off and keeps the record for afterwards", async () => {
+    seedSession();
+    localStorage.setItem("duo.dnd", JSON.stringify({ manual: true, from: null, to: null }));
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    notificationPlugin.isPermissionGranted.mockResolvedValue(true);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$m1", senderId: "@bose:workspace.example", senderName: "Bose", body: "held words" }), true);
+    });
+    // Nothing interrupts — not the mention the setting would otherwise let through.
+    expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
+
+    // What was missed is visible afterwards, in the place the member set the rule.
+    navigate("#settings");
+    const missed = await screen.findByTestId("missed-list");
+    const entry = within(missed).getByTestId("missed-entry");
+    expect(entry).toHaveTextContent("Bose in project-x: held words");
+    // The record points back at where it happened — the entry itself is the
+    // link. ("!" is one of encodeURIComponent's unreserved characters; ":" is
+    // not — the same address the conversations list links with.)
+    expect(entry.getAttribute("href")).toBe("#room/!project-x%3Aworkspace.example");
+
+    fireEvent.click(screen.getByTestId("missed-clear"));
+    await waitFor(() => expect(screen.queryByTestId("missed-entry")).toBeNull());
+    expect(localStorage.getItem("duo.missed")).toBe("[]");
+  });
+
+  it("do not disturb turns on and off here, and quiet hours persist on this device", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#settings");
+
+    expect(await screen.findByTestId("dnd-toggle")).toHaveTextContent("Turn on do not disturb");
+    fireEvent.click(screen.getByTestId("dnd-toggle"));
+    await waitFor(() => expect(screen.getByTestId("dnd-status")).toHaveTextContent("Do not disturb is on."));
+    expect(JSON.parse(localStorage.getItem("duo.dnd")!)).toEqual({ manual: true, from: null, to: null });
+
+    fireEvent.change(screen.getByTestId("dnd-from"), { target: { value: "22:00" } });
+    fireEvent.change(screen.getByTestId("dnd-to"), { target: { value: "07:00" } });
+    expect(JSON.parse(localStorage.getItem("duo.dnd")!)).toEqual({ manual: true, from: "22:00", to: "07:00" });
+
+    fireEvent.click(screen.getByTestId("dnd-toggle"));
+    await waitFor(() => expect(screen.getByTestId("dnd-status")).toHaveTextContent("Do not disturb is off."));
+  });
+});
+
+/** The push channel's client half: a socket the test opens and speaks for. */
+function stubDraftPushSocket() {
+  class FakeSocket {
+    static instances: FakeSocket[] = [];
+    listeners = new Map<string, Array<(event: unknown) => void>>();
+    sent: string[] = [];
+    constructor() {
+      FakeSocket.instances.push(this);
+    }
+    addEventListener(type: string, cb: (event: unknown) => void) {
+      this.listeners.set(type, [...(this.listeners.get(type) ?? []), cb]);
+    }
+    removeEventListener() {}
+    send(data: string) {
+      this.sent.push(data);
+    }
+    close() {}
+    open() {
+      this.listeners.get("open")?.forEach((cb) => cb(new Event("open")));
+    }
+    message(data: unknown) {
+      this.listeners.get("message")?.forEach((cb) => cb({ data: JSON.stringify(data) }));
+    }
+  }
+  vi.stubGlobal("WebSocket", FakeSocket);
+  return FakeSocket;
+}
+
+describe("#69 AC3 — the owner's duo acting on their behalf is its own category", () => {
+  it("the member's own duo answering in a conversation says so, in words no message uses", async () => {
+    seedSession();
+    const rooms = roomsFixture();
+    rooms[1] = {
+      ...rooms[1]!,
+      members: [...rooms[1]!.members, { userId: "@duo-ana:workspace.example", name: "duo-ana" }],
+    };
+    const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    notificationPlugin.isPermissionGranted.mockResolvedValue(true);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    // The member's own duo (@duo-ana — the id grammar says whose) speaks in
+    // the room: neither "a message" nor "a draft" — the duo acted.
+    await act(async () => {
+      fake.deliver(
+        messageFor({ eventId: "$duo1", senderId: "@duo-ana:workspace.example", senderName: "duo-ana", body: "Answered on the owner's behalf: 30 days." }),
+      );
+    });
+    await waitFor(() =>
+      expect(notificationPlugin.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "Your duo answered on your behalf in project-x." }),
+      ),
+    );
+
+    // A colleague's duo is a participant, not the member's own — its words
+    // are a message like any person's, governed by the room's setting.
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$duo2", senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: "carol's duo speaks" }));
+    });
+    await waitFor(() =>
+      expect(notificationPlugin.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "carol's duo in project-x: carol's duo speaks" }),
+      ),
+    );
+  });
+
+  it("an escalation arriving from the daemon notifies as the duo's own act, not as a waiting draft", async () => {
+    seedSession();
+    seedPairing();
+    // The daemon's answer for the one draft the push names: an escalation.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/drafts/d1")) {
+          return new Response(JSON.stringify({ id: "d1", escalated: true, refused: false }), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    notificationPlugin.isPermissionGranted.mockResolvedValue(true);
+
+    const FakeSocket = stubDraftPushSocket();
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    await act(async () => {
+      FakeSocket.instances[0].open();
+      FakeSocket.instances[0].message({ type: "draft-ready", draftId: "d1" });
+    });
+
+    await waitFor(() =>
+      expect(notificationPlugin.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "Your duo escalated a question to you." }),
+      ),
+    );
+    // It never said the draft copy — the two categories cannot blur.
+    const bodies = notificationPlugin.sendNotification.mock.calls.map((call) => call[0].body);
+    expect(bodies).not.toContain("A new draft is waiting for your review.");
+  });
+});
+
+/*
+ * #69's product rule: the owner's duo answering, escalating, or refusing on
+ * their behalf is the one notification that can never be fully turned off.
+ * "Fully" is the point — a conversation set to nothing, and a do-not-disturb
+ * that holds everything, both leave it standing: the first cannot reach it
+ * (the act belongs to no conversation), the second only defers it into the
+ * record Settings shows. And no control anywhere offers to silence it.
+ */
+describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
+  function roomsWithOwnDuoIn(notifications: "nothing" | "mentions") {
+    const rooms = roomsFixture();
+    rooms[1] = {
+      ...rooms[1]!,
+      muted: notifications === "nothing",
+      notifications,
+      members: [...rooms[1]!.members, { userId: "@duo-ana:workspace.example", name: "duo-ana" }],
+    };
+    return rooms;
+  }
+
+  it.each(["nothing", "mentions"] as const)("a conversation set to %s still announces the member's own duo answering", async (mode) => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsWithOwnDuoIn(mode), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    notificationPlugin.isPermissionGranted.mockResolvedValue(true);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    // A person in the same room stays governed by the setting…
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$s1", senderId: "@bose:workspace.example", senderName: "Bose", body: "plain words" }));
+    });
+    expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
+    // …the duo's act on the member's behalf is not a message and is not silenced by it.
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$s2", senderId: "@duo-ana:workspace.example", senderName: "duo-ana", body: "30 days." }));
+    });
+    await waitFor(() =>
+      expect(notificationPlugin.sendNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "Your duo answered on your behalf in project-x." }),
+      ),
+    );
+  });
+
+  it("do not disturb defers it into the record instead of dropping it", async () => {
+    seedSession();
+    localStorage.setItem("duo.dnd", JSON.stringify({ manual: true, from: null, to: null }));
+    const fake = fakeConnection({ rooms: roomsWithOwnDuoIn("nothing"), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    notificationPlugin.isPermissionGranted.mockResolvedValue(true);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    await act(async () => {
+      fake.deliver(messageFor({ eventId: "$d1", senderId: "@duo-ana:workspace.example", senderName: "duo-ana", body: "30 days." }));
+    });
+    expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
+
+    navigate("#settings");
+    const entry = within(await screen.findByTestId("missed-list")).getByTestId("missed-entry");
+    expect(entry).toHaveTextContent("Your duo answered on your behalf in project-x.");
+    expect(entry.getAttribute("href")).toBe("#room/!project-x%3Aworkspace.example");
+  });
+
+  it("an escalation is held by do not disturb the same way, and waits in the record", async () => {
+    seedSession();
+    seedPairing();
+    localStorage.setItem("duo.dnd", JSON.stringify({ manual: true, from: null, to: null }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/drafts/d2")) {
+          return new Response(JSON.stringify({ id: "d2", escalated: true, refused: true }), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    notificationPlugin.isPermissionGranted.mockResolvedValue(true);
+    const FakeSocket = stubDraftPushSocket();
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    await act(async () => {
+      FakeSocket.instances[0].open();
+      FakeSocket.instances[0].message({ type: "draft-ready", draftId: "d2" });
+    });
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("duo.missed") ?? "[]")).toHaveLength(1));
+    expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
+
+    navigate("#settings");
+    const entry = within(await screen.findByTestId("missed-list")).getByTestId("missed-entry");
+    expect(entry).toHaveTextContent("Your duo refused to answer for you.");
+    expect(entry.getAttribute("href")).toBe("#draft/d2");
+  });
+
+  it("no setting offers to silence the category — do not disturb defers, and that is all the member is given", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#settings");
+    const section = await screen.findByTestId("settings-notifications");
+
+    // The only switches are this device's do-not-disturb and its window; the
+    // words for turning off "duo" / "on your behalf" appear nowhere here.
+    expect(within(section).getAllByRole("button").map((b) => b.textContent)).toEqual(["Turn on do not disturb"]);
+    expect(section.textContent ?? "").not.toMatch(/on your behalf|mute (my )?duo|turn off duo/i);
   });
 });

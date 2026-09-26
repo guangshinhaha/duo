@@ -10,7 +10,17 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "../components/primitives/AlertDialog.js";
+import { Timestamp } from "../components/Timestamp.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
+import {
+  clearMissed,
+  isDndActive,
+  readDndPrefs,
+  readMissed,
+  writeDndPrefs,
+  type DndPrefs,
+  type MissedArrival,
+} from "../notificationPrefs.js";
 import { normalizeBaseUrl } from "./Setup.js";
 
 /** Masked to the last few characters — a paired token is a bearer credential, and a settings screen is exactly where screens get shared. */
@@ -48,6 +58,15 @@ export function Settings({
   const [addressInput, setAddressInput] = useState(api?.baseUrl ?? "");
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
+  // #69: this device's own rule. State read on mount (the route mounts
+  // fresh per visit), written through — the log's read is the same story.
+  const [dnd, setDnd] = useState<DndPrefs>(readDndPrefs);
+  const [missed, setMissed] = useState<readonly MissedArrival[]>(readMissed);
+
+  const writeDnd = (next: DndPrefs): void => {
+    writeDndPrefs(next);
+    setDnd(next);
+  };
 
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-testid="settings">
@@ -145,6 +164,87 @@ export function Settings({
           </button>
         </section>
       )}
+
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-notifications">
+        <h2 className="type-heading">Notifications</h2>
+        {/* #69: this device's own rule — what may interrupt HERE. The
+            per-conversation half lives on the conversations themselves
+            (server-side, every device); do-not-disturb is the member
+            standing at this machine, so it stays on this machine. */}
+        <p className="type-provenance text-[var(--muted)]" data-testid="dnd-status">
+          {isDndActive(dnd, new Date()) ? "Do not disturb is on." : "Do not disturb is off."}
+        </p>
+        <button
+          aria-pressed={dnd.manual}
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+          data-testid="dnd-toggle"
+          onClick={() => writeDnd({ ...dnd, manual: !dnd.manual })}
+          type="button"
+        >
+          {dnd.manual ? "Turn off do not disturb" : "Turn on do not disturb"}
+        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="type-provenance text-[var(--muted)]" htmlFor="dnd-from-input">
+            Quiet hours start
+          </label>
+          <input
+            aria-label="Quiet hours start"
+            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
+            data-testid="dnd-from"
+            id="dnd-from-input"
+            onChange={(e) => writeDnd({ ...dnd, from: e.target.value || null })}
+            type="time"
+            value={dnd.from ?? ""}
+          />
+          <span className="type-provenance text-[var(--muted)]">to</span>
+          <label className="type-provenance text-[var(--muted)]" htmlFor="dnd-to-input">
+            Quiet hours end
+          </label>
+          <input
+            aria-label="Quiet hours end"
+            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
+            data-testid="dnd-to"
+            id="dnd-to-input"
+            onChange={(e) => writeDnd({ ...dnd, to: e.target.value || null })}
+            type="time"
+            value={dnd.to ?? ""}
+          />
+        </div>
+        {/* What the rule held back stays visible afterwards — the record,
+            not the interruptions, replayed. */}
+        <div className="flex flex-col gap-2" data-testid="missed-list">
+          {missed.length === 0 ? (
+            <p className="type-provenance text-[var(--muted)]">Nothing was held back.</p>
+          ) : (
+            <>
+              {missed.map((entry) => (
+                <a
+                  className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 type-body text-[var(--text)]"
+                  data-testid="missed-entry"
+                  href={entry.hash}
+                  key={`${entry.at}-${entry.hash}-${entry.body}`}
+                >
+                  <span className="mr-2 type-provenance text-[var(--muted)]">
+                    <Timestamp iso={new Date(entry.at).toISOString()} />
+                  </span>
+                  {entry.body}
+                </a>
+              ))}
+              <button
+                className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
+                data-testid="missed-clear"
+                onClick={() => {
+                  clearMissed();
+                  setMissed([]);
+                }}
+                type="button"
+              >
+                Clear what was missed
+              </button>
+            </>
+          )}
+        </div>
+      </section>
 
       <section className="shape-container flex flex-col gap-3 p-4">
         <h2 className="type-heading">Appearance</h2>

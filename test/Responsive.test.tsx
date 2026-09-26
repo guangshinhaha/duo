@@ -15,8 +15,13 @@ import type { CorrectionCandidate, DraftRecord, GridRow } from "../src/api/types
 // The shell's notification side effects are Tauri's; the responsive shell
 // is the client's half and is what this file pins.
 vi.mock("../src/notifications.js", () => ({
+  // #69 widened the module past drafts; for this file only the announcement
+  // half matters, so the arrivals classify as plain drafts (null) and the
+  // side-effect verbs are inert.
+  draftArrivalBody: vi.fn(() => null),
   notifyDraftReady: vi.fn(),
-  wireDraftNotificationClicks: vi.fn(() => Promise.resolve(() => {})),
+  postNotification: vi.fn(),
+  wireNotificationClicks: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 /*

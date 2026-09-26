@@ -206,8 +206,8 @@ describe("#42 AC4 — notifications land somewhere useful", () => {
       onClick = cb;
       return { unregister: () => {} };
     });
-    const { notifyDraftReady, wireDraftNotificationClicks } = await import("../src/notifications.js");
-    await wireDraftNotificationClicks();
+    const { notifyDraftReady, wireNotificationClicks } = await import("../src/notifications.js");
+    await wireNotificationClicks();
     await notifyDraftReady("d9");
 
     const sent = plugin.sendNotification.mock.calls[0]![0];
@@ -229,8 +229,8 @@ describe("#42 AC4 — notifications land somewhere useful", () => {
       onClick = cb;
       return { unregister: () => {} };
     });
-    const { notifyDraftReady, wireDraftNotificationClicks } = await import("../src/notifications.js");
-    await wireDraftNotificationClicks();
+    const { notifyDraftReady, wireNotificationClicks } = await import("../src/notifications.js");
+    await wireNotificationClicks();
     await notifyDraftReady("d4");
 
     const sent = plugin.sendNotification.mock.calls[0]![0];
