@@ -206,8 +206,21 @@ answer", "was unable to help" — a refusal is a decision, not a failure.
 The unpair action, under exactly this name everywhere it appears: the
 sidebar, the folded navigation, and Settings (whose confirmation spells out
 what it does — the address and token are removed here, on this device only;
-the daemon keeps its own record). Never "Disconnect" (nothing is
-disconnected server-side), "log out", or "unpair" in visible strings.
+the daemon keeps its own record, and the token still works there). Never
+"Disconnect" (nothing is disconnected server-side), "log out", or "unpair" in
+visible strings.
+
+### revoke
+
+The daemon-side counterpart, on Settings' Devices list: cutting a paired
+device off so its token stops working and its open connection closes, at the
+daemon, immediately. It is the only word for that act — never "forget" (which
+is local and revokes nothing) and never "remove" or "unpair". Revoking the
+device you are using states its consequence first (its access ends now, and
+the app returns to Setup) and revokes before it forgets. The list names a
+device by the name it was paired under, says when it was paired and last seen,
+and marks "This device" — a label the owner places once, because the daemon
+does not say which row is the caller. Pairing stays at the Mac: `duo pair new`.
 
 ### sign in / sign out
 

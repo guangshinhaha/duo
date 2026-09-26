@@ -49,10 +49,14 @@ in this pass).
 - **`src/routes/Setup.tsx`** — first run: paste the daemon's tailnet address and a `duo pair new`
   token.
 - **`src/routes/Settings.tsx`** (#11) — this device's connection at `#settings`: the daemon address
-  and a masked token, the address editable with Setup's own validator and wording, and unpair as a
-  local forget behind a confirmation whose copy says exactly that (the daemon has no revocation
-  route). Unpairing clears the stored connection *and* the persisted query cache, so the old duo's
-  data can't outlive its token. Device name is absent until the daemon serves a way to read it back.
+  and a masked token, the address editable with Setup's own validator and wording, and "Forget this
+  device" as a local forget behind a confirmation whose copy says exactly that (it does not revoke).
+  Forgetting clears the stored connection *and* the persisted query cache, so the old duo's data
+  can't outlive its token. Its **Devices** section (#48, on digital-duo #177's routes) lists every
+  paired device — name, when paired, when last seen, never a token — and revokes one behind a
+  confirmation (`src/components/PairedDevices.tsx`). The daemon doesn't say which row is the
+  caller, so "This device" is a mark the owner places once and the pairing remembers; revoking
+  that device says so first, revokes before it forgets, and lands on Setup.
 - **`ask.html` / `src/routes/Ask.tsx`** (#1/#2) — the no-install asker page: a colleague opens
   `ask.html#host=…&token=…`, asks one question, and gets one of the daemon's three public-answer
   outcomes, rendered verbatim (the fixed passed-on / refusal strings are the contract — #43 AC3).
@@ -103,7 +107,8 @@ npm run dev      # then pair with address http://127.0.0.1:7720 and any non-empt
 What it serves: every route the client calls, including the three the real daemon doesn't yet —
 `POST /ask` (all three public-answer outcomes), the `/ws` handshake, and CORS. State is seeded in
 memory and the POST routes really mutate it, so the whole loop works: ask in Duo, send/edit/ignore
-in Review, answer an escalation, approve a rule. A restart resets everything.
+in Review, answer an escalation, approve a rule, revoke a paired device (`GET /devices`, #48 — the
+mock accepts any bearer, so revoking changes the list, not what a token can do). A restart resets everything.
 
 Question keywords pick the outcome, so you can reach each branch on purpose:
 

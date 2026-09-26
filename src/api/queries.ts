@@ -15,6 +15,7 @@ import type {
   GridRow,
   InterruptionPortrait,
   RefusalsListing,
+  PairedDevice,
   Rule,
   RuleReviewListing,
   RuleWithEvidence,
@@ -64,6 +65,8 @@ export const queryKeys = {
   // touches either (the digest POST is deliberately never called).
   escalationHistory: ["escalations", "history"] as const,
   escalationRate: ["escalations", "rate"] as const,
+  // #48: the paired devices — GET /devices; a revoke writes into and refreshes it.
+  devices: ["devices"] as const,
   // #46: keyed by the submitted query — each distinct search is its own
   // cache entry, so revisiting a recent query is instant and a stale
   // search never blocks a new one.
@@ -373,6 +376,43 @@ export function useRuleAction(api: DuoApiConfig) {
       apiRequest<Rule>(api, `/mirror/rules/${ruleId}/${action}`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.mirrorRules });
+    },
+  });
+}
+
+/**
+ * #48: which devices can read this corpus — `GET /devices` (digital-duo
+ * #177), the same read `duo pair list` makes. The list includes revoked
+ * rows (`revokedAt` set); whether a device can authenticate is exactly
+ * `revokedAt === null`.
+ */
+export function useDevices(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.devices, queryFn: () => apiRequest<PairedDevice[]>(api, "/devices") });
+}
+
+/**
+ * #48: `POST /devices/:id/revoke` — the daemon revokes, evicts the cached
+ * verification and closes that device's socket in the same tick, and answers
+ * the revoked row. The row is written into the list as it arrives (the
+ * daemon's own answer, so the list updates without waiting on a refetch),
+ * and the list is re-read either way: a refusal may mean the list is stale.
+ *
+ * Revoking THIS device (`id === api.deviceId`) skips the re-read on success:
+ * the token that would make it is the one just revoked, so it could only
+ * 401 — and a 401 means "revoked from elsewhere" to the app (#41), which is
+ * not what happened here. The caller returns to Setup instead.
+ */
+export function useRevokeDevice(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => apiRequest<PairedDevice>(api, `/devices/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+    onSuccess: (revoked) => {
+      queryClient.setQueryData<PairedDevice[]>(queryKeys.devices, (list) => list?.map((device) => (device.id === revoked.id ? revoked : device)));
+    },
+    onSettled: (_revoked, error, { id }) => {
+      if (error || id !== api.deviceId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.devices });
+      }
     },
   });
 }

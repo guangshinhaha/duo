@@ -1,5 +1,6 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "../src/routes/Settings.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 
@@ -7,18 +8,29 @@ const FULL_TOKEN = "c6jzoxVdOelvnJnGZRkFSnny_kxYcQ4wsERakvyXiXk";
 const api: DuoApiConfig = { baseUrl: "http://100.64.1.5:7717", token: FULL_TOKEN };
 
 function renderSettings(onConfigChange = vi.fn()) {
+  // #48: Settings lists the paired devices (an empty list here — this file is about the connection; Devices.test.tsx is about the list).
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <Settings
-      api={api}
-      session={null}
-      onConfigChange={onConfigChange}
-      onSignOut={vi.fn()}
-      onPairDuo={vi.fn()}
-      onWorkspaceSignIn={vi.fn()}
-    />,
+    <QueryClientProvider client={client}>
+      <Settings
+        api={api}
+        session={null}
+        onConfigChange={onConfigChange}
+        onSignOut={vi.fn()}
+        onPairDuo={vi.fn()}
+        onWorkspaceSignIn={vi.fn()}
+      />
+    </QueryClientProvider>,
   );
   return onConfigChange;
 }
+
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })));
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("Settings — this device's connection to the daemon (issue #11)", () => {
   it("shows the daemon address and the token masked to its last few characters, never in full", () => {
@@ -51,9 +63,10 @@ describe("Settings — this device's connection to the daemon (issue #11)", () =
   it("unpair asks first, then forgets the device through the connection's single choke point", () => {
     const onConfigChange = renderSettings();
     fireEvent.click(screen.getByTestId("settings-unpair"));
-    // The copy never claims revocation: the daemon has no route for it.
+    // The copy never claims revocation (#48: there IS a route now, and this
+    // is not it) — it says the daemon still trusts the token.
     expect(screen.getByTestId("settings-unpair-confirmation")).toHaveTextContent("daemon keeps its own record");
-    expect(screen.getByTestId("settings-unpair-confirmation")).not.toHaveTextContent("revoke");
+    expect(screen.getByTestId("settings-unpair-confirmation")).toHaveTextContent(/does not revoke/i);
     fireEvent.click(screen.getByTestId("settings-unpair-confirm"));
     expect(onConfigChange).toHaveBeenCalledWith(null);
   });

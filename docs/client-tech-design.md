@@ -230,6 +230,16 @@ duo pair --name "iPhone"
   the whole reason this is a separate secret rather than the passphrase.
 - `last_seen_at` is recorded, because "which devices can read my corpus right now" is a question
   the owner should be able to answer.
+- Both are also answerable from a paired device (digital-duo #177, client #48): `GET /devices`
+  lists every device — id, name, created, `last_seen_at`, never a token or hash — and
+  `POST /devices/:id/revoke` does what `duo pair revoke` does, plus the same-tick teardown of that
+  device's cached auth and live socket. Revoking the last device, or the caller itself, is
+  deliberate and allowed: `duo pair new` at the Mac always mints a working token, so there is no
+  lockout to refuse. The daemon does **not** say which row is the caller, so Settings keeps a
+  client-local mark (`deviceId`, set once by the owner, kept beside the pairing) and the client
+  never guesses. Pairing a new device stays a physical act at the Mac — the client offers no route
+  for it. "Forget this device" is a different act: it removes the token from this device only and
+  does not revoke it.
 
 Rate-limit auth failures and log them. On a private network the realistic attacker is a process on
 a machine that is already on the tailnet, and that attacker gets to retry.
@@ -246,7 +256,7 @@ a machine that is already on the tailnet, and that attacker gets to retry.
 /mirror          portrait · rules · weak signals · refusals — a rule opens onto its evidence
 /trust           grid, read-only on mobile (AR-17)
 /audit
-/settings        daemon address, device name, unpair
+/settings        daemon address · paired devices (list, revoke) · forget this device
 ```
 
 Mobile drops `/trust` and `/audit` to a single "More" section and hides rule authoring entirely
@@ -260,9 +270,10 @@ TanStack Query for everything server-shaped. Keys mirror the routes so invalidat
 ["drafts", { outcome: "pending" }]   // invalidated by any outcome POST and by draft-ready
 ["review"]                           // invalidated by an outcome POST — an edit queues a candidate
 ["mirror", "rules"]  ["mirror", "rules", id]  ["mirror", "refusals"]  ["mirror", "portrait"]  ["trust", "grid"]  ["audit"]
+["devices"]                          // GET /devices; a revoke writes the answered row in, then refetches (#48)
 ```
 
-The only client-owned state is the composer buffer and UI preferences. No Zustand, no Redux: there
+The only client-owned state is the composer buffer, UI preferences, and the one label the daemon cannot supply (`deviceId`, which paired device this is, #48). No Zustand, no Redux: there
 is one writer (the daemon) and the cache is the model.
 
 `POST /drafts/:id/outcome` with `edited` invalidates **both** `["drafts"]` and `["review"]`, because

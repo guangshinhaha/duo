@@ -11,6 +11,7 @@ import {
   AlertDialogTrigger,
 } from "../components/primitives/AlertDialog.js";
 import { Timestamp } from "../components/Timestamp.js";
+import { PairedDevices } from "../components/PairedDevices.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import {
   clearMissed,
@@ -34,11 +35,11 @@ function maskedToken(token: string): string {
  * only you reach). Each is shown, startable, and endable INDEPENDENTLY —
  * signing out never unpairs, unpairing never signs out — and each empty
  * state offers its own door rather than apologizing. The address stays
- * editable with Setup's own validator and wording; unpair is a local
- * forget — the daemon has no revocation route, so the copy never claims
- * one. Device name is absent for the same reason (issue #11's open
- * question): the daemon records it at pairing but serves no way to read it
- * back, and the client never sees it.
+ * editable with Setup's own validator and wording; "Forget this device" is
+ * a local forget and its copy says so — it does not revoke. Revoking is the
+ * Devices section's act (#48, over digital-duo #177's routes), which also
+ * answers issue #11's old open question: the daemon now serves each
+ * device's name, so the list shows them.
  */
 export function Settings({
   api,
@@ -123,7 +124,7 @@ export function Settings({
               setError(null);
               // Token unchanged: a moved daemon keeps its paired devices;
               // re-pairing is the flow when the token itself is wrong.
-              onConfigChange({ baseUrl: normalized, token: api.token });
+              onConfigChange({ ...api, baseUrl: normalized });
             }}
           >
             <label className="type-provenance text-[var(--muted)]" htmlFor="settings-address-input">
@@ -298,6 +299,8 @@ export function Settings({
         </dl>
       </section>
 
+      {api && <PairedDevices api={api} onConfigChange={onConfigChange} />}
+
       {api && (
         <section className="shape-container flex flex-col gap-3 p-4">
           <h2 className="type-heading">This device</h2>
@@ -315,7 +318,7 @@ export function Settings({
             <AlertDialogContent className="w-[calc(100vw-3rem)] max-w-md" data-testid="settings-unpair-confirmation">
               <AlertDialogTitle className="type-heading">Forget this device?</AlertDialogTitle>
               <AlertDialogDescription className="type-provenance text-[var(--muted)]">
-                Forget this device's stored connection? The daemon keeps its own record — this removes the address and token here, on this device only.
+                Forget this device's stored connection? The daemon keeps its own record — this removes the address and token here, on this device only. It does not revoke the token: to cut a device off, revoke it under Devices.
               </AlertDialogDescription>
               <div className="flex gap-2">
                 <AlertDialogAction
