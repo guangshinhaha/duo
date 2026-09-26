@@ -165,7 +165,7 @@ function ConfirmationCard({
  * that fired later against moved context is precisely the failure the T4
  * guard exists to prevent, so an unreachable daemon refuses, never queues.
  */
-export function Confirmations({ api }: { api: DuoApiConfig }) {
+export function ConfirmationsPanel({ api, quietWhenEmpty = false }: { api: DuoApiConfig; quietWhenEmpty?: boolean }) {
   const { data: requests, isLoading, error, isError, isFetchedAfterMount, refetch } = usePendingT4(api);
   const confirm = useConfirmT4(api);
   const { reachable } = useSyncStatus();
@@ -174,11 +174,13 @@ export function Confirmations({ api }: { api: DuoApiConfig }) {
   // said, not inferred from an absence.
   const [confirmed, setConfirmed] = useState<{ id: string; description: string }[]>([]);
 
+  // Hosted inside Your duo's chat, loading and failing are silent: the chat is
+  // not a page that owes the owner a spinner or an error screen for one card.
   if (isLoading) {
-    return <RouteLoading />;
+    return quietWhenEmpty ? null : <RouteLoading />;
   }
   if (error && !requests) {
-    return <RouteError api={api} error={error} onRetry={() => void refetch()} />;
+    return quietWhenEmpty ? null : <RouteError api={api} error={error} onRetry={() => void refetch()} />;
   }
 
   // Not confirmable from a cache: the list must have been read from the
@@ -186,10 +188,14 @@ export function Confirmations({ api }: { api: DuoApiConfig }) {
   const unavailable: Unavailable = !reachable ? "asleep" : isError ? "failed" : !isFetchedAfterMount ? "checking" : null;
   const waiting = requests ?? [];
 
+  // Hosted inside Your duo's chat, an empty panel says nothing at all.
+  if (quietWhenEmpty && waiting.length === 0 && confirmed.length === 0) {
+    return null;
+  }
+
   return (
-    <div className="p-6">
-      <h1 className="type-heading sr-only">Confirmations</h1>
-      <div className="flex max-w-2xl flex-col gap-4">
+    <div className="flex max-w-2xl flex-col gap-4" data-testid="confirmations-panel">
+      <div className="flex flex-col gap-4">
         {confirmed.map((done) => (
           <p className="type-body" data-testid="confirmation-done" key={done.id} role="status">
             Confirmed — {done.description}.
@@ -219,6 +225,16 @@ export function Confirmations({ api }: { api: DuoApiConfig }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** The Confirmations page: the panel, with its own heading and room. */
+export function Confirmations({ api }: { api: DuoApiConfig }) {
+  return (
+    <div className="p-6">
+      <h1 className="type-heading sr-only">Confirmations</h1>
+      <ConfirmationsPanel api={api} />
     </div>
   );
 }

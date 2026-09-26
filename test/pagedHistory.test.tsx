@@ -60,6 +60,11 @@ function stubPagedDaemon(all: DraftRecord[]) {
       all.push(created);
       return Promise.resolve(new Response(JSON.stringify({ kind: "draft", draftId: created.id }), { status: 201 }));
     }
+    // Only the drafts feed is being walked here: the training cards' own reads
+    // (corrections, rules, offers, the digest) are answered empty and not counted.
+    if (!new URL(href).pathname.endsWith("/drafts")) {
+      return Promise.resolve(new Response("[]", { status: 200 }));
+    }
     const { searchParams } = new URL(href);
     gets.push(href);
     let rows = [...all].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
