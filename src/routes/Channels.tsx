@@ -110,16 +110,11 @@ function ChannelRow({
   );
 }
 
-function ChannelsScreen({ api, channels }: { api: DuoApiConfig; channels: readonly ChannelSummary[] }) {
+/** The bridged channels and their mute controls — the body of the Channels page, without its heading, so the duo's profile can host it. */
+export function ChannelList({ api, channels }: { api: DuoApiConfig; channels: readonly ChannelSummary[] }) {
   const setMute = useSetChannelMute(api);
   return (
-    <div className="flex flex-col gap-6 p-6" data-testid="channels">
-      <header className="flex flex-col gap-1">
-        <h1 className="type-heading">Channels</h1>
-        <p className="type-provenance text-[var(--muted)]">
-          The outside systems bridged into your duo, and whether each is working.
-        </p>
-      </header>
+    <>
       {channels.length === 0 ? (
         <NoChannels />
       ) : (
@@ -135,6 +130,20 @@ function ChannelsScreen({ api, channels }: { api: DuoApiConfig; channels: readon
           ))}
         </ul>
       )}
+    </>
+  );
+}
+
+function ChannelsScreen({ api, channels }: { api: DuoApiConfig; channels: readonly ChannelSummary[] }) {
+  return (
+    <div className="flex flex-col gap-6 p-6" data-testid="channels">
+      <header className="flex flex-col gap-1">
+        <h1 className="type-heading">Channels</h1>
+        <p className="type-provenance text-[var(--muted)]">
+          The outside systems bridged into your duo, and whether each is working.
+        </p>
+      </header>
+      <ChannelList api={api} channels={channels} />
     </div>
   );
 }
@@ -144,7 +153,7 @@ function ChannelsScreen({ api, channels }: { api: DuoApiConfig; channels: readon
  * payload that is not the daemon's list is not an answer, and the screen
  * reads it as still asking rather than crashing on it.
  */
-function isChannelList(value: unknown): value is ChannelSummary[] {
+export function isChannelList(value: unknown): value is ChannelSummary[] {
   return Array.isArray(value);
 }
 

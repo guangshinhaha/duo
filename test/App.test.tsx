@@ -183,7 +183,7 @@ describe("App — hash routing between the surfaces", () => {
     // The retired address renders its new home, and the bar is rewritten in place.
     window.location.hash = "#mirror";
     window.dispatchEvent(new Event("hashchange"));
-    await waitFor(() => expect(screen.getByTestId("mirror")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("portrait-tab")).toBeInTheDocument());
     expect(screen.getByTestId("profile-tab-portrait")).toHaveAttribute("aria-current", "page");
     expect(window.location.hash).toBe("#duo/profile");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
@@ -191,7 +191,7 @@ describe("App — hash routing between the surfaces", () => {
     window.location.hash = "#review";
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
-    expect(screen.queryByTestId("mirror")).toBeNull();
+    expect(screen.queryByTestId("portrait-tab")).toBeNull();
   });
 
   it("#corrections is the duo's Rules tab", async () => {
@@ -205,9 +205,9 @@ describe("App — hash routing between the surfaces", () => {
 
     window.location.hash = "#corrections";
     window.dispatchEvent(new Event("hashchange"));
-    // GET /review returns [] against this stub, so the queue shows its
-    // honest empty state — the route mounted, not Review with no drafts.
-    await waitFor(() => expect(screen.getByTestId("corrections-empty")).toBeInTheDocument());
+    // GET /review returns [] against this stub, so the tab shows its honest
+    // empty buckets — the route mounted, not the waiting queue with no drafts.
+    await waitFor(() => expect(screen.getByTestId("rules-tab")).toBeInTheDocument());
     expect(screen.getByTestId("profile-tab-rules")).toHaveAttribute("aria-current", "page");
     expect(screen.getByTestId("profile-tab-rules")).toHaveAttribute("href", "#duo/profile/rules");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
@@ -229,7 +229,7 @@ describe("App — hash routing between the surfaces", () => {
 
     window.location.hash = "#knowledge";
     window.dispatchEvent(new Event("hashchange"));
-    await waitFor(() => expect(screen.getByTestId("knowledge")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("knows-tab")).toBeInTheDocument());
     expect(screen.getByTestId("profile-tab-knows")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
@@ -250,7 +250,7 @@ describe("App — hash routing between the surfaces", () => {
 
     window.location.hash = "#escalations";
     window.dispatchEvent(new Event("hashchange"));
-    await waitFor(() => expect(screen.getByTestId("escalations")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("activity-tab")).toBeInTheDocument());
     expect(screen.getByTestId("profile-tab-activity")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
@@ -305,7 +305,7 @@ describe("App — hash routing between the surfaces", () => {
 
     window.location.hash = "#channels";
     window.dispatchEvent(new Event("hashchange"));
-    await waitFor(() => expect(screen.getByTestId("channels")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("knows-tab")).toBeInTheDocument());
     expect(screen.getByTestId("profile-tab-knows")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
@@ -333,7 +333,7 @@ describe("App — hash routing between the surfaces", () => {
     expect(screen.queryByTestId("duo-thread")).toBeNull();
   });
 
-  it("navigates to Trust on #trust", async () => {
+  it("#trust is the duo's May do tab", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(
       "fetch",
@@ -344,11 +344,11 @@ describe("App — hash routing between the surfaces", () => {
 
     window.location.hash = "#trust";
     window.dispatchEvent(new Event("hashchange"));
-    await waitFor(() => expect(screen.getByTestId("trust-empty")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("may-empty")).toBeInTheDocument());
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 
-  it("navigates to Audit on #audit", async () => {
+  it("#audit is the duo's Activity tab", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal(
       "fetch",
@@ -359,7 +359,7 @@ describe("App — hash routing between the surfaces", () => {
 
     window.location.hash = "#audit";
     window.dispatchEvent(new Event("hashchange"));
-    await waitFor(() => expect(screen.getByTestId("audit-empty")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("activity-empty")).toBeInTheDocument());
     expect(screen.queryByText("Nothing waiting on you.")).toBeNull();
   });
 
