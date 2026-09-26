@@ -599,6 +599,8 @@ describe("mock daemon — channels and their policy (duo #47, mirroring digital-
     expect((await slash.json()).error.message).toBe(
       'channel must not contain "/" — it scopes a thread within a channel — got "a/b"',
     );
+  });
+});
 
 // The paired-devices routes (duo #48, mirroring digital-duo #177): GET /devices
 // answers the DeviceToken shape — no token or hash field — and

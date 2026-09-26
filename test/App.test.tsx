@@ -367,8 +367,8 @@ describe("App — hash routing between the surfaces", () => {
     render(<App />);
 
     // Review loads first (the default route) so a query actually runs and
-    // the persister has something to write — Settings itself queries
-    // nothing, so without this the cache-removal below would prove nothing.
+    // the persister has something to write — the drafts are the data this
+    // test watches leave, so without this the cache-removal below proves nothing.
     await waitFor(() => expect(screen.getByText("question from A's daemon")).toBeInTheDocument());
     await waitFor(() => expect(localStorage.getItem("duo-cache")).toContain("question from A's daemon"), { timeout: 3000 });
 

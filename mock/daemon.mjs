@@ -333,6 +333,15 @@ function seedState() {
         answerText: "The duo won't answer that one.",
       },
     ],
+    // #48: the paired devices, in digital-duo #177's DeviceToken shape —
+    // oldest first, no token or hash field. The mock accepts any bearer, so
+    // it cannot say which row is the caller (neither can the real daemon),
+    // and revoking a row here changes the list, not what any token can do.
+    devices: [
+      { id: "dev-ipad", name: "iPad", createdAt: minutesAgo(60 * 24 * 90), lastSeenAt: null, revokedAt: minutesAgo(60 * 24 * 30) },
+      { id: "dev-mac", name: "Mac", createdAt: minutesAgo(60 * 24 * 40), lastSeenAt: minutesAgo(2), revokedAt: null },
+      { id: "dev-iphone", name: "iPhone", createdAt: minutesAgo(60 * 24 * 12), lastSeenAt: minutesAgo(60 * 5), revokedAt: null },
+    ],
     askLog: [],
     draftSeq: 4,
     candidateSeq: 1,
@@ -517,6 +526,23 @@ export function createMockDaemon() {
     };
 
     const routes = [
+      // #48 (digital-duo #177): the device list, and revoke — which answers
+      // the revoked row, treats a second revoke as a no-op, and 404s a stranger
+      // with the daemon's own error class and words.
+      ["GET", /^\/devices$/, () => ok(state.devices)],
+      [
+        "POST",
+        /^\/devices\/([^/]+)\/revoke$/,
+        (m) => {
+          const id = decodeURIComponent(m[1]);
+          const row = state.devices.find((d) => d.id === id);
+          if (!row) {
+            return fail(404, "DeviceTokenNotFoundError", `No paired device with id "${id}"`);
+          }
+          row.revokedAt ??= new Date().toISOString();
+          return ok(row);
+        },
+      ],
       // #40: both shapes the wire defines, so the roster's two labels are
       // exercisable against the mock — the shared entry is what a trusted
       // device sees, with the owner's own name as the daemon sends it.

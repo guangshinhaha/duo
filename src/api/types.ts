@@ -310,6 +310,21 @@ export interface AuditEntry {
   answerText: string;
 }
 
+/**
+ * One paired device as `GET /devices` and `POST /devices/:id/revoke` answer
+ * it (digital-duo #177) — the daemon's own `DeviceToken` shape, which has no
+ * token or hash field, so a credential cannot ride this type. `revokedAt` is
+ * null for a device that can still authenticate; `lastSeenAt` is null for one
+ * the daemon has never heard from. Timestamps are the daemon's ISO strings.
+ */
+export interface PairedDevice {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastSeenAt: string | null;
+  revokedAt: string | null;
+}
+
 export interface ApiError {
   error: { code: string; message: string };
 }

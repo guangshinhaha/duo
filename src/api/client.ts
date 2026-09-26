@@ -25,6 +25,13 @@ export interface DuoApiConfig {
   baseUrl: string;
   /** The bearer token minted by `duo pair` for this device. */
   token: string;
+  /**
+   * #48: which paired device (`GET /devices` row id) THIS device is. The daemon
+   * never says which row is the caller, so the owner marks it once in Settings
+   * and this remembers it beside the pairing — a client-local label, absent
+   * until marked, and gone with the pairing (a fresh pairing never carries it).
+   */
+  deviceId?: string;
 }
 
 /**
