@@ -38,6 +38,14 @@ in this pass).
   never-asked told from asked-and-none by the daemon's own `decided` flag). Read-and-disposition
   only — rule and refusal authoring stay in `duo/` on the Mac (AR-18). No percentages anywhere:
   bars and counts, never numerals the data doesn't carry.
+- **`src/routes/Escalations.tsx`** (#54) — what the duo keeps having to ask about, at
+  `#escalations`: every sent digest (`GET /escalations/history`, all pages) arranged into the
+  questions escalated most, each with its count, a share bar, and the daemon's reason; opening one
+  reads its latest escalation into the same card Review shows, so the answer that queues a
+  standing-order candidate is one click away. The urgent rate (`GET /escalations/rate`) is the
+  daemon's counts in words plus its own figure as a bar — never a percentage. It never calls
+  `POST /escalations/digest`: assembling a digest is the send, and opening a screen must not send.
+  The pattern is pure arrangement in `src/escalations/pattern.ts` (identical wording only).
 - **`src/routes/Setup.tsx`** — first run: paste the daemon's tailnet address and a `duo pair new`
   token.
 - **`src/routes/Settings.tsx`** (#11) — this device's connection at `#settings`: the daemon address

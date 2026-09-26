@@ -55,6 +55,18 @@ A question the pipeline raised for the owner's judgement (`escalated`
 without `refused`). Escalations appear in Review with their reason; the
 owner answers one like a question, not like an error.
 
+The Escalations screen (`#escalations`, #54) shows the pattern across them:
+each question the duo keeps having to ask, how many times, most first —
+"where its knowledge runs out". Two questions are the same only when they
+read the same (case and spacing aside); nothing is grouped by resemblance,
+because the daemon never judged one. Counts come from the digests the daemon
+has sent, and an urgent escalation is in none of them (it interrupts live
+instead), so the screen says what it counted. The urgent rate is the daemon's
+own counts — "3 of 12 escalations were urgent" — and its own figure as a bar's
+width, never a percentage (§1.6's rule for every derived proportion), and with
+nothing classified yet there is no bar at all. Answering an escalation from
+there is the same answer as in Review, which queues a standing-order candidate.
+
 ### refusal
 
 An escalation the pipeline declined outright — "Your duo refused this one.",
