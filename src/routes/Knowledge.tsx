@@ -17,8 +17,8 @@ function formatDate(iso: string | null): string {
  */
 export function lastImportSentence(lastImport: DuoKnowledge["lastImport"]): string {
   return lastImport
-    ? `Last import ${formatDate(lastImport.runAt)}: ${lastImport.written} written, ${lastImport.alreadyPresent} already present, ${lastImport.skippedDmConversations} DM conversations skipped.`
-    : "No import yet — importing your records is what gives the duo something to answer from.";
+    ? `Last import ${formatDate(lastImport.runAt)}: ${lastImport.written} new, ${lastImport.alreadyPresent} already there, ${lastImport.skippedDmConversations} direct-message conversations left out.`
+    : "No import yet — importing your history is what gives the duo something to answer from.";
 }
 
 /**
@@ -29,7 +29,7 @@ export function lastImportSentence(lastImport: DuoKnowledge["lastImport"]): stri
  */
 export function corpusSentence(corpus: DuoKnowledge["corpus"]): string {
   if (corpus.tooThin) {
-    return `Not enough history yet — the corpus starts to mean something at ${corpus.minimumQuestionsToCharacterize} questions, and this duo has ${corpus.totalQuestions}. Importing more records is what thickens it.`;
+    return `Not enough history yet — your duo starts to get a picture of you at ${corpus.minimumQuestionsToCharacterize} questions, and it has ${corpus.totalQuestions}. Importing more of your messages is what thickens it.`;
   }
   return `${corpus.totalQuestions} question${corpus.totalQuestions === 1 ? "" : "s"} so far — asking it questions is what thickens it.`;
 }

@@ -85,7 +85,9 @@ describe("#47 AC1 — configured channels list with the daemon's own strings", (
     const first = within(rows[0]!);
     expect(first.getByTestId("channel-label")).toHaveTextContent("Roof loft, north window");
     expect(first.getByTestId("channel-state")).toHaveTextContent("connected");
-    expect(first.getByTestId("channel-last-activity")).toHaveTextContent(new Date("2026-09-19T16:40:00.000Z").toLocaleString());
+    expect(first.getByTestId("channel-last-activity")).toHaveTextContent(/^Last activity /);
+    // Said as an age, never a raw stamp: the moment itself is a detail, not the default.
+    expect(first.getByTestId("channel-last-activity").textContent).not.toMatch(/\d{1,2}:\d{2}/);
 
     // A state this client has never seen renders as the daemon spelled it —
     // nothing maps state words either.

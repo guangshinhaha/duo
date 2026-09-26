@@ -25,7 +25,7 @@ function KnowsBody({ api, knowledge }: { api: DuoApiConfig; knowledge: DuoKnowle
     <div className="flex max-w-2xl flex-col gap-4 p-6" data-testid="knows-tab">
       <Section testId="knows-read" title="What it has read">
         <p className="type-body">
-          {knowledge.records.total} {knowledge.records.total === 1 ? "record" : "records"} of yours.
+          It has read {knowledge.records.total} of your messages and notes.
         </p>
         {Object.entries(knowledge.records.bySource).map(([source, count]) => (
           // The source names are the daemon's own strings, verbatim — this client keeps no registry of sources to translate them through.
@@ -78,12 +78,12 @@ function KnowsBody({ api, knowledge }: { api: DuoApiConfig; knowledge: DuoKnowle
 
       <Section testId="knows-runs-on" title="What it runs on">
         <p className="type-provenance text-[var(--muted)]" data-testid="inference-provider">
-          {knowledge.providers.inference ? `Answering with ${knowledge.providers.inference}.` : "No inference provider configured — nothing is answering."}
+          {knowledge.providers.inference ? `Answering with ${knowledge.providers.inference}.` : "Nothing is set up to write answers, so nothing is answering."}
         </p>
         <p className="type-provenance text-[var(--muted)]" data-testid="embedding-provider">
           {knowledge.providers.embedding
-            ? `Searching your records with ${knowledge.providers.embedding.name} (${knowledge.providers.embedding.model}).`
-            : "No embedding provider configured."}
+            ? `Searching your history with ${knowledge.providers.embedding.name} (${knowledge.providers.embedding.model}).`
+            : "Nothing is set up to search your history."}
         </p>
       </Section>
 

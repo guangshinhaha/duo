@@ -142,7 +142,7 @@ describe("Knows — what it has read, where it listens", () => {
     expect(headings).toEqual(expect.arrayContaining(["What it has read", "What people ask you", "Where it listens", "What it runs on", "When others ask it"]));
     expect(headings.join(" ")).not.toMatch(/Records|Corpus|Providers|Shared usage/);
     // every fact: counts by source (the daemon's own names), the last import, the import door…
-    expect(screen.getByTestId("knows-read")).toHaveTextContent("312 records of yours.");
+    expect(screen.getByTestId("knows-read")).toHaveTextContent("It has read 312 of your messages and notes.");
     expect(screen.getAllByTestId("record-source").map((el) => el.textContent)).toEqual(["slack288", "markdown24"]);
     expect(screen.getByTestId("last-import")).toHaveTextContent("Last import");
     expect(screen.getByRole("link", { name: "Import more history" })).toHaveAttribute("href", "#onboarding");
@@ -151,7 +151,7 @@ describe("Knows — what it has read, where it listens", () => {
     expect(await screen.findByTestId("channel")).toHaveTextContent("Slack");
     // …what it runs on, and how it did when others asked, verbatim.
     expect(screen.getByTestId("inference-provider")).toHaveTextContent("Answering with openrouter/auto.");
-    expect(screen.getByTestId("embedding-provider")).toHaveTextContent("ollama (nomic)");
+    expect(screen.getByTestId("embedding-provider")).toHaveTextContent("Searching your history with ollama (nomic).");
     expect(screen.getByTestId("shared-usage-summary")).toHaveTextContent("The shared duo is being used.");
     expect(screen.getByTestId("usage-gap")).toHaveTextContent("deploy freeze dates");
   });

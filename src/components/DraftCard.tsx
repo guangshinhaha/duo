@@ -111,11 +111,12 @@ export function DraftCard({
               // stays where the files are: below the desktop width the
               // affordance is simply not offered, and a phone reads the
               // escalation, defers to the Mac, or works the queues.
-              <div className="hidden gap-2 md:flex">
+              <>
+          <div className="hidden gap-2 md:flex">
                 <input
-                  aria-label="Answer it yourself — becomes a standing-order candidate"
+                  aria-label="Answer it yourself"
                   className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
-                  placeholder="Answer it yourself — becomes a standing-order candidate"
+                  placeholder="Answer it yourself"
                   value={answerText}
                   onChange={(e) => setAnswerText(e.target.value)}
                 />
@@ -127,6 +128,10 @@ export function DraftCard({
                   Answer
                 </button>
               </div>
+          <p className="hidden type-provenance text-[var(--faint)] md:block" data-testid="answer-hint">
+            Your answer is saved as a standing order for you to approve.
+          </p>
+          </>
             ))}
           <MutationError error={answerEscalation.error} />
         </div>
@@ -184,7 +189,7 @@ export function DraftCard({
           // nothing was ever being sent anywhere; "final" is the word
           // that carries the same warning.
           <div className="flex items-center gap-2" data-testid="ignore-window">
-            <span className="type-provenance text-[var(--muted)]">{selfAsked ? "Ignoring — not final yet." : "Ignoring — not sent yet."}</span>
+            <span className="type-provenance text-[var(--muted)]">{selfAsked ? "Dismissing — not final yet." : "Dismissing — not sent yet."}</span>
             <button
               className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
               onClick={undoIgnore}
@@ -245,7 +250,7 @@ export function DraftCard({
                 disabled={recordOutcome.isPending || !reachable}
                 onClick={ignoreWithWindow}
               >
-                Ignore
+                Dismiss
               </button>
               <button
                 className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"

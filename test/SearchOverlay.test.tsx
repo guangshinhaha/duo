@@ -140,7 +140,7 @@ describe("#46 — search the corpus from the app", () => {
     fireEvent.click(screen.getByRole("button", { name: /search/i }));
     await waitFor(() => expect(screen.getByTestId("search-empty")).toBeInTheDocument());
     expect(screen.getByTestId("search-empty").textContent).toMatch(/nothing matched/i);
-    expect(screen.getByTestId("search-empty").textContent).not.toMatch(/empty/i);
+    expect(screen.getByTestId("search-empty").textContent).not.toMatch(/hasn't read anything/i);
 
     // An empty corpus: zero results is a fact about the corpus, not the query.
     stubSearch([{ results: [] }], 0);
@@ -153,7 +153,7 @@ describe("#46 — search the corpus from the app", () => {
     );
     fireEvent.change(screen.getByPlaceholderText(/search what your duo knows/i), { target: { value: "anything" } });
     fireEvent.click(screen.getByRole("button", { name: /search/i }));
-    await waitFor(() => expect(screen.getByTestId("search-empty").textContent).toMatch(/empty/i));
+    await waitFor(() => expect(screen.getByTestId("search-empty").textContent).toMatch(/hasn't read anything yet/i));
     expect(screen.getByTestId("search-empty").textContent).toMatch(/import/i);
   });
 

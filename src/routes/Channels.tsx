@@ -3,6 +3,7 @@ import { useChannels, useSetChannelMute } from "../api/queries.js";
 import type { ChannelSummary } from "../api/types.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { ageLabel } from "../components/Timestamp.js";
 
 /**
  * A failed connection first — this is the screen the owner opens to find
@@ -79,7 +80,7 @@ function ChannelRow({
       )}
 
       <p className="type-provenance text-[var(--muted)]" data-testid="channel-last-activity">
-        {channel.lastActivityAt ? `Last activity ${new Date(channel.lastActivityAt).toLocaleString()}` : "No activity yet"}
+        {channel.lastActivityAt ? `Last activity ${ageLabel(channel.lastActivityAt)}` : "No activity yet"}
       </p>
 
       <div className="flex flex-wrap items-center gap-3">

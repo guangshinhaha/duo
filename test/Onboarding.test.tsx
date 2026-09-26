@@ -300,12 +300,12 @@ describe("#49 AC2 — deriving is observable", () => {
     const bar = await screen.findByRole("progressbar", { name: /embedding/i });
     await waitFor(() => expect(bar).toHaveAttribute("aria-valuenow", "30"));
     expect(bar).toHaveAttribute("aria-valuemax", "40");
-    expect(screen.getByTestId("embed-progress")).toHaveTextContent(/30 of 40 records embedded/i);
+    expect(screen.getByTestId("embed-progress")).toHaveTextContent(/30 of 40 messages and notes read/i);
     expect(screen.getByTestId("embed-progress").textContent).not.toMatch(/%/);
 
     // The watch stops when the job does, and the step is done.
     await waitFor(() => expect(screen.getByTestId("onboarding-step-embed")).toHaveAttribute("data-state", "done"));
-    expect(screen.getByTestId("embed-progress")).toHaveTextContent(/40 of 40 records embedded/i);
+    expect(screen.getByTestId("embed-progress")).toHaveTextContent(/40 of 40 messages and notes read/i);
     const pollsAtDone = daemon.count("GET", "/corpus/embed");
     await new Promise((resolve) => setTimeout(resolve, POLL_MS * 5));
     expect(daemon.count("GET", "/corpus/embed")).toBe(pollsAtDone);
@@ -337,7 +337,7 @@ describe("#49 AC2 — deriving is observable", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Start embedding" }));
 
     expect((await screen.findByTestId("mutation-error")).textContent).toBe(message);
-    await waitFor(() => expect(screen.getByTestId("embed-progress")).toHaveTextContent(/5 of 40 records embedded/i));
+    await waitFor(() => expect(screen.getByTestId("embed-progress")).toHaveTextContent(/5 of 40 messages and notes read/i));
   });
 
   it("starts derivation from the app and shows the daemon's stage as it runs, then its counts", async () => {
@@ -489,7 +489,7 @@ describe("#49 AC4 — a duo built in a terminal never sees onboarding", () => {
     await launch("#waiting");
 
     await screen.findByTestId("waiting-home-knowledge");
-    await waitFor(() => expect(screen.getByTestId("waiting-home-knowledge")).toHaveTextContent(/312 records/));
+    await waitFor(() => expect(screen.getByTestId("waiting-home-knowledge")).toHaveTextContent(/312 of your messages and notes/));
     expect(daemon.count("GET", "/knowledge")).toBeGreaterThan(0);
     expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
     expect(window.location.hash).toBe("#waiting");

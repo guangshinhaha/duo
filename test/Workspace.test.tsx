@@ -1901,7 +1901,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     const note = screen.getByTestId("attachment-note");
     expect(note).toHaveTextContent("carol's duo");
     expect(note).toHaveTextContent("32 KiB");
-    expect(note).toHaveTextContent("can't read images yet — an open provider decision");
+    expect(note).toHaveTextContent("can't read images yet");
     expect(note).toHaveTextContent("never imports");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "what do these say?" } });
@@ -2289,7 +2289,7 @@ describe("#127 — a hosted device connects by itself", () => {
     seedHostedDevice();
     stubHostedNetwork([granted()]);
     vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
 
     await renderApp();
 

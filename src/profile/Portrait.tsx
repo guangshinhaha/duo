@@ -72,7 +72,7 @@ export function Portrait({ api }: { api: DuoApiConfig }) {
           </div>
           <p className="type-identifier text-[var(--faint)]" data-testid="portrait-source">
             {data.totalQuestions} question{data.totalQuestions === 1 ? "" : "s"} · {formatDate(data.periodStart)} – {formatDate(data.periodEnd)} ·
-            derived by your duo
+            worked out by your duo
           </p>
           <details className="shape-container p-4" data-testid="portrait-numbers">
             <summary className="cursor-pointer type-heading">The numbers</summary>

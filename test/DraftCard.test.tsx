@@ -49,7 +49,7 @@ const refusedRecord: DraftRecord = {
   refused: true,
 };
 
-describe("DraftCard — Send / Edit / Ignore (the correction loop's only input)", () => {
+describe("DraftCard — Send / Edit / Dismiss (the correction loop's only input)", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
   });
@@ -96,11 +96,11 @@ describe("DraftCard — Send / Edit / Ignore (the correction loop's only input)"
     expect(screen.getByText("Send edited")).toBeDisabled();
   });
 
-  it("Ignore posts the outcome as \"discarded\" once its undo window has lapsed", async () => {
+  it("Dismiss posts the outcome as \"discarded\" once its undo window has lapsed", async () => {
     vi.useFakeTimers();
     try {
       renderWithClient(<DraftCard api={api} draft={draftRecord} />);
-      fireEvent.click(screen.getByText("Ignore"));
+      fireEvent.click(screen.getByText("Dismiss"));
       // Async advancer: the mutation itself starts in a microtask, so the
       // flush has to let microtasks run between timer callbacks.
       await vi.advanceTimersByTimeAsync(IGNORE_UNDO_WINDOW_MS);
@@ -112,7 +112,7 @@ describe("DraftCard — Send / Edit / Ignore (the correction loop's only input)"
     }
   });
 
-  it("an escalated draft shows the reason and an answer box, not Send/Edit/Ignore", () => {
+  it("an escalated draft shows the reason and an answer box, not Send/Edit/Dismiss", () => {
     renderWithClient(<DraftCard api={api} draft={escalatedRecord} />);
     expect(screen.getByTestId("escalation-reason")).toHaveTextContent("no supporting evidence");
     expect(screen.queryByText("Send")).toBeNull();
@@ -258,11 +258,11 @@ describe("#30 — a self-asked draft answers you, it doesn't reply to anyone", (
     return JSON.parse((call![1] as RequestInit).body as string) as Record<string, unknown>;
   }
 
-  it("an owner-origin draft offers Keep / Edit / Ignore — no Send to a recipient that does not exist", () => {
+  it("an owner-origin draft offers Keep / Edit / Dismiss — no Send to a recipient that does not exist", () => {
     renderWithClient(<DraftCard api={api} draft={selfAsked} />);
     expect(screen.getByText("Keep", { selector: "button" })).toBeInTheDocument();
     expect(screen.getByText("Edit", { selector: "button" })).toBeInTheDocument();
-    expect(screen.getByText("Ignore", { selector: "button" })).toBeInTheDocument();
+    expect(screen.getByText("Dismiss", { selector: "button" })).toBeInTheDocument();
     expect(screen.queryByText(/^Send/, { selector: "button" })).toBeNull();
 
     fireEvent.click(screen.getByText("Edit"));
@@ -289,12 +289,12 @@ describe("#30 — a self-asked draft answers you, it doesn't reply to anyone", (
     expect(postedOutcomeBody("drafts/s1/outcome")).toEqual({ outcome: "sent" });
   });
 
-  it("ignoring your own draft says \"not final yet\" — nothing was ever being sent anywhere", () => {
+  it("dismissing your own draft says \"not final yet\" — nothing was ever being sent anywhere", () => {
     vi.useFakeTimers();
     try {
       renderWithClient(<DraftCard api={api} draft={selfAsked} />);
-      fireEvent.click(screen.getByText("Ignore"));
-      expect(screen.getByTestId("ignore-window")).toHaveTextContent("Ignoring — not final yet.");
+      fireEvent.click(screen.getByText("Dismiss"));
+      expect(screen.getByTestId("ignore-window")).toHaveTextContent("Dismissing — not final yet.");
       expect(screen.getByText("Undo")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -324,23 +324,23 @@ describe("#30 — a self-asked draft answers you, it doesn't reply to anyone", (
     renderWithClient(<DraftCard api={api} draft={staleCached} />);
     expect(screen.getByText("Send", { selector: "button" })).toBeInTheDocument();
     expect(screen.getByText("Edit", { selector: "button" })).toBeInTheDocument();
-    expect(screen.getByText("Ignore", { selector: "button" })).toBeInTheDocument();
+    expect(screen.getByText("Dismiss", { selector: "button" })).toBeInTheDocument();
     expect(screen.queryByText(/Keep/, { selector: "button" })).toBeNull();
   });
 
-  it("a channel-borne draft's ignore window still says \"not sent yet\" — the wording split is provenance-based, not cosmetic", () => {
+  it("a channel-borne draft's dismiss window still says \"not sent yet\" — the wording split is provenance-based, not cosmetic", () => {
     vi.useFakeTimers();
     try {
       renderWithClient(<DraftCard api={api} draft={channelAsked} />);
-      fireEvent.click(screen.getByText("Ignore"));
-      expect(screen.getByTestId("ignore-window")).toHaveTextContent("Ignoring — not sent yet.");
+      fireEvent.click(screen.getByText("Dismiss"));
+      expect(screen.getByTestId("ignore-window")).toHaveTextContent("Dismissing — not sent yet.");
     } finally {
       vi.useRealTimers();
     }
   });
 });
 
-describe("#24 — a mis-click on Ignore is recoverable", () => {
+describe("#24 — a mis-click on Dismiss is recoverable", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
   });
@@ -348,18 +348,18 @@ describe("#24 — a mis-click on Ignore is recoverable", () => {
     vi.unstubAllGlobals();
   });
 
-  it("Ignore opens an undo window instead of posting — the discard is held client-side, not sent", () => {
+  it("Dismiss opens an undo window instead of posting — the discard is held client-side, not sent", () => {
     vi.useFakeTimers();
     try {
       renderWithClient(<DraftCard api={api} draft={draftRecord} />);
-      fireEvent.click(screen.getByText("Ignore"));
+      fireEvent.click(screen.getByText("Dismiss"));
 
       // AC2: the window holds the mutation before sending it — nothing is
       // on the wire while undo is still possible.
       expect(fetch).not.toHaveBeenCalled();
       expect(screen.getByTestId("ignore-window")).toBeInTheDocument();
       expect(screen.getByText("Undo")).toBeInTheDocument();
-      // The action row is replaced by the window — no second Ignore, no Send.
+      // The action row is replaced by the window — no second Dismiss, no Send.
       expect(screen.queryByText("Send", { selector: "button" })).toBeNull();
       expect(screen.queryByText("Edit", { selector: "button" })).toBeNull();
     } finally {
@@ -371,13 +371,13 @@ describe("#24 — a mis-click on Ignore is recoverable", () => {
     vi.useFakeTimers();
     try {
       renderWithClient(<DraftCard api={api} draft={draftRecord} />);
-      fireEvent.click(screen.getByText("Ignore"));
+      fireEvent.click(screen.getByText("Dismiss"));
       fireEvent.click(screen.getByText("Undo"));
 
       // The card is back: the draft never left Review, and its controls
       // returned exactly as they were.
       expect(screen.getByText("Send", { selector: "button" })).toBeInTheDocument();
-      expect(screen.getByText("Ignore", { selector: "button" })).toBeInTheDocument();
+      expect(screen.getByText("Dismiss", { selector: "button" })).toBeInTheDocument();
       expect(screen.queryByTestId("ignore-window")).toBeNull();
 
       // Well past the window: the cancelled discard must never fire.
@@ -392,7 +392,7 @@ describe("#24 — a mis-click on Ignore is recoverable", () => {
     vi.useFakeTimers();
     try {
       renderWithClient(<DraftCard api={api} draft={draftRecord} />);
-      fireEvent.click(screen.getByText("Ignore"));
+      fireEvent.click(screen.getByText("Dismiss"));
 
       await vi.advanceTimersByTimeAsync(IGNORE_UNDO_WINDOW_MS - 1);
       expect(fetch).not.toHaveBeenCalled();

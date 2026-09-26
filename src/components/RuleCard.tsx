@@ -54,12 +54,12 @@ export function RuleCard({ api, rule, bucket }: { api: DuoApiConfig; rule: Rule;
     <div className="flex flex-col gap-2 shape-entry p-4" data-testid="rule-card">
       <DuoMessage>{rule.text}</DuoMessage>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 type-provenance text-[var(--muted)]" data-testid="rule-meta">
-        <span>{rule.origin === "owner_asserted" ? "you asserted" : "derived"}</span>
+        <span>{rule.origin === "owner_asserted" ? "you wrote this" : "worked out from your messages"}</span>
         <span>
-          observed {rule.supportCount} time{rule.supportCount === 1 ? "" : "s"}
+          seen {rule.supportCount} time{rule.supportCount === 1 ? "" : "s"}
         </span>
         <span className="flex w-24 items-center gap-2">
-          consistency
+          how consistent
           <MeterBar value={rule.consistency} testId="rule-consistency" />
         </span>
         {rule.lastConfirmedAt && <span>last confirmed {new Date(rule.lastConfirmedAt).toLocaleDateString()}</span>}

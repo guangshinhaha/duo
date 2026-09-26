@@ -54,7 +54,7 @@ export function InterruptionPortraitView({ portrait }: { portrait: InterruptionP
         <h2 className="type-heading">Interruption portrait</h2>
         <p className="type-provenance text-[var(--muted)]">
           {portrait.totalQuestions} question{portrait.totalQuestions === 1 ? "" : "s"} · {formatDate(portrait.periodStart)} –{" "}
-          {formatDate(portrait.periodEnd)} · derived by your duo
+          {formatDate(portrait.periodEnd)} · worked out by your duo
         </p>
       </div>
       <div className="flex flex-col gap-1" data-testid="portrait-top-five">

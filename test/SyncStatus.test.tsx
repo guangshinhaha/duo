@@ -167,7 +167,7 @@ describe("#58 — two connections, two health states", () => {
     });
     // AR-15: duo actions are disabled, not queued, while the daemon is quiet.
     expect((screen.getByText("Send", { selector: "button" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByText("Ignore", { selector: "button" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText("Dismiss", { selector: "button" }) as HTMLButtonElement).disabled).toBe(true);
 
     // The workspace surface keeps working through the daemon outage…
     await act(async () => {

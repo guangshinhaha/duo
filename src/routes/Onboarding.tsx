@@ -224,7 +224,7 @@ function EmbedStep({
 
   let body: ReactNode;
   if (!imported) {
-    body = <p className="type-body text-[var(--muted)]">Waits for records to embed.</p>;
+    body = <p className="type-body text-[var(--muted)]">Waits for your messages and notes to be read.</p>;
   } else {
     const shown = status && status.state !== "idle" ? status : null;
     body = (
@@ -244,7 +244,7 @@ function EmbedStep({
               <MeterBar value={shown.total > 0 ? shown.embedded / shown.total : 0} />
             </div>
             <span className="type-provenance text-[var(--muted)]">
-              {running && shown.total === 0 ? "Starting…" : `${shown.embedded} of ${shown.total} records embedded`}
+              {running && shown.total === 0 ? "Starting…" : `${shown.embedded} of ${shown.total} messages and notes read`}
             </span>
           </div>
         )}
@@ -356,7 +356,7 @@ function DeriveStep({
           {/* The daemon's own counts, as `GET /knowledge` reports them — read, never recomputed. */}
           <p className="type-provenance text-[var(--muted)]" data-testid="derive-progress">
             {plural(knowledge.corpus.totalQuestions, "question")} found · {plural(knowledge.corpus.topicBreakdown.length, "topic")} ·{" "}
-            {plural(rules, "rule")} derived
+            {plural(rules, "rule")} worked out
           </p>
           {status?.state === "done" && rules === 0 && (
             <p className="type-body text-[var(--muted)]" data-testid="derive-no-rules">
@@ -460,7 +460,7 @@ export function Onboarding({ api, onFinish, pollMs = POLL_MS }: { api: DuoApiCon
       <header className="flex flex-col gap-1">
         <h1 className="type-heading">Build your duo</h1>
         <p className="type-provenance text-[var(--muted)]">
-          Import your history, let it be embedded and derived, then approve or reject what your duo learned. You never write it — you approve a draft of it.
+          Import your history, let your duo read it and work out rules, then approve or reject what your duo learned. You never write it — you approve a draft of it.
         </p>
       </header>
       <ol aria-label="Steps" className="flex max-w-xl flex-col gap-4">

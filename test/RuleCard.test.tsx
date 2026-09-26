@@ -63,7 +63,7 @@ describe("RuleCard — read and disposition only (AR-18), never authoring", () =
 
   it("shows support count without ever rendering a percentage numeral", () => {
     renderWithClient(<RuleCard api={api} rule={ruleFor({ supportCount: 3 })} bucket="awaitingApproval" />);
-    expect(screen.getByTestId("rule-meta")).toHaveTextContent("observed 3 times");
+    expect(screen.getByTestId("rule-meta")).toHaveTextContent("seen 3 times");
     expect(screen.getByTestId("rule-card")).not.toHaveTextContent("%");
   });
 
