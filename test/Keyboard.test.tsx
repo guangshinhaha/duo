@@ -84,7 +84,7 @@ describe("#36 AC1 — a draft is decidable from the keyboard", () => {
 
     // Reachable without a pointer: real buttons, so Tab walks straight into them.
     const actions = [...tray.querySelectorAll("button")].map((button) => button.textContent);
-    expect(actions).toEqual(["Send⏎", "EditE", "DismissX"]);
+    expect(actions).toEqual(["Why?", "Send⏎", "EditE", "DismissX"]);
     // The key hints are a courtesy for sighted keyboard users; the accessible names stay plain.
     expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();

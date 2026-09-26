@@ -112,7 +112,8 @@ describe("#142 — the tray says whose it is, how sure it is, and who can see it
 
     mount(<DraftTray api={api} draft={refused} />);
     expect(screen.getByTestId("draft-tray-line")).toHaveTextContent("Your duo refused this one.");
-    expect(screen.queryByRole("button")).toBeNull();
+    // Nothing to decide — only the way to read why (no inspector beside it here).
+    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Why?"]);
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 });

@@ -1,16 +1,21 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, PanelRight, X } from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
 import { Mark } from "../components/Mark.js";
 import { OfflineBar } from "../components/OfflineBar.js";
 import { useFirstRunRedirect } from "../routes/Onboarding.js";
 import { setDockBadgeCount } from "../dockBadge.js";
 import { setTrayPendingCount } from "../tray.js";
-import type { WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
+import type {
+  WorkspaceConnection,
+  WorkspaceSession,
+} from "../workspace/matrix.js";
 import { ChatList } from "./ChatList.js";
 import { useWaitingCount } from "./waiting.js";
 import { DESKTOP_QUERY, useMediaQuery } from "./useMediaQuery.js";
+import { InspectorBody, useInspectorTarget } from "./Inspector.js";
+import { InspectorVisibleProvider } from "./InspectorContext.js";
 import type { Route } from "./routes.js";
 
 /**
@@ -32,6 +37,30 @@ function WaitingMirror({ api }: { api: DuoApiConfig }) {
     };
   }, [count]);
   return null;
+}
+
+/** The inspector column needs room for three columns; below this it gives way and the tray's Why? sheet takes over. */
+export const INSPECTOR_QUERY = "(min-width: 1100px)";
+const INSPECTOR_KEY = "duo.inspector";
+
+/** Whether the owner wants the inspector on — remembered on this device, on by default. */
+function useInspectorPreference(): [boolean, (open: boolean) => void] {
+  const [open, setOpenState] = useState(() => {
+    try {
+      return localStorage.getItem(INSPECTOR_KEY) !== "closed";
+    } catch {
+      return true;
+    }
+  });
+  const setOpen = (next: boolean): void => {
+    setOpenState(next);
+    try {
+      localStorage.setItem(INSPECTOR_KEY, next ? "open" : "closed");
+    } catch {
+      // not remembered: it simply follows this session
+    }
+  };
+  return [open, setOpen];
 }
 
 const FILTER_KEY = "duo.waiting-filter";
@@ -77,7 +106,10 @@ function FirstRun({ api }: { api: DuoApiConfig }) {
 /** The pane's face when no chat is open (desktop, on the chat list itself). */
 function EmptyPane({ hasDuo }: { hasDuo: boolean }) {
   return (
-    <div className="m-auto flex max-w-sm flex-col items-center gap-3 p-6 text-center" data-testid="chats-empty-pane">
+    <div
+      className="m-auto flex max-w-sm flex-col items-center gap-3 p-6 text-center"
+      data-testid="chats-empty-pane"
+    >
       <Mark />
       <h1 className="type-heading">Your chats</h1>
       <p className="type-body text-[var(--muted)]">
@@ -86,7 +118,10 @@ function EmptyPane({ hasDuo }: { hasDuo: boolean }) {
           : "Pick a conversation to start."}
       </p>
       {hasDuo && (
-        <a className="inline-flex min-h-11 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body" href="#duo">
+        <a
+          className="inline-flex min-h-11 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body"
+          href="#duo"
+        >
           Ask your duo
         </a>
       )}
@@ -138,6 +173,25 @@ export function ChatShell({
   const filterWaiting = useWaitingFilter(route);
   const showList = desktop || atHome;
   const showPane = desktop || !atHome;
+  // The inspector (docs/design-language.md §6.2): why a draft says what it says, at zero clicks — a third column when there is room and something to inspect.
+  const wide = useMediaQuery(INSPECTOR_QUERY);
+  const target = useInspectorTarget(api, connection, route);
+  const [inspectorOn, setInspectorOn] = useInspectorPreference();
+  const showInspector = desktop && wide && target !== null && inspectorOn;
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.altKey &&
+        e.key.toLowerCase() === "i"
+      ) {
+        e.preventDefault();
+        setInspectorOn(!inspectorOn);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
   // The page has exactly one main landmark: the open surface — or, on a
   // phone's home screen where the list is all there is, the list itself.
   const ListTag = showPane ? "aside" : "main";
@@ -146,50 +200,93 @@ export function ChatShell({
       {banners}
       <OfflineBar />
       {api && <WaitingMirror api={api} />}
-      {api && (route === "chats" || route === "waiting") && <FirstRun api={api} />}
-      <div className="flex min-h-0 flex-1">
-        {showList && (
-          <ListTag
-            aria-label="Chats"
-            className="flex min-h-0 w-full flex-col bg-[var(--surface)] md:w-80 md:shrink-0 md:border-r md:border-[var(--edge)]"
-            data-testid="chat-list-column"
-          >
-            <ChatList
-              api={api}
-              connection={connection}
-              filterWaiting={filterWaiting}
-              footer={footer}
-              onPairDuo={onPairDuo}
-              onSignIn={onSignIn}
-              onSignOutWorkspace={onSignOutWorkspace}
-              route={route}
-              session={session}
-              titleAs={showPane ? "h2" : "h1"}
-              workspaceError={workspaceError}
-            />
-          </ListTag>
-        )}
-        {showPane && (
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {!desktop && (
-              <header className="flex items-center border-b border-[var(--edge)] px-2" data-testid="mobile-topbar">
-                <a
-                  aria-label="Back to chats"
-                  className="inline-flex min-h-11 items-center gap-1 rounded-[var(--r-sm)] px-2 type-body text-[var(--muted)]"
-                  data-testid="mobile-back"
-                  href="#chats"
+      {api && (route === "chats" || route === "waiting") && (
+        <FirstRun api={api} />
+      )}
+      <InspectorVisibleProvider value={showInspector}>
+        <div className="flex min-h-0 flex-1">
+          {showList && (
+            <ListTag
+              aria-label="Chats"
+              className="flex min-h-0 w-full flex-col bg-[var(--surface)] md:w-80 md:shrink-0 md:border-r md:border-[var(--edge)]"
+              data-testid="chat-list-column"
+            >
+              <ChatList
+                api={api}
+                connection={connection}
+                filterWaiting={filterWaiting}
+                footer={footer}
+                onPairDuo={onPairDuo}
+                onSignIn={onSignIn}
+                onSignOutWorkspace={onSignOutWorkspace}
+                route={route}
+                session={session}
+                titleAs={showPane ? "h2" : "h1"}
+                workspaceError={workspaceError}
+              />
+            </ListTag>
+          )}
+          {showPane && (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {!desktop && (
+                <header
+                  className="flex items-center border-b border-[var(--edge)] px-2"
+                  data-testid="mobile-topbar"
                 >
-                  <ChevronLeft aria-hidden="true" size={18} />
-                  Chats
-                </a>
-              </header>
-            )}
-            <main className="min-h-0 flex-1 overflow-y-auto" data-testid="pane">
-              {route === "chats" ? <EmptyPane hasDuo={api !== null} /> : pane}
-            </main>
-          </div>
-        )}
-      </div>
+                  <a
+                    aria-label="Back to chats"
+                    className="inline-flex min-h-11 items-center gap-1 rounded-[var(--r-sm)] px-2 type-body text-[var(--muted)]"
+                    data-testid="mobile-back"
+                    href="#chats"
+                  >
+                    <ChevronLeft aria-hidden="true" size={18} />
+                    Chats
+                  </a>
+                </header>
+              )}
+              <main
+                className="relative min-h-0 flex-1 overflow-y-auto"
+                data-testid="pane"
+              >
+                {route === "chats" ? <EmptyPane hasDuo={api !== null} /> : pane}
+                {desktop && wide && target !== null && !inspectorOn && (
+                  <button
+                    aria-label="Show details (⌘I)"
+                    className="absolute right-4 top-4 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface)] text-[var(--muted)]"
+                    data-testid="inspector-show"
+                    onClick={() => setInspectorOn(true)}
+                    type="button"
+                  >
+                    <PanelRight aria-label="Show details" size={18} />
+                  </button>
+                )}
+              </main>
+            </div>
+          )}
+          {showInspector && target && (
+            <aside
+              aria-label="Details"
+              className="flex min-h-0 w-80 shrink-0 flex-col overflow-y-auto border-l border-[var(--edge)] bg-[var(--surface)]"
+              data-testid="inspector"
+            >
+              <div className="flex justify-end px-2 pt-2">
+                <button
+                  aria-label="Hide details (⌘I)"
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--muted)]"
+                  data-testid="inspector-hide"
+                  onClick={() => setInspectorOn(false)}
+                  type="button"
+                >
+                  <X aria-label="Hide details" size={18} />
+                </button>
+              </div>
+              <div className="p-4 pt-0">
+                <InspectorBody target={target} />
+              </div>
+            </aside>
+          )}
+        </div>
+      </InspectorVisibleProvider>
       {overlays}
     </div>
   );

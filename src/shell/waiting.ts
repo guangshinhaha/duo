@@ -4,8 +4,7 @@ import { usePendingDrafts, usePendingT4 } from "../api/queries.js";
 import type { DraftRecord, PendingT4RequestForJudgement } from "../api/types.js";
 import { hairlineState, type HairlineState } from "../components/ConfidenceHairline.js";
 import { toDraftPipelineResult } from "../components/DraftCard.js";
-import { isOwnTurn } from "../routes/Duo.js";
-import { conversationOf } from "../workspace/drafts.js";
+import { conversationOf, isOwnTurn } from "../workspace/drafts.js";
 import { roomHref } from "../workspace/links.js";
 import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
 
