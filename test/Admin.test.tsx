@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { dehydrate, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
@@ -6,6 +6,7 @@ import { App } from "../src/App.js";
 import { Admin } from "../src/routes/Admin.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { HostedOrg } from "../src/api/hosted.js";
+import { queryKeys, shouldPersistQuery } from "../src/api/queries.js";
 
 vi.mock("../src/notifications.js", () => ({
   draftArrivalBody: vi.fn(() => null),
@@ -356,5 +357,230 @@ describe("#128 — one org", () => {
     fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
     expect(await screen.findByTestId("mutation-error")).toHaveTextContent('There is no org "plat1".');
+  });
+});
+
+describe("#128 — review fixes", () => {
+  const AGENCY: HostedOrg = { id: "agency2", name: "Agency", createdAt: "2026-09-22T00:00:00.000Z", memberCount: 0 };
+  const MINTED = {
+    id: "i1",
+    name: "Sam",
+    email: null,
+    orgId: "plat1",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    code: "c0de",
+    link: "https://web.example/#join?host=x&invite=c0de",
+  };
+
+  it("a hash change straight from one org to another drops the invite link made for the first", async () => {
+    signInAs(true);
+    daemon({
+      "GET /hosted/orgs": () => json([PLATFORM, AGENCY]),
+      "POST /hosted/invites": () => json(MINTED, 201),
+    });
+    window.location.hash = "#admin/plat1";
+    await renderShell();
+    fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    const minted = await screen.findByTestId("admin-invite-minted");
+    expect(minted).toHaveTextContent("Sam's invite to Platform team");
+    expect(screen.getByTestId("admin-invite-link")).toHaveTextContent("invite=c0de");
+
+    act(() => {
+      window.location.hash = "#admin/agency2";
+    });
+    expect(await screen.findByRole("heading", { name: "Invite someone into Agency" })).toBeInTheDocument();
+    expect(screen.queryByTestId("admin-invite-minted")).toBeNull();
+    expect(screen.queryByTestId("admin-invite-link")).toBeNull();
+  });
+
+  it("the minted result takes focus and is a polite live region", async () => {
+    daemon({
+      "GET /hosted/orgs": () => json([PLATFORM]),
+      "GET /hosted/orgs/plat1/members": () => json([]),
+      "POST /hosted/invites": () => json(MINTED, 201),
+    });
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    const minted = await screen.findByTestId("admin-invite-minted");
+    expect(minted).toHaveAttribute("aria-live", "polite");
+    expect(minted).toHaveAttribute("tabindex", "-1");
+    await waitFor(() => expect(minted).toHaveFocus());
+  });
+
+  it("with no link the button is named 'Copy invite code' and the explanation sits in the sentence above", async () => {
+    daemon({
+      "GET /hosted/orgs": () => json([PLATFORM]),
+      "GET /hosted/orgs/plat1/members": () => json([]),
+      "POST /hosted/invites": () => json({ ...MINTED, link: null }, 201),
+    });
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    expect(await screen.findByRole("button", { name: "Copy invite code" })).toBeInTheDocument();
+    expect(screen.getByTestId("admin-invite-minted")).toHaveTextContent("doesn't know its public address");
+  });
+
+  it("Rename moves focus into the input; Cancel and a saved name hand it back to the button", async () => {
+    let name = PLATFORM.name;
+    daemon({
+      "GET /hosted/orgs": () => json([{ ...PLATFORM, name }]),
+      "GET /hosted/orgs/plat1/members": () => json([]),
+      "POST /hosted/orgs/plat1/rename": (init) => {
+        name = (JSON.parse(String(init?.body)) as { name: string }).name;
+        return json({ ...PLATFORM, name });
+      },
+    });
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    fireEvent.click(await screen.findByTestId("admin-rename"));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "New name" })).toHaveFocus());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.getByTestId("admin-rename")).toHaveFocus());
+
+    fireEvent.click(screen.getByTestId("admin-rename"));
+    fireEvent.change(await screen.findByRole("textbox", { name: "New name" }), { target: { value: "Platform" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() => expect(screen.getByTestId("admin-org-name").textContent).toBe("Platform"));
+    await waitFor(() => expect(screen.getByTestId("admin-rename")).toHaveFocus());
+  });
+
+  it("after a create, the note points at the list above", async () => {
+    daemon({
+      "GET /hosted/orgs": () => json([]),
+      "POST /hosted/orgs": () => json({ ...AGENCY }, 201),
+    });
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Name of the org" }), { target: { value: "Agency" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create org" }));
+    expect(await screen.findByTestId("admin-org-created")).toHaveTextContent("Open it in the list above to invite people in.");
+  });
+});
+
+describe("#128 — what rests in the persisted cache", () => {
+  it("leaves out the orgs, each org's people and the invites, and keeps the rest", async () => {
+    const client = new QueryClient();
+    const keys: (readonly unknown[])[] = [
+      queryKeys.hostedOrgs,
+      queryKeys.hostedOrgMembers("plat1"),
+      queryKeys.hostedInvites,
+      ["workspace", "search", "q"],
+      queryKeys.devices,
+    ];
+    await Promise.all(keys.map((queryKey) => client.prefetchQuery({ queryKey, queryFn: async () => "x" })));
+    const persisted = dehydrate(client, { shouldDehydrateQuery: shouldPersistQuery }).queries.map((q) => q.queryKey);
+    expect(persisted).toEqual([queryKeys.devices]);
+  });
+});
+
+describe("#128 — the token goes only to the server the app is paired with", () => {
+  it("a stored account for another origin is no admin here: no entry, the plain note, no request anywhere", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify(api));
+    localStorage.setItem("duo.hosted-account", JSON.stringify({ origin: "https://elsewhere.example.org", ownerName: "Shin", isAdmin: true }));
+    const mock = daemon({});
+    window.location.hash = "#admin";
+    await renderShell();
+    expect(within(screen.getByRole("navigation", { name: "Surfaces" })).queryByRole("link", { name: "Admin" })).toBeNull();
+    expect(screen.getByTestId("admin-not-available")).toBeInTheDocument();
+    expect(mock.mock.calls.filter(([input]) => String(input).includes("/hosted/"))).toHaveLength(0);
+  });
+
+  it("the admin calls go to the origin of api.baseUrl, path and all stripped", async () => {
+    signInAs(true);
+    const mock = daemon({ "GET /hosted/orgs": () => json([PLATFORM]) });
+    window.location.hash = "#admin";
+    await renderShell();
+    await screen.findByTestId("admin-orgs");
+    const [url] = callsTo(mock, "GET", "/hosted/orgs")[0]!;
+    expect(new URL(String(url)).origin).toBe(ORIGIN);
+  });
+});
+
+describe("#128 — addresses that aren't an org", () => {
+  it("a non-admin on #admin/<id> gets the plain note and asks the daemon nothing", async () => {
+    signInAs(false);
+    const mock = daemon({});
+    window.location.hash = "#admin/plat1";
+    await renderShell();
+    expect(screen.getByTestId("admin-not-available")).toBeInTheDocument();
+    expect(mock.mock.calls.filter(([input]) => String(input).includes("/hosted/"))).toHaveLength(0);
+  });
+
+  it.each(["#admin/", "#admin/%E0%A4%A"])("%s is the org list, and no org's people are asked for", async (hash) => {
+    signInAs(true);
+    const mock = daemon({ "GET /hosted/orgs": () => json([PLATFORM]) });
+    window.location.hash = hash;
+    await renderShell();
+    expect(await screen.findByTestId("admin-orgs")).toBeInTheDocument();
+    expect(screen.queryByTestId("admin-org-page")).toBeNull();
+    expect(mock.mock.calls.filter(([input]) => String(input).endsWith("/members"))).toHaveLength(0);
+  });
+
+  it("an id with characters that need encoding travels encoded in the members and rename paths", async () => {
+    const odd: HostedOrg = { ...PLATFORM, id: "x y/z" };
+    const mock = daemon({
+      "GET /hosted/orgs": () => json([odd]),
+      "GET /hosted/orgs/x%20y%2Fz/members": () => json([]),
+      "POST /hosted/orgs/x%20y%2Fz/rename": () => json({ ...odd, name: "Renamed" }),
+    });
+    withClient(<Admin api={api} origin={ORIGIN} orgId="x y/z" />);
+    await screen.findByTestId("admin-members-empty");
+    expect(callsTo(mock, "GET", "/hosted/orgs/x%20y%2Fz/members")).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("admin-rename"));
+    fireEvent.change(screen.getByRole("textbox", { name: "New name" }), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() => expect(callsTo(mock, "POST", "/hosted/orgs/x%20y%2Fz/rename")).toHaveLength(1));
+  });
+});
+
+describe("#128 — the daemon says no", () => {
+  const orgRoutes = { "GET /hosted/orgs": () => json([PLATFORM]) };
+
+  it.each([401, 403])("a %i on the people is the plain note", async (status) => {
+    daemon({ ...orgRoutes, "GET /hosted/orgs/plat1/members": () => json({ error: { code: "forbidden", message: "Only an admin can do this." } }, status) });
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    expect(await screen.findByTestId("admin-not-available")).toBeInTheDocument();
+    expect(screen.queryByTestId("admin-org-page")).toBeNull();
+  });
+
+  it("a 404 on the people says so and offers Try again, which asks again", async () => {
+    let ok = false;
+    const mock = daemon({
+      ...orgRoutes,
+      "GET /hosted/orgs/plat1/members": () => (ok ? json([]) : json({ error: { code: "org_not_found", message: 'There is no org "plat1".' } }, 404)),
+    });
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    expect(await screen.findByTestId("admin-members-error")).toHaveTextContent('There is no org "plat1".');
+    ok = true;
+    fireEvent.click(screen.getByTestId("admin-members-retry"));
+    expect(await screen.findByTestId("admin-members-empty")).toBeInTheDocument();
+    expect(callsTo(mock, "GET", "/hosted/orgs/plat1/members")).toHaveLength(2);
+  });
+
+  it.each([401, 403, 404])("a %i on rename shows the daemon's words and leaves the form open", async (status) => {
+    daemon({
+      ...orgRoutes,
+      "GET /hosted/orgs/plat1/members": () => json([]),
+      "POST /hosted/orgs/plat1/rename": () => json({ error: { code: "no", message: `Refused with ${status}.` } }, status),
+    });
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    fireEvent.click(await screen.findByTestId("admin-rename"));
+    fireEvent.change(screen.getByRole("textbox", { name: "New name" }), { target: { value: "Other" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    expect(await screen.findByTestId("mutation-error")).toHaveTextContent(`Refused with ${status}.`);
+    expect(screen.getByRole("textbox", { name: "New name" })).toBeInTheDocument();
+  });
+
+  it.each([401, 403, 404])("a %i on an invite shows the daemon's words and no link", async (status) => {
+    daemon({
+      ...orgRoutes,
+      "GET /hosted/orgs/plat1/members": () => json([]),
+      "POST /hosted/invites": () => json({ error: { code: "no", message: `Refused with ${status}.` } }, status),
+    });
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    expect(await screen.findByTestId("mutation-error")).toHaveTextContent(`Refused with ${status}.`);
+    expect(screen.queryByTestId("admin-invite-minted")).toBeNull();
   });
 });

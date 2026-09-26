@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiRequestError, type DuoApiConfig } from "../api/client.js";
 import type { HostedOrg, HostedOrgMember } from "../api/hosted.js";
 import {
@@ -107,7 +107,7 @@ function CreateOrg({ api, origin }: { api: DuoApiConfig; origin: string }) {
       </form>
       {created && (
         <p className="type-body" data-testid="admin-org-created" role="status">
-          Created {created}. Open it below to invite people in.
+          Created {created}. Open it in the list above to invite people in.
         </p>
       )}
       <MutationError error={create.error} />
@@ -183,11 +183,25 @@ function RenameOrg({ api, origin, org }: { api: DuoApiConfig; origin: string; or
   const [name, setName] = useState(org.name);
   const rename = useRenameHostedOrg(origin, api);
   const trimmed = name.trim();
+  // The Rename button and the form replace each other, so focus is handed over by hand: into the
+  // input when editing starts, back to the button when it ends (Cancel or a saved name).
+  const inputRef = useRef<HTMLInputElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+    } else if (wasEditing.current) {
+      buttonRef.current?.focus();
+    }
+    wasEditing.current = editing;
+  }, [editing]);
   if (!editing) {
     return (
       <button
         className={`${quietButton} self-start`}
         data-testid="admin-rename"
+        ref={buttonRef}
         onClick={() => {
           setName(org.name);
           rename.reset();
@@ -212,7 +226,7 @@ function RenameOrg({ api, origin, org }: { api: DuoApiConfig; origin: string; or
       >
         <label className="flex min-w-0 flex-col gap-1 type-body">
           New name
-          <input className={field} onChange={(e) => setName(e.target.value)} value={name} />
+          <input className={field} onChange={(e) => setName(e.target.value)} ref={inputRef} value={name} />
         </label>
         <button className={primaryButton} disabled={rename.isPending || trimmed.length === 0 || trimmed === org.name} type="submit">
           {rename.isPending ? "Saving…" : "Save name"}
@@ -234,6 +248,14 @@ function InviteIntoOrg({ api, origin, org }: { api: DuoApiConfig; origin: string
   const minted = create.data;
   const emailValid = email.trim() === "" || email.includes("@");
   const trimmed = name.trim();
+  // The form clears and its button disables when the link is made, so focus would be lost: move it
+  // to the result, which is also announced. The link is shown only once.
+  const resultRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (minted) {
+      resultRef.current?.focus();
+    }
+  }, [minted]);
   return (
     <section className="shape-container flex flex-col gap-3 p-4" data-testid="admin-invite">
       <h2 className="type-heading">Invite someone into {org.name}</h2>
@@ -270,19 +292,17 @@ function InviteIntoOrg({ api, origin, org }: { api: DuoApiConfig; origin: string
         </button>
       </form>
       {minted && (
-        <div className="flex flex-col gap-2" data-testid="admin-invite-minted">
+        <div aria-live="polite" className="flex flex-col gap-2" data-testid="admin-invite-minted" ref={resultRef} role="status" tabIndex={-1}>
           <p className="type-body">
-            {minted.name}&apos;s invite{minted.email ? ` (only ${minted.email} can use it)` : ""} — send it now. It won&apos;t be shown again, works
-            once, and expires <Timestamp iso={minted.expiresAt} />.
+            {minted.name}&apos;s invite to {org.name}
+            {minted.email ? ` (only ${minted.email} can use it)` : ""} — send it now. It won&apos;t be shown again, works once, and expires{" "}
+            <Timestamp iso={minted.expiresAt} />.
+            {!minted.link && " This server doesn't know its public address, so there is no link to send, only the code below."}
           </p>
           {minted.link ? (
             <CopyableSecret label="Invite link" testId="admin-invite-link" value={minted.link} />
           ) : (
-            <CopyableSecret
-              label="Invite code (this server doesn't know its public address, so there's no link)"
-              testId="admin-invite-code"
-              value={minted.code}
-            />
+            <CopyableSecret label="Invite code" testId="admin-invite-code" value={minted.code} />
           )}
         </div>
       )}
@@ -291,8 +311,7 @@ function InviteIntoOrg({ api, origin, org }: { api: DuoApiConfig; origin: string
   );
 }
 
-function Members({ api, origin, orgId }: { api: DuoApiConfig; origin: string; orgId: string }) {
-  const members = useHostedOrgMembers(origin, api, orgId);
+function Members({ members }: { members: ReturnType<typeof useHostedOrgMembers> }) {
   const rows = Array.isArray(members.data) ? members.data : [];
   return (
     <section className="flex flex-col gap-3" data-testid="admin-members">
@@ -302,9 +321,14 @@ function Members({ api, origin, orgId }: { api: DuoApiConfig; origin: string; or
           Loading people…
         </p>
       ) : members.error ? (
-        <p className="type-provenance text-[var(--refused)]" role="alert">
-          {members.error instanceof Error ? members.error.message : "The server could not list this org's people."}
-        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="type-provenance text-[var(--refused)]" data-testid="admin-members-error" role="alert">
+            {members.error instanceof Error ? members.error.message : "The server could not list this org's people."}
+          </p>
+          <button className={quietButton} data-testid="admin-members-retry" onClick={() => void members.refetch()} type="button">
+            Try again
+          </button>
+        </div>
       ) : rows.length > 0 ? (
         <ul className="flex flex-col gap-2">
           {rows.map((member) => (
@@ -317,6 +341,30 @@ function Members({ api, origin, orgId }: { api: DuoApiConfig; origin: string; or
         </p>
       )}
     </section>
+  );
+}
+
+/** The page of an org that exists. Its people are asked for only now, so an address the list doesn't confirm never reaches the daemon. */
+function OrgBody({ api, back, org, origin }: { api: DuoApiConfig; back: ReactNode; org: HostedOrg; origin: string }) {
+  const members = useHostedOrgMembers(origin, api, org.id);
+  if (isNotAdmin(members.error)) {
+    return <NotAvailable />;
+  }
+  return (
+    <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-testid="admin-org-page">
+      {back}
+      <header className="flex flex-col gap-2">
+        <h1 className="type-heading" data-testid="admin-org-name">
+          {org.name}
+        </h1>
+        <p className="type-provenance text-[var(--muted)]">
+          {peopleCount(org.memberCount)} · created <Timestamp iso={org.createdAt} />
+        </p>
+        <RenameOrg api={api} org={org} origin={origin} />
+      </header>
+      <Members members={members} />
+      <InviteIntoOrg api={api} key={org.id} org={org} origin={origin} />
+    </div>
   );
 }
 
@@ -346,22 +394,7 @@ function OrgPage({ api, origin, orgId }: { api: DuoApiConfig; origin: string; or
       </div>
     );
   }
-  return (
-    <div className="mx-auto flex max-w-xl flex-col gap-6 p-6" data-testid="admin-org-page">
-      {back}
-      <header className="flex flex-col gap-2">
-        <h1 className="type-heading" data-testid="admin-org-name">
-          {org.name}
-        </h1>
-        <p className="type-provenance text-[var(--muted)]">
-          {peopleCount(org.memberCount)} · created <Timestamp iso={org.createdAt} />
-        </p>
-        <RenameOrg api={api} key={org.name} org={org} origin={origin} />
-      </header>
-      <Members api={api} origin={origin} orgId={org.id} />
-      <InviteIntoOrg api={api} org={org} origin={origin} />
-    </div>
-  );
+  return <OrgBody api={api} back={back} org={org} origin={origin} />;
 }
 
 /**
@@ -373,5 +406,6 @@ export function Admin({ api, origin, orgId }: { api: DuoApiConfig; origin: strin
   if (!origin) {
     return <NotAvailable />;
   }
-  return orgId ? <OrgPage api={api} orgId={orgId} origin={origin} /> : <OrgList api={api} origin={origin} />;
+  // Keyed by the id: a hand-edited address from one org to another must not carry the first org's state (a minted invite link) into the second.
+  return orgId ? <OrgPage api={api} key={orgId} orgId={orgId} origin={origin} /> : <OrgList api={api} origin={origin} />;
 }

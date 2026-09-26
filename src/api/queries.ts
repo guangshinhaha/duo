@@ -1,5 +1,13 @@
 import { useCallback, useRef } from "react";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
+import {
+  defaultShouldDehydrateQuery,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type Query,
+  type UseQueryOptions,
+} from "@tanstack/react-query";
 import { apiRequest, type DuoApiConfig } from "./client.js";
 import { createInvite, createOrg, listInvites, listOrgMembers, listOrgs, renameOrg, type CreateInviteInput } from "./hosted.js";
 import type {
@@ -689,6 +697,22 @@ export function useCreateHostedInvite(origin: string, api: DuoApiConfig) {
       queryClient.invalidateQueries({ queryKey: queryKeys.hostedInvites });
     },
   });
+}
+
+/**
+ * What the persisted `duo-cache` may hold (#70, #128). A message search is asked, answered and
+ * forgotten. The super admin's view of the server (the orgs, each org's people with their Google
+ * addresses, the invites) is fetched afresh per visit: it never rests in the browser after the
+ * screen closes, and a withdrawn admin never reloads to a cached roster.
+ */
+export function shouldPersistQuery(query: Query): boolean {
+  const [root, second] = query.queryKey;
+  return (
+    defaultShouldDehydrateQuery(query) &&
+    !(root === "workspace" && second === "search") &&
+    root !== "hosted-orgs" &&
+    root !== "hosted-invites"
+  );
 }
 
 /**

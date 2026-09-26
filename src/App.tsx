@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Menu, X } from "lucide-react";
-import { defaultShouldDehydrateQuery, QueryClient } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { useApiConfig } from "./api/config.js";
@@ -15,7 +15,7 @@ import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationC
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
 import { setDockBadgeCount } from "./dockBadge.js";
 import { setTrayPendingCount, wireTrayReview } from "./tray.js";
-import { usePendingDrafts, usePendingT4 } from "./api/queries.js";
+import { shouldPersistQuery, usePendingDrafts, usePendingT4 } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Admin } from "./routes/Admin.js";
@@ -400,14 +400,24 @@ function activeNavHref(route: Route): string {
 }
 
 /**
- * #128: the hosted account this browser is signed in as, when it is a super admin — what decides
- * whether the Admin entry is drawn and what the Admin screen talks to. The sign-in answer's flag,
- * read from this device: the daemon re-checks it on every admin call, so a stale "yes" only ever
- * shows an entry whose screen then says it isn't for you.
+ * #128: the hosted account this browser is signed in as, when it is a super admin and it is the
+ * account of the server this app is paired with — what decides whether the Admin entry is drawn and
+ * what the Admin screen talks to. The sign-in answer's flag, read from this device: the daemon
+ * re-checks it on every admin call, so a stale "yes" only ever shows an entry whose screen then
+ * says it isn't for you. The bearer token is `api.token`, so the admin calls go to the origin of
+ * `api.baseUrl` and to no other: a stored account for a different server never receives it.
  */
-function adminAccount() {
+function adminAccount(api: DuoApiConfig | null) {
   const account = readHostedAccount();
-  return account?.isAdmin ? account : null;
+  if (!api || !account?.isAdmin) {
+    return null;
+  }
+  try {
+    const origin = new URL(api.baseUrl).origin;
+    return account.origin === origin ? { ...account, origin } : null;
+  } catch {
+    return null;
+  }
 }
 
 /** One entry of the map: a plain link, or the link that carries its count. */
@@ -497,7 +507,7 @@ function NavSections({
       })}
       {/* Settings is the app's own upkeep, in none of the three. Admin, for a super admin only, stands beside it (#128). */}
       <div className="mt-3 flex flex-col gap-1 border-t border-[var(--edge)] pt-2">
-        {api && adminAccount() && (
+        {adminAccount(api) && (
           <NavLink active={activeHref === ADMIN_SCREEN.href} href={ADMIN_SCREEN.href} onClick={onNavigate}>
             {ADMIN_SCREEN.label}
           </NavLink>
@@ -637,7 +647,7 @@ interface SurfaceContext {
 function routeSurface(route: Route, shell: SurfaceContext) {
   if (typeof route === "object") {
     if ("adminOrg" in route) {
-      return shell.api ? <Admin api={shell.api} origin={adminAccount()?.origin ?? null} orgId={route.adminOrg} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
+      return shell.api ? <Admin api={shell.api} origin={adminAccount(shell.api)?.origin ?? null} orgId={route.adminOrg} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
     }
     if ("room" in route) {
       return (
@@ -693,7 +703,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
         />
       );
     case "admin":
-      return <Admin api={shell.api!} origin={adminAccount()?.origin ?? null} orgId={null} />;
+      return <Admin api={shell.api!} origin={adminAccount(shell.api)?.origin ?? null} orgId={null} />;
     case "mirror":
       return <Mirror api={shell.api!} />;
     case "knowledge":
@@ -1193,10 +1203,9 @@ export function App() {
         // #70: a message search is asked, answered, and forgotten — what a
         // member looked for, and what came back, never rests in storage, and
         // a restored answer could never outlive a membership that ended.
-        dehydrateOptions: {
-          shouldDehydrateQuery: (query) =>
-            defaultShouldDehydrateQuery(query) && !(query.queryKey[0] === "workspace" && query.queryKey[1] === "search"),
-        },
+        // #128: nor does the super admin's view of the server — the orgs, who is in them (names and
+        // Google addresses) and the invites — rest in storage; it is fetched afresh each visit.
+        dehydrateOptions: { shouldDehydrateQuery: shouldPersistQuery },
       }}
     >
       <AppShell />

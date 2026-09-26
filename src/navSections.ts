@@ -88,7 +88,7 @@ export const SETTINGS_SCREEN: NavScreen = { href: "#settings", label: "Settings"
 /**
  * #128: the super admin's screens (orgs, who is in them, invite links). Not one of the three things
  * a person does in the app and not upkeep of it either, so it stands beside Settings — and unlike
- * every other entry it is drawn only for a super admin (`isAdminAccount` in App), never listed
+ * every other entry it is drawn only for a super admin (`adminAccount` in App), never listed
  * for anyone else. The screen re-checks with the daemon, so the entry is a convenience, not a lock.
  */
 export const ADMIN_SCREEN: NavScreen = { href: "#admin", label: "Admin" };
