@@ -6,7 +6,7 @@ import { App } from "../src/App.js";
 import { Join } from "../src/routes/Join.js";
 import { Ask } from "../src/routes/Ask.js";
 import { Setup, normalizeBaseUrl } from "../src/routes/Setup.js";
-import { Trust } from "../src/routes/Trust.js";
+import { MayDo } from "../src/profile/MayDo.js";
 import { AskLinks, askLinkUrl } from "../src/components/AskLinks.js";
 import { PairAnotherDevice } from "../src/components/PairAnotherDevice.js";
 import { parseJoinHash } from "../src/api/hosted.js";
@@ -277,7 +277,7 @@ describe("Pair another device", () => {
   });
 });
 
-describe("Trust writes", () => {
+describe("Trust writes — from the profile's May do tab", () => {
   function stubTrust(handlers: { promotions?: unknown; grant?: (body: Record<string, unknown>) => unknown }) {
     const calls: Array<{ method: string; url: string; body: Record<string, unknown> | undefined }> = [];
     vi.stubGlobal(
@@ -301,11 +301,11 @@ describe("Trust writes", () => {
     return calls;
   }
 
-  it("never offers T4 as a tier to grant", async () => {
+  it("never offers T4 as a kind to grant", async () => {
     stubTrust({});
-    withClient(<Trust api={hosted} />);
-    const select = await screen.findByTestId("grant-tier");
-    expect(Array.from(select.querySelectorAll("option")).map((o) => o.value)).toEqual(["T0", "T1", "T2", "T3"]);
+    withClient(<MayDo api={hosted} />);
+    await screen.findByTestId("may-empty");
+    expect(screen.getAllByRole("radio").map((radio) => (radio as HTMLInputElement).value)).toEqual(["T0", "T1", "T2", "T3"]);
   });
 
   it("an ambiguous grant shows the candidates and re-posts with the one the owner picks — never a guess", async () => {
@@ -321,15 +321,15 @@ describe("Trust writes", () => {
               ],
             },
     });
-    withClient(<Trust api={hosted} />);
+    withClient(<MayDo api={hosted} />);
     fireEvent.change(await screen.findByRole("textbox", { name: /what it may handle/i }), { target: { value: "deploy questions" } });
-    fireEvent.click(screen.getByRole("button", { name: "Grant" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     const picker = await screen.findByTestId("grant-candidates");
     expect(screen.queryByTestId("grant-outcome")).toBeNull();
     fireEvent.click(within(picker).getByRole("button", { name: "Deploy access" }));
 
-    expect(await screen.findByTestId("grant-outcome")).toHaveTextContent('Granted T1 on "Deploy access".');
+    expect(await screen.findByTestId("grant-outcome")).toHaveTextContent('on "Deploy access".');
     const grants = calls.filter((c) => c.url.endsWith("/trust/grant"));
     expect(grants.map((c) => c.body)).toEqual([
       { scopeText: "deploy questions", tier: "T1" },
@@ -341,12 +341,11 @@ describe("Trust writes", () => {
     const calls = stubTrust({
       promotions: [{ topicId: "t1", topicLabel: "Deploy access", tier: "T1", currentLevel: "approve", offeredLevel: "auto", cleanStreak: 8 }],
     });
-    withClient(<Trust api={hosted} />);
-    const offer = await screen.findByTestId("promotion-offer");
+    withClient(<MayDo api={hosted} />);
+    const offer = await screen.findByTestId("offer-card");
     expect(offer).toHaveTextContent("Deploy access");
-    expect(offer).toHaveTextContent("approve → auto");
     await act(async () => {
-      fireEvent.click(within(offer).getByTestId("promotion-accept"));
+      fireEvent.click(within(offer).getByTestId("offer-accept"));
     });
     await waitFor(() =>
       expect(calls.find((c) => c.method === "POST" && c.url === `${hosted.baseUrl}/trust/promotions/t1/T1`)?.body).toEqual({ decision: "accept" }),

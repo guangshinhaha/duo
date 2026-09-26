@@ -95,7 +95,7 @@ A question the pipeline raised for the owner's judgement (`escalated`
 without `refused`). Escalations appear in Review with their reason; the
 owner answers one like a question, not like an error.
 
-The Escalations screen (`#escalations`, #54) shows the pattern across them:
+The profile's Activity tab (`#duo/profile/activity`, "Where it runs out", #54) shows the pattern across them:
 each question the duo keeps having to ask, how many times, most first —
 "where its knowledge runs out". Two questions are the same only when they
 read the same (case and spacing aside); nothing is grouped by resemblance,

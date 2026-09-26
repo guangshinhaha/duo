@@ -1,19 +1,32 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Escalations } from "../src/routes/Escalations.js";
+import { PatternSection, RateSection } from "../src/profile/Patterns.js";
 import { escalationPattern } from "../src/escalations/pattern.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { DraftRecord, EscalationDigestItem, EscalationUrgencyRate, SentEscalationDigest } from "../src/api/types.js";
 
 /*
- * #54: what the duo keeps having to ask about. The routes are digital-duo
+ * #54, in its new home: the Activity tab's "Where it runs out". The
+ * Escalations page is gone; its two sections live on as `RateSection` and
+ * `PatternSection` (src/profile/Patterns.tsx). What the duo keeps having to
+ * ask about. The routes are digital-duo
  * #178's — `GET /escalations/history` (sent digests, oldest first, paged by
  * limit + an offset cursor) and `GET /escalations/rate` ({ total, urgent,
  * rate }). Each acceptance criterion of the issue is a test here, written
  * before the surface: the pattern reads at a glance, it leads to the fix
  * that already exists, and the rate carries no precision the data lacks.
  */
+
+/** What the Activity tab's "Where it runs out" section mounts, in its order. */
+function RunsOut({ api }: { api: DuoApiConfig }) {
+  return (
+    <>
+      <RateSection api={api} />
+      <PatternSection api={api} />
+    </>
+  );
+}
 
 const api: DuoApiConfig = { baseUrl: "http://test:7717", token: "tok" };
 
@@ -119,7 +132,7 @@ afterEach(() => {
 describe("#54 AC1 — the pattern is visible: what is escalated most, and how often, at a glance", () => {
   it("leads with the most-escalated question and its count, then the rest in descending order", async () => {
     stub();
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
 
     const groups = await screen.findAllByTestId("escalation-group");
     expect(groups).toHaveLength(3);
@@ -133,7 +146,7 @@ describe("#54 AC1 — the pattern is visible: what is escalated most, and how of
 
   it("draws each group's share of the escalations as a bar — width, not a numeral", async () => {
     stub();
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     await screen.findAllByTestId("escalation-group");
 
     // 3 of the 6 escalations in the digests, 2 of 6, 1 of 6.
@@ -145,7 +158,7 @@ describe("#54 AC1 — the pattern is visible: what is escalated most, and how of
 
   it("says what it counted: escalations across digests, over the period they span, grouped by identical wording", async () => {
     stub();
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     await screen.findAllByTestId("escalation-group");
 
     const scope = screen.getByTestId("escalation-scope");
@@ -160,7 +173,7 @@ describe("#54 AC1 — the pattern is visible: what is escalated most, and how of
 
   it("reads the daemon's own escalation reason under each group, verbatim", async () => {
     stub();
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     const groups = await screen.findAllByTestId("escalation-group");
     expect(within(groups[0]!).getByTestId("escalation-group-reason").textContent).toBe(
       "This touches the payroll correction you said only you decide on.",
@@ -199,7 +212,7 @@ describe("#54 AC1 — the pattern is visible: what is escalated most, and how of
     const fetchMock = stub({
       history: (url) => (url.includes("cursor=100") ? json(page2) : json(page1)),
     });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
 
     const groups = await screen.findAllByTestId("escalation-group");
     expect(groups).toHaveLength(1);
@@ -214,7 +227,7 @@ describe("#54 AC1 — the pattern is visible: what is escalated most, and how of
 
   it("opening the view is a read: it never assembles a digest (that POST is the send)", async () => {
     const fetchMock = stub();
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     await screen.findAllByTestId("escalation-group");
     await screen.findByTestId("escalation-rate");
     expect(calls(fetchMock).some((c) => c.startsWith("POST"))).toBe(false);
@@ -223,7 +236,7 @@ describe("#54 AC1 — the pattern is visible: what is escalated most, and how of
 
   it("with no digest sent yet, says so instead of drawing an empty pattern", async () => {
     stub({ history: () => json([]) });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     expect(await screen.findByTestId("escalations-empty")).toHaveTextContent(/no escalations have been batched into a digest/i);
     expect(screen.queryAllByTestId("escalation-group")).toHaveLength(0);
   });
@@ -233,14 +246,14 @@ describe("#54 AC1 — the pattern is visible: what is escalated most, and how of
     stub({
       history: (url) => (url.includes("cursor=100") ? json({ error: { code: "internal", message: "boom" } }, 500) : json(page1)),
     });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     expect(await screen.findByTestId("escalations-incomplete")).toHaveTextContent(/incomplete/i);
     expect((await screen.findAllByTestId("escalation-group"))[0]).toHaveTextContent("100×");
   });
 
   it("a history the daemon cannot serve is an error that says what to try, not an empty pattern", async () => {
     stub({ history: () => json({ error: { code: "internal", message: "store locked" } }, 500) });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     expect(await screen.findByTestId("route-error")).toHaveTextContent("store locked");
   });
 });
@@ -248,7 +261,7 @@ describe("#54 AC1 — the pattern is visible: what is escalated most, and how of
 describe("#54 AC2 — it leads to the fix: answering a recurring escalation is in reach", () => {
   it("opening a group reads its most recent escalation and offers the answer that queues a standing-order candidate", async () => {
     const fetchMock = stub();
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     const groups = await screen.findAllByTestId("escalation-group");
 
     const open = within(groups[0]!).getByRole("button", { name: /open/i });
@@ -265,7 +278,7 @@ describe("#54 AC2 — it leads to the fix: answering a recurring escalation is i
 
   it("answering from the group posts to POST /drafts/:id/answer and reports the queued candidate", async () => {
     const fetchMock = stub();
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     const groups = await screen.findAllByTestId("escalation-group");
     fireEvent.click(within(groups[0]!).getByRole("button", { name: /open/i }));
 
@@ -279,9 +292,9 @@ describe("#54 AC2 — it leads to the fix: answering a recurring escalation is i
     expect(JSON.parse(String(answerCall?.[1]?.body))).toEqual({ answer: "Yes — approve it, I've seen the ticket." });
   });
 
-  it("a refusal opened from here offers no answer — the same rule as Review", async () => {
+  it("a refusal opened from here offers no answer — the same rule as the drafts it came from", async () => {
     stub({ draft: (id) => json(draftFor(id, { refused: true, escalationReason: "Your duo refused this one." })) });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     const groups = await screen.findAllByTestId("escalation-group");
     fireEvent.click(within(groups[0]!).getByRole("button", { name: /open/i }));
     const card = await screen.findByTestId("draft-card");
@@ -290,7 +303,7 @@ describe("#54 AC2 — it leads to the fix: answering a recurring escalation is i
 
   it("a draft this daemon no longer has says so plainly", async () => {
     stub({ draft: () => json({ error: { code: "not_found", message: "No such draft." } }, 404) });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     const groups = await screen.findAllByTestId("escalation-group");
     fireEvent.click(within(groups[0]!).getByRole("button", { name: /open/i }));
     expect(await screen.findByText("This draft is not on this duo.")).toBeInTheDocument();
@@ -298,7 +311,7 @@ describe("#54 AC2 — it leads to the fix: answering a recurring escalation is i
 
   it("closing a group puts it away again, and the open control is a real touch target", async () => {
     stub();
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     const groups = await screen.findAllByTestId("escalation-group");
     const open = within(groups[0]!).getByRole("button", { name: /open/i });
     expect(open.className).toMatch(/min-h-11/);
@@ -313,7 +326,7 @@ describe("#54 AC2 — it leads to the fix: answering a recurring escalation is i
 describe("#54 AC3 — the rate is honest: counts and proportions the data supports, never an invented percentage", () => {
   it("states the daemon's counts, and draws the daemon's own rate as a bar", async () => {
     stub({ rate: () => json(rateFor({ total: 12, urgent: 3, rate: 0.25 })) });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
 
     const rate = await screen.findByTestId("escalation-rate");
     expect(rate).toHaveTextContent("3 of 12 escalations were urgent");
@@ -323,7 +336,7 @@ describe("#54 AC3 — the rate is honest: counts and proportions the data suppor
 
   it("never prints a percentage or a decimal anywhere on the screen", async () => {
     stub({ rate: () => json(rateFor({ total: 3, urgent: 1, rate: 1 / 3 })) });
-    const { container } = renderWithClient(<Escalations api={api} />);
+    const { container } = renderWithClient(<RunsOut api={api} />);
     await screen.findByTestId("escalation-rate");
     await screen.findAllByTestId("escalation-group");
 
@@ -337,13 +350,13 @@ describe("#54 AC3 — the rate is honest: counts and proportions the data suppor
 
   it("agrees with itself in the singular", async () => {
     stub({ rate: () => json(rateFor({ total: 1, urgent: 1, rate: 1 })) });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     expect(await screen.findByTestId("escalation-rate")).toHaveTextContent("1 of 1 escalation was urgent");
   });
 
   it("with nothing classified yet, there is no rate to draw — a zero would read as a measurement", async () => {
     stub({ rate: () => json(rateFor({ total: 0, urgent: 0, rate: 0 })) });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     const rate = await screen.findByTestId("escalation-rate");
     expect(rate).toHaveTextContent(/no escalations classified yet/i);
     expect(screen.queryByTestId("escalation-rate-track")).toBeNull();
@@ -351,7 +364,7 @@ describe("#54 AC3 — the rate is honest: counts and proportions the data suppor
 
   it("does not stretch a small denominator into a trend: it names that the rate covers every escalation, urgent ones included, and is not the digest's count", async () => {
     stub();
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     const rate = await screen.findByTestId("escalation-rate");
     expect(rate).toHaveTextContent(/every escalation/i);
     expect(rate).toHaveTextContent(/live/i);
@@ -359,26 +372,17 @@ describe("#54 AC3 — the rate is honest: counts and proportions the data suppor
 
   it("a rate that will not load leaves the pattern standing, and says the rate is missing", async () => {
     stub({ rate: () => json({ error: { code: "internal", message: "rate store locked" } }, 500) });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     expect((await screen.findAllByTestId("escalation-group")).length).toBe(3);
     expect(await screen.findByTestId("escalation-rate-error")).toHaveTextContent("rate store locked");
   });
 
-  it("a payload that is not the rate's documented shape renders as nothing rather than a broken bar", async () => {
+  it("a payload that is not the rate's documented shape draws no bar, and says so rather than showing a broken one", async () => {
     stub({ rate: () => json([]) });
-    renderWithClient(<Escalations api={api} />);
+    renderWithClient(<RunsOut api={api} />);
     await screen.findAllByTestId("escalation-group");
-    await waitFor(() => expect(screen.queryByTestId("escalation-rate-fill")).toBeNull());
-  });
-});
-
-describe("#54 — the screen's own structure", () => {
-  it("is a page with one h1, its sections at h2", async () => {
-    stub();
-    const { container } = renderWithClient(<Escalations api={api} />);
-    await screen.findAllByTestId("escalation-group");
-    expect(container.querySelectorAll("h1")).toHaveLength(1);
-    expect(container.querySelectorAll("h3")).toHaveLength(0);
-    expect(container.querySelectorAll("h2").length).toBeGreaterThanOrEqual(2);
+    expect(await screen.findByTestId("escalation-rate-error")).toHaveTextContent(/wasn't in a shape/i);
+    expect(screen.queryByTestId("escalation-rate-fill")).toBeNull();
+    expect(screen.queryByTestId("escalation-rate")).toBeNull();
   });
 });

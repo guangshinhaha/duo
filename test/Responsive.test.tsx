@@ -5,11 +5,11 @@ import type { ReactElement } from "react";
 import { App } from "../src/App.js";
 import { stubPhone } from "./desktop.js";
 import { DraftTray } from "../src/components/DraftTray.js";
-import { Corrections } from "../src/routes/Corrections.js";
+import { CandidateCard } from "../src/profile/CandidateCard.js";
 import { Duo } from "../src/routes/Duo.js";
 import { Setup } from "../src/routes/Setup.js";
 import { Settings } from "../src/routes/Settings.js";
-import { Trust } from "../src/routes/Trust.js";
+import { MayDo } from "../src/profile/MayDo.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { CorrectionCandidate, DraftRecord, GridRow } from "../src/api/types.js";
 
@@ -166,10 +166,10 @@ describe("#38 AC1 — the app works on a phone", () => {
 
   it("the surfaces with unbounded text truncate, they do not push width", async () => {
     vi.stubGlobal("fetch", stubFetch({ "/trust/grid": [gridRow] }));
-    renderWithClient(<Trust api={api} />);
-    // Trust's topic cell is the one row-shaped element with unbounded
+    renderWithClient(<MayDo api={api} />);
+    // May do's topic cell is the one row-shaped element with unbounded
     // text — it must yield (min-w-0) and clip (truncate), never widen.
-    const topic = await screen.findByTestId("trust-topic");
+    const topic = await screen.findByTestId("may-topic");
     expect(topic.className).toContain("min-w-0");
     expect(topic.className).toContain("truncate");
   });
@@ -235,7 +235,7 @@ describe("#38 AC3 — §3.1's mobile rules hold", () => {
 
     // The verbs AR-18 spells out for mobile stay ungated: a verdict…
     vi.stubGlobal("fetch", stubFetch({ "/review?status=pending": [candidate] }));
-    renderWithClient(<Corrections api={api} />);
+    renderWithClient(<CandidateCard api={api} candidate={candidate} />);
     const approve = await screen.findByRole("button", { name: "Approve" });
     expect(approve.className).not.toMatch(/(^|\s)hidden\b/);
     cleanup();
@@ -263,9 +263,9 @@ describe("#38 AC4 — touch targets are real", () => {
     expectTouchTargets(review.container);
     cleanup();
 
-    // Corrections with a candidate.
+    // A correction candidate, as the Rules tab lists it.
     vi.stubGlobal("fetch", stubFetch({ "/review?status=pending": [candidate] }));
-    const corrections = renderWithClient(<Corrections api={api} />);
+    const corrections = renderWithClient(<CandidateCard api={api} candidate={candidate} />);
     await screen.findByTestId("candidate");
     expectTouchTargets(corrections.container);
     cleanup();

@@ -738,7 +738,9 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    const beforeKeys = JSON.stringify(Object.keys(localStorage).sort());
+    // The query cache persists itself on its own throttle (`duo-cache`), which is not a store of this setting — only a store the setting would live in counts.
+    const settingStores = () => JSON.stringify(Object.keys(localStorage).filter((key) => key !== "duo-cache").sort());
+    const beforeKeys = settingStores();
 
     // A conversation's own verbs sit behind its "more" control.
     fireEvent.click(within(entryFor("project-x")).getByTestId("room-more"));
@@ -759,7 +761,7 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
     await waitFor(() => expect(within(entryFor("project-x")).queryByTestId("room-muted")).toBeNull());
     await waitFor(() => expect(within(entryFor("project-x")).getByTestId("room-notifications")).toHaveValue("mentions"));
     // Cross-device is server-side by construction: no local store appeared.
-    expect(JSON.stringify(Object.keys(localStorage).sort())).toBe(beforeKeys);
+    expect(settingStores()).toBe(beforeKeys);
   });
 
   it("leaving a conversation asks first, then removes it from the list", async () => {

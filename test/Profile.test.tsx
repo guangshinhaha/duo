@@ -210,6 +210,18 @@ describe("May do — what it handles on its own, in plain levels", () => {
     expect(await screen.findByTestId("may-empty")).toHaveTextContent("Nothing earned yet.");
   });
 
+  it("falls back to the topic's id when the daemon sent no label — never an empty name", async () => {
+    stub({ "/trust/grid": [{ topicId: "vendor-access", tier: "T1", level: "ask", source: "earned", stale: false }] });
+    mount(<MayDo api={api} />);
+    expect(await screen.findByTestId("may-topic")).toHaveTextContent("vendor-access");
+  });
+
+  it("says why when the grid cannot be read, in the daemon's own words", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "unknown", message: "store locked" } }), { status: 500 })));
+    mount(<MayDo api={api} />);
+    expect(await screen.findByText("store locked")).toBeInTheDocument();
+  });
+
   it("tells your duo in words — posts the description and the chosen kind, and reports what happened", async () => {
     const { posts } = stub({ "/trust/grid": grid, "POST /trust/grant": { status: "applied", topicId: "d", topicLabel: "deploy access", tier: "T1" } });
     mount(<MayDo api={api} />);
@@ -297,5 +309,22 @@ describe("Activity — what it did, people first", () => {
     const runsOut = screen.getByTestId("activity-runs-out");
     expect(within(runsOut).getByRole("heading", { name: "Where it runs out" })).toBeInTheDocument();
     expect(await within(runsOut).findByTestId("escalation-rate")).toHaveTextContent("1 of 4 escalations were urgent");
+  });
+
+  it("marks an asker it could not resolve rather than passing the raw reference off as a name — and the asker's question is never the owner's", async () => {
+    stub({ "/audit": [audit("r", "colleague:Rae", day(1)), audit("u", "someone@other.domain", day(0), { askerResolved: false })] });
+    mount(<Activity api={api} />);
+    await screen.findByTestId("activity-list");
+    const records = screen.getAllByTestId("activity-record");
+    // The daemon lists oldest first; the tab reads newest first.
+    expect(records[0]).toHaveTextContent("someone@other.domain · unresolved");
+    expect(records[1]).not.toHaveTextContent("unresolved");
+    expect(screen.queryAllByTestId("owner-message")).toHaveLength(0);
+  });
+
+  it("says why when the activity cannot be read, in the daemon's own words", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "unknown", message: "store locked" } }), { status: 500 })));
+    mount(<Activity api={api} />);
+    expect(await screen.findByText("store locked")).toBeInTheDocument();
   });
 });

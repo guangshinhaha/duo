@@ -104,7 +104,7 @@ domain types.
 |---|---|---|---|
 | `GET` | `/health` | `{ ok: true }` | inline |
 | `GET` | `/duos` | `DuoSummary[]` *(new, 1.6)* | `duo/registry` |
-| `GET` | `/channels` | `ChannelSummary[]` — one row per registered adapter, display strings supplied by the adapter (#171); the Channels screen (`#channels`, #47) renders it without recognising a kind or a label | `drafting/delivery` |
+| `GET` | `/channels` | `ChannelSummary[]` — one row per registered adapter, display strings supplied by the adapter (#171); the channel list on the profile's Knows tab (`#duo/profile/knows`, #47) renders it without recognising a kind or a label | `drafting/delivery` |
 | `GET` | `/channels/policy` | `ChannelPolicy` — which channels, and which threads in them, produce no proactive offers (#172) | `drafting/channel-mutes` |
 | `POST` | `/channels/policy/mute` | `ChannelPolicy` — the updated policy (channel or thread scope); the Channels screen mutes at channel scope by `kind` and re-reads `GET /channels` (#47) | `drafting/channel-mutes` |
 | `POST` | `/channels/policy/unmute` | `ChannelPolicy` — the updated policy | `drafting/channel-mutes` |
@@ -156,8 +156,8 @@ domain types.
 | `POST` | `/hosted/orgs/:orgId/rename` | `HostedOrg` — super admin only (`{ name }`; POST because the daemon's CORS allows only GET and POST); 404 unknown org, 409 name taken | `hosted` |
 | `GET` | `/hosted/orgs/:orgId/members` | `HostedOrgMember[]` (`{ duoId, name, email, isRoot, joinedAt, isAdmin }`) — super admin only; 404 unknown org | `hosted` |
 | `GET` | `/search?q=&limit=&cursor=` | `HybridSearchOutcome` — `duo search`'s own hybrid read (#174) | `ingest/embeddings` |
-| `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178); the Escalations screen (#54) never calls it — opening a screen must not send | `escalation/digest` |
-| `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; the Escalations screen walks every page at `limit=100` before it counts | `escalation/digest` |
+| `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178); the Activity tab's "Where it runs out" (#54) never calls it — opening a screen must not send | `escalation/digest` |
+| `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; that section walks every page at `limit=100` before it counts | `escalation/digest` |
 | `GET` | `/escalations/rate` | `EscalationUrgencyRate` (#178) — `{ total, urgent, rate }` over every classified escalation, urgent ones included; drawn as counts plus a bar, never a percentage | `escalation/digest` |
 | `GET` | `/audit` | `AuditEntry[]` | `permissions/audit` |
 | `GET` | `/ws` | the one push channel — `draft-ready`; auth by first message (#162) | `serve/ws` |
@@ -480,8 +480,8 @@ Setup is untouched. Embedding is a job the app starts and watches (polled only w
 says "running", the daemon's own counts rendered, its error rendered verbatim). **Derivation has no
 route** — `duo derive` is a terminal stage — so the app cannot start it and does not pretend to: the
 derive step says where it runs and watches `GET /knowledge` for its effect, and the flow ends when
-the first rules appear *while the owner is watching* (navigating to `#mirror`, approve and reject in
-reach; opened on a duo that already has rules it points at the Mirror instead of whisking there).
+the first rules appear *while the owner is watching* (navigating to `#duo/profile/rules`, approve and reject in
+reach; opened on a duo that already has rules it points at the Rules tab instead of whisking there).
 Whether core should expose a derive job, as it did for embedding, is core's question; until it
 does, that step stays a terminal step the app observes.
 

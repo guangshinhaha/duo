@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { corpusSentence, lastImportSentence } from "../src/routes/Knowledge.js";
+import { corpusSentence, lastImportSentence } from "../src/profile/knowledgeWords.js";
 
 /*
  * The plain-language pass (#149): the daemon's nouns are the system talking
@@ -19,9 +19,6 @@ import { corpusSentence, lastImportSentence } from "../src/routes/Knowledge.js";
  */
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-/** The old screens the chat-first move replaced. They are unreachable and go in #155; their copy is not the app's. */
-const RETIRED = new Set(["src/routes/Trust.tsx", "src/routes/Audit.tsx", "src/routes/Mirror.tsx", "src/routes/Knowledge.tsx"]);
 
 function sources(): string[] {
   const out: string[] = [];
@@ -38,7 +35,7 @@ function sources(): string[] {
     }
   };
   walk(join(root, "src"));
-  return out.filter((path) => !RETIRED.has(path.slice(root.length + 1)));
+  return out;
 }
 
 /** [pattern, why it is banned] */

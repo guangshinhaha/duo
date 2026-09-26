@@ -1,11 +1,18 @@
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Corrections } from "../src/routes/Corrections.js";
-import { queryKeys } from "../src/api/queries.js";
-import { apiRequest } from "../src/api/client.js";
+import { CandidateCard } from "../src/profile/CandidateCard.js";
+import { Rules } from "../src/profile/Rules.js";
 import type { CorrectionCandidate } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
+
+/*
+ * #44, in its new home. The Corrections page is gone; a correction candidate
+ * now lives in the "From your edits" section of the profile's Rules tab, on
+ * the same `CandidateCard`. The behaviour is unchanged: the candidate shows
+ * the edit it records, Approve / Reject are the daemon's own routes, and a
+ * decision refreshes both the queue and the rules the Rules tab counts.
+ */
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
 
@@ -29,11 +36,20 @@ function candidateFor(over?: Partial<CorrectionCandidate>): CorrectionCandidate 
   };
 }
 
-/** Serves the pending queue on GET, records POSTs, and decides daemon-side — the POST writes the status, so the next GET the invalidation fires no longer holds the candidate. */
-function stubQueue(candidates: CorrectionCandidate[]) {
+const emptyRules = { awaitingApproval: [], weakSignals: [], inconsistent: [], approved: [], rejected: [] };
+
+/**
+ * A daemon that serves the pending queue (`/review`), the rules listing and
+ * the refusals the Rules tab reads. The POST decides daemon-side — it writes
+ * the status, so the next GET the invalidation fires no longer holds the
+ * candidate.
+ */
+function stubDaemon(candidates: CorrectionCandidate[]) {
   const pending = () => candidates.filter((c) => c.status === "pending");
   const posts: { url: string; body?: unknown }[] = [];
+  const counts = { rules: 0, review: 0 };
   const fetchMock = vi.fn((url: string, init?: RequestInit): Promise<Response> => {
+    const path = new URL(String(url)).pathname;
     if (init?.method === "POST") {
       posts.push({ url, body: init.body ? JSON.parse(init.body as string) : undefined });
       const id = url.split("/").at(-2)!;
@@ -44,22 +60,34 @@ function stubQueue(candidates: CorrectionCandidate[]) {
       }
       return Promise.resolve(new Response(JSON.stringify({ candidate: decided }), { status: 200 }));
     }
-    return Promise.resolve(new Response(JSON.stringify(pending()), { status: 200 }));
+    if (path === "/mirror/rules") {
+      counts.rules += 1;
+      return Promise.resolve(new Response(JSON.stringify(emptyRules), { status: 200 }));
+    }
+    if (path === "/mirror/refusals") {
+      return Promise.resolve(new Response(JSON.stringify({ decided: true, refusals: [] }), { status: 200 }));
+    }
+    if (path === "/review") {
+      counts.review += 1;
+      return Promise.resolve(new Response(JSON.stringify(pending()), { status: 200 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { posts, fetchMock };
+  return { posts, counts, fetchMock };
 }
 
-describe("#44 — the correction queue has a screen", () => {
+describe("#44 — a correction candidate, on the Rules tab's 'From your edits'", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })));
   });
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
   });
 
   it("each candidate shows its kind, the question, what the duo drafted, and what was actually sent", async () => {
-    stubQueue([
+    stubDaemon([
       candidateFor({ id: "c-1", kind: "style" }),
       candidateFor({
         id: "c-2",
@@ -71,9 +99,11 @@ describe("#44 — the correction queue has a screen", () => {
         createdAt: "2026-01-02T00:00:00.000Z",
       }),
     ]);
-    renderWithClient(<Corrections api={api} />);
+    renderWithClient(<Rules api={api} />);
 
-    const cards = await waitFor(() => screen.getAllByTestId("candidate"));
+    const section = await screen.findByTestId("rules-from-edits");
+    expect(within(section).getByRole("heading", { level: 2 })).toHaveTextContent("From your edits (2)");
+    const cards = within(section).getAllByTestId("candidate");
     expect(cards).toHaveLength(2);
     // The kinds are the daemon's own strings, verbatim — no registry here.
     expect(screen.getAllByTestId("candidate-kind").map((el) => el.textContent)).toEqual(["style", "substance"]);
@@ -94,15 +124,14 @@ describe("#44 — the correction queue has a screen", () => {
     expect(diffs[1]).toContain("after the carryover");
   });
 
-  it("the difference between draft and sent is what the eye lands on — the change is marked, in place", async () => {
-    stubQueue([
-      candidateFor({
-        draftText: "Five days per quarter.",
-        sentText: "Ten days per quarter — anything urgent, ping Sam.",
-      }),
-    ]);
-    renderWithClient(<Corrections api={api} />);
-    await waitFor(() => expect(screen.getByTestId("candidate")).toBeInTheDocument());
+  it("the difference between draft and sent is what the eye lands on — the change is marked, in place", () => {
+    // The card on its own: the marks are the card's, wherever it is hosted.
+    renderWithClient(
+      <CandidateCard
+        api={api}
+        candidate={candidateFor({ draftText: "Five days per quarter.", sentText: "Ten days per quarter — anything urgent, ping Sam." })}
+      />,
+    );
 
     // The duo's words are struck, the owner's replacements marked, reading
     // in place — the same diff grammar the edit itself used (#23), because
@@ -119,40 +148,50 @@ describe("#44 — the correction queue has a screen", () => {
   });
 
   it("approving posts to the daemon's route and the list refreshes without the decided candidate", async () => {
-    const { posts } = stubQueue([candidateFor()]);
-    renderWithClient(<Corrections api={api} />);
+    const { posts } = stubDaemon([candidateFor()]);
+    renderWithClient(<Rules api={api} />);
     await waitFor(() => expect(screen.getByTestId("candidate")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("Approve"));
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]!.url).toBe("http://test/review/c-1/approve");
-    // The queue the screen reads is the daemon's pending list — after the
-    // decision, the refetched list no longer holds the candidate.
-    await waitFor(() => expect(screen.getByTestId("corrections-empty")).toBeInTheDocument());
+    // The queue the tab reads is the daemon's pending list — after the
+    // decision, the refetched list no longer holds the candidate, and with
+    // nothing left the whole "From your edits" section goes.
+    await waitFor(() => expect(screen.queryByTestId("candidate")).toBeNull());
+    expect(screen.queryByTestId("rules-from-edits")).toBeNull();
   });
 
   it("rejecting posts to /reject and the candidate leaves the queue", async () => {
-    const { posts } = stubQueue([candidateFor()]);
-    renderWithClient(<Corrections api={api} />);
+    const { posts } = stubDaemon([candidateFor()]);
+    renderWithClient(<Rules api={api} />);
     await waitFor(() => expect(screen.getByTestId("candidate")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("Reject"));
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]!.url).toBe("http://test/review/c-1/reject");
-    await waitFor(() => expect(screen.getByTestId("corrections-empty")).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId("candidate")).toBeNull());
+    expect(screen.queryByTestId("rules-from-edits")).toBeNull();
   });
 
   it("an already-reviewed candidate reports the daemon's 409 as an honest message", async () => {
     const message = 'Correction candidate "c-1" was already reviewed (status: "approved")';
-    const fetchMock = vi.fn((_url: string, init?: RequestInit): Promise<Response> => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit): Promise<Response> => {
+      const path = new URL(String(url)).pathname;
       if (init?.method === "POST") {
         return Promise.resolve(new Response(JSON.stringify({ error: { code: "CandidateAlreadyReviewedError", message } }), { status: 409 }));
+      }
+      if (path === "/mirror/rules") {
+        return Promise.resolve(new Response(JSON.stringify(emptyRules), { status: 200 }));
+      }
+      if (path === "/mirror/refusals") {
+        return Promise.resolve(new Response(JSON.stringify({ decided: true, refusals: [] }), { status: 200 }));
       }
       return Promise.resolve(new Response(JSON.stringify([candidateFor()]), { status: 200 }));
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithClient(<Corrections api={api} />);
+    renderWithClient(<Rules api={api} />);
     await waitFor(() => expect(screen.getByTestId("candidate")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Approve"));
 
@@ -163,45 +202,17 @@ describe("#44 — the correction queue has a screen", () => {
     expect(screen.getByTestId("candidate")).toBeInTheDocument();
   });
 
-  it("empty explains that editing a draft is what puts something here", async () => {
-    renderWithClient(<Corrections api={api} />);
-    await waitFor(() => expect(screen.getByTestId("corrections-empty")).toBeInTheDocument());
-    expect(screen.getByTestId("corrections-empty").textContent).toMatch(/editing a draft/i);
-  });
-
-  it("approving refreshes the mirror's rules too — an approved candidate is a rule the Mirror counts", async () => {
-    let rulesFetches = 0;
-    const fetchMock = vi.fn((url: string, init?: RequestInit): Promise<Response> => {
-      if (String(url).includes("/mirror/rules")) {
-        rulesFetches += 1;
-        return Promise.resolve(
-          new Response(JSON.stringify({ awaitingApproval: [], weakSignals: [], inconsistent: [], approved: [], rejected: [] }), { status: 200 }),
-        );
-      }
-      if (init?.method === "POST") {
-        return Promise.resolve(new Response(JSON.stringify({ candidate: candidateFor() }), { status: 200 }));
-      }
-      return Promise.resolve(new Response(JSON.stringify([candidateFor()]), { status: 200 }));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    // The Mirror's rules query mounted alongside the queue, under the one
-    // client both share in the app: what #44 must refresh is visible as a
-    // second fetch of /mirror/rules after the decision lands.
-    function MirrorRulesProbe() {
-      useQuery({ queryKey: queryKeys.mirrorRules, queryFn: () => apiRequest(api, "/mirror/rules") });
-      return null;
-    }
-    renderWithClient(
-      <>
-        <Corrections api={api} />
-        <MirrorRulesProbe />
-      </>,
-    );
-    await waitFor(() => expect(rulesFetches).toBe(1));
+  it("approving refreshes the rules too — an approved candidate is a rule the Rules tab counts", async () => {
+    // The Rules tab's own counts line reads /mirror/rules; what #44 must
+    // refresh is visible as a second fetch of it after the decision lands.
+    const { counts, posts } = stubDaemon([candidateFor()]);
+    renderWithClient(<Rules api={api} />);
+    await waitFor(() => expect(counts.rules).toBe(1));
     await waitFor(() => expect(screen.getByTestId("candidate")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("Approve"));
-    await waitFor(() => expect(rulesFetches).toBe(2));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    await waitFor(() => expect(counts.rules).toBe(2));
+    await waitFor(() => expect(counts.review).toBe(2));
   });
 });

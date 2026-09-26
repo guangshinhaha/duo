@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Channels } from "../src/routes/Channels.js";
-import type { ChannelPolicy, ChannelSummary } from "../src/api/types.js";
+import { Knows } from "../src/profile/Knows.js";
+import type { ChannelPolicy, ChannelSummary, DuoKnowledge } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
@@ -13,11 +13,12 @@ function renderWithClient(ui: React.ReactElement) {
 }
 
 /*
- * #47: the screen the owner opens to find out why it is quiet. Every
- * fixture here speaks the DAEMON'S side of the wire (digital-duo #171's
- * ChannelSummary, #172's policy routes) — and deliberately uses kinds and
- * labels this client has never heard of, because the contract under test
- * is that nothing on this screen is keyed on either (#43).
+ * #47, on its live surface: the "Where it listens" section of the profile's
+ * Knows tab (the old Channels page's list, mounted by <Knows/> through
+ * ChannelList). Every fixture speaks the DAEMON'S side of the wire
+ * (digital-duo #171's ChannelSummary, #172's policy routes) — and
+ * deliberately uses kinds and labels this client has never heard of, because
+ * the contract under test is that nothing here is keyed on either (#43).
  */
 const connected: ChannelSummary = {
   kind: "carrier-pigeon",
@@ -35,8 +36,31 @@ const broken: ChannelSummary = {
   muted: false,
 };
 
+const knowledge: DuoKnowledge = {
+  records: { total: 1, bySource: { slack: 1 } },
+  lastImport: null,
+  corpus: { tooThin: true, minimumQuestionsToCharacterize: 10, totalQuestions: 1, periodStart: "2026-09-10T00:00:00.000Z", periodEnd: "2026-09-19T00:00:00.000Z", topicBreakdown: [] },
+  rules: { byReviewStatus: { pending: 0, approved: 0, rejected: 0, superseded: 0 } },
+  providers: { inference: null, embedding: null },
+  sharedUsage: {
+    totalQuestions: 0,
+    distinctAskers: 0,
+    repeatAskers: 0,
+    answeredCount: 0,
+    declinedCount: 0,
+    answerRate: 0,
+    escalationRate: 0,
+    weeklyTrend: [],
+    gaps: [],
+    lastAskedAt: null,
+    daysSinceLastAsk: null,
+    abandoned: false,
+    summary: "Nobody has asked the shared duo yet.",
+  },
+};
+
 /** A stateful daemon: GET /channels reflects the mute the POSTs wrote, the way the real one reads its one store. */
-function stubDaemon(initial: ChannelSummary[], opts?: { muteStatus?: number }) {
+function stubDaemon(initial: ChannelSummary[], opts?: { muteStatus?: number; channelsPending?: boolean; channelsDown?: boolean }) {
   let channels = initial.map((c) => ({ ...c }));
   const calls: { method: string; path: string; body: unknown }[] = [];
   vi.stubGlobal(
@@ -45,7 +69,16 @@ function stubDaemon(initial: ChannelSummary[], opts?: { muteStatus?: number }) {
       const path = String(url).replace("http://test", "");
       const method = init?.method ?? "GET";
       calls.push({ method, path, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (path === "/knowledge" && method === "GET") {
+        return new Response(JSON.stringify(knowledge), { status: 200 });
+      }
       if (path === "/channels" && method === "GET") {
+        if (opts?.channelsPending) {
+          return new Promise<Response>(() => undefined);
+        }
+        if (opts?.channelsDown) {
+          throw new TypeError("fetch failed");
+        }
         return new Response(JSON.stringify(channels), { status: 200 });
       }
       if (path === "/channels/policy/mute" || path === "/channels/policy/unmute") {
@@ -77,7 +110,7 @@ describe("#47 AC1 — configured channels list with the daemon's own strings", (
       connected,
       { ...connected, kind: "semaphore", label: "Ridge flags", state: "degraded" as ChannelSummary["state"], lastActivityAt: "2026-09-18T08:00:00.000Z" },
     ]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
 
     const rows = await screen.findAllByTestId("channel");
     expect(rows).toHaveLength(2);
@@ -96,13 +129,13 @@ describe("#47 AC1 — configured channels list with the daemon's own strings", (
 
   it("a channel that has never been active says so instead of showing a blank", async () => {
     stubDaemon([{ ...connected, lastActivityAt: null }]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
     expect(await screen.findByTestId("channel-last-activity")).toHaveTextContent("No activity yet");
   });
 
   it("a kind this client has never seen renders like any other — nothing is keyed on it", async () => {
     stubDaemon([{ ...connected, kind: "never-seen-before-kind", label: "Whatever the adapter calls itself" }]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
     expect(await screen.findByTestId("channel-label")).toHaveTextContent("Whatever the adapter calls itself");
     // No icon, no attribute or class derived from the kind.
     const row = screen.getByTestId("channel");
@@ -112,23 +145,27 @@ describe("#47 AC1 — configured channels list with the daemon's own strings", (
 
   it("offers no way to connect or authorise a channel — that happens where the credentials are", async () => {
     stubDaemon([connected]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
     await screen.findByTestId("channel");
-    expect(screen.queryByRole("button", { name: /connect|authori[sz]e|add|set up/i })).toBeNull();
+    const section = screen.getByTestId("knows-connected");
+    expect(within(section).queryByRole("button", { name: /connect|authori[sz]e|add|set up/i })).toBeNull();
+    expect(within(section).queryByRole("link", { name: /connect|authori[sz]e|add|set up/i })).toBeNull();
   });
 
-  it("asks the daemon for the list and nothing else on open", async () => {
+  it("asks the daemon for the knowledge and the channel list and nothing else on open", async () => {
     const calls = stubDaemon([connected]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
     await screen.findByTestId("channel");
-    expect(calls).toEqual([{ method: "GET", path: "/channels", body: undefined }]);
+    expect(calls).toHaveLength(2);
+    expect(calls).toContainEqual({ method: "GET", path: "/knowledge", body: undefined });
+    expect(calls).toContainEqual({ method: "GET", path: "/channels", body: undefined });
   });
 });
 
 describe("#47 AC2 — a broken channel is obvious", () => {
   it("names the failure and shows the adapter's reason verbatim", async () => {
     stubDaemon([connected, broken]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
 
     const failure = await screen.findByTestId("channel-failure");
     expect(failure).toHaveTextContent("The beacon's flint is wet — 3 sends have not lit.");
@@ -145,13 +182,13 @@ describe("#47 AC2 — a broken channel is obvious", () => {
 
   it("a failed channel without a reason still reads as failed", async () => {
     stubDaemon([{ ...broken, reason: undefined }]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
     expect(await screen.findByTestId("channel-failure")).toHaveTextContent(/failed/i);
   });
 
   it("puts a failed channel first, where the owner will see it, whatever order the daemon sent", async () => {
     stubDaemon([connected, broken]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
     const rows = await screen.findAllByTestId("channel");
     expect(within(rows[0]!).getByTestId("channel-label")).toHaveTextContent("Hilltop beacon");
     expect(within(rows[1]!).getByTestId("channel-label")).toHaveTextContent("Roof loft, north window");
@@ -161,7 +198,7 @@ describe("#47 AC2 — a broken channel is obvious", () => {
 describe("#47 AC3 — channels can be muted", () => {
   it("mutes by the channel's kind through the policy route, and the state shows here", async () => {
     const calls = stubDaemon([connected]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
 
     const row = await screen.findByTestId("channel");
     expect(within(row).queryByTestId("channel-muted")).toBeNull();
@@ -176,7 +213,7 @@ describe("#47 AC3 — channels can be muted", () => {
 
   it("unmutes a muted channel, reversibly", async () => {
     const calls = stubDaemon([{ ...connected, muted: true }]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
 
     const row = await screen.findByTestId("channel");
     expect(within(row).getByTestId("channel-muted")).toBeInTheDocument();
@@ -189,7 +226,7 @@ describe("#47 AC3 — channels can be muted", () => {
 
   it("a refused mute says so in the daemon's words and leaves the state as the daemon has it", async () => {
     stubDaemon([connected], { muteStatus: 400 });
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /^mute/i }));
 
@@ -199,7 +236,7 @@ describe("#47 AC3 — channels can be muted", () => {
 
   it("a muted channel that has failed shows both facts", async () => {
     stubDaemon([{ ...broken, muted: true }]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
     await screen.findByTestId("channel");
     expect(screen.getByTestId("channel-failure")).toBeInTheDocument();
     expect(screen.getByTestId("channel-muted")).toBeInTheDocument();
@@ -209,32 +246,35 @@ describe("#47 AC3 — channels can be muted", () => {
 describe("#47 AC4 — no channels reads as normal", () => {
   it("says the duo answers only the owner right now, not that something is missing", async () => {
     stubDaemon([]);
-    renderWithClient(<Channels api={api} />);
+    renderWithClient(<Knows api={api} />);
 
     const empty = await screen.findByTestId("channels-none");
     expect(empty).toHaveTextContent(/answers only you/i);
     expect(empty).toHaveTextContent(/nothing is bridged in/i);
-    // Not an unfinished-setup screen: no error, no warning tone, no call to action.
-    expect(screen.queryByTestId("route-error")).toBeNull();
+    // Not an unfinished-setup state: no error, no warning tone, no call to action.
+    const section = screen.getByTestId("knows-connected");
+    expect(within(section).queryByTestId("route-error")).toBeNull();
     expect(empty).not.toHaveAttribute("role", "alert");
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(within(section).queryByRole("button")).toBeNull();
     expect(empty.textContent).not.toMatch(/missing|not yet|set up|finish|connect one/i);
   });
 });
 
 describe("#47 — the read's own states", () => {
-  it("says what to do when the daemon can't be reached", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("fetch failed"))));
-    renderWithClient(<Channels api={api} />);
-    expect(await screen.findByTestId("route-error")).toBeInTheDocument();
+  it("says what to do when the daemon can't be reached for the channel list", async () => {
+    stubDaemon([connected], { channelsDown: true });
+    renderWithClient(<Knows api={api} />);
+    const section = await screen.findByTestId("knows-connected");
+    expect(await within(section).findByTestId("route-error")).toBeInTheDocument();
     expect(screen.queryByTestId("channels-none")).toBeNull();
   });
 
-  it("holds a loading shape until the list arrives", async () => {
-    stubDaemon([connected]);
-    renderWithClient(<Channels api={api} />);
-    expect(screen.getByTestId("route-loading")).toBeInTheDocument();
-    await screen.findByTestId("channel");
-    expect(screen.queryByTestId("route-loading")).toBeNull();
+  it("holds a loading shape in the section until the list arrives", async () => {
+    stubDaemon([connected], { channelsPending: true });
+    renderWithClient(<Knows api={api} />);
+    const section = await screen.findByTestId("knows-connected");
+    expect(within(section).getByTestId("route-loading")).toBeInTheDocument();
+    expect(screen.queryByTestId("channel")).toBeNull();
+    expect(screen.queryByTestId("channels-none")).toBeNull();
   });
 });
