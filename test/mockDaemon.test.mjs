@@ -859,3 +859,32 @@ describe("mock daemon — lifecycle (duo #55, mirroring digital-duo #181)", () =
     });
   });
 });
+
+// #52: the T4 confirmation moment, mirroring digital-duo #180's routes —
+// the mock's own fidelity is what lets the client be run end to end.
+describe("mock daemon — the T4 confirmation moment (duo #52, mirroring digital-duo #180)", () => {
+  it("lists the staged request with everything needed to judge it, then confirms it exactly once", async () => {
+    const pending = await (await get("/actions/t4/pending")).json();
+    expect(pending.length).toBeGreaterThan(0);
+    const [request] = pending;
+    expect(request).toMatchObject({ id: expect.any(String), actionId: expect.any(String), topicId: expect.any(String), reasoning: expect.any(String), executedAt: null });
+    expect(request.action).toMatchObject({ description: expect.any(String), reversible: false, tier: "T4", audience: "external" });
+
+    const confirmed = await post(`/actions/t4/${request.id}/confirm`, undefined);
+    expect(confirmed.status).toBe(200);
+    expect((await confirmed.json()).executedAt).toEqual(expect.any(String));
+
+    // Gone from the waiting list; a second confirmation is the guard's own conflict, never a re-execution.
+    const after = await (await get("/actions/t4/pending")).json();
+    expect(after.some((r) => r.id === request.id)).toBe(false);
+    const again = await post(`/actions/t4/${request.id}/confirm`, undefined);
+    expect(again.status).toBe(409);
+    expect((await again.json()).error.code).toBe("T4RequestAlreadyExecutedError");
+  });
+
+  it("refuses to confirm a request that was never staged, with the daemon's own not-found", async () => {
+    const missing = await post("/actions/t4/not-a-request/confirm", undefined);
+    expect(missing.status).toBe(404);
+    expect((await missing.json()).error.code).toBe("NoPendingT4RequestError");
+  });
+});

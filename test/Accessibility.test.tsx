@@ -25,8 +25,9 @@ import { Knowledge } from "../src/routes/Knowledge.js";
 import { Escalations } from "../src/routes/Escalations.js";
 import { Mirror } from "../src/routes/Mirror.js";
 import { Settings } from "../src/routes/Settings.js";
+import { Confirmations } from "../src/routes/Confirmations.js";
 import type { DuoApiConfig } from "../src/api/client.js";
-import type { AuditEntry, CorrectionCandidate, DraftRecord, GridRow, Rule } from "../src/api/types.js";
+import type { AuditEntry, CorrectionCandidate, DraftRecord, GridRow, PendingT4RequestForJudgement, Rule } from "../src/api/types.js";
 
 // The shell's notification side effects are Tauri's; the announcement is
 // the client's half and is what this file pins.
@@ -38,6 +39,7 @@ vi.mock("../src/notifications.js", () => ({
   notifyDraftReady: vi.fn(),
   postNotification: vi.fn(),
   wireNotificationClicks: vi.fn(() => Promise.resolve(() => {})),
+  notifyConfirmationWaiting: vi.fn(),
 }));
 
 /*
@@ -118,6 +120,26 @@ const auditEntry: AuditEntry = {
   askerResolved: true,
   declined: false,
   answerText: "the answer",
+};
+
+const pendingConfirmation: PendingT4RequestForJudgement = {
+  id: "req-1",
+  actionId: "file-court-response",
+  topicId: "evictions",
+  reasoning: "the deadline is tomorrow",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  executedAt: null,
+  action: {
+    id: "file-court-response",
+    description: "File a response with the court on the owner's behalf",
+    reversible: false,
+    obligates: true,
+    audience: "external",
+    topicIds: ["evictions"],
+    tier: "T4",
+    registeredAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
 };
 
 const rule: Rule = {
@@ -204,6 +226,8 @@ describe("#39 AC1 — the page has structure", () => {
       { name: "Audit — log", ui: <Audit api={api} />, routes: { "/audit": [auditEntry] } },
       { name: "Audit — empty", ui: <Audit api={api} />, routes: { "/audit": [] } },
       { name: "Knowledge", ui: <Knowledge api={api} />, routes: { "/knowledge": knowledgeFor() } },
+      { name: "Confirmations — waiting", ui: <Confirmations api={api} />, routes: { "/actions/t4/pending": [pendingConfirmation] } },
+      { name: "Confirmations — empty", ui: <Confirmations api={api} />, routes: { "/actions/t4/pending": [] } },
       {
         name: "Escalations",
         ui: <Escalations api={api} />,

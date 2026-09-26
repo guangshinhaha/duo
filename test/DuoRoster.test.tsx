@@ -19,6 +19,7 @@ vi.mock("../src/notifications.js", () => ({
   notifyDraftReady: vi.fn(),
   postNotification: vi.fn(),
   wireNotificationClicks: vi.fn(() => Promise.resolve(() => {})),
+  notifyConfirmationWaiting: vi.fn(),
 }));
 
 /*

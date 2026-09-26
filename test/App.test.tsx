@@ -71,6 +71,12 @@ describe("App — the query cache never leaks across a reconnect to a different 
   it("does not show daemon A's cached drafts while daemon B's request is still in flight after reconnecting", async () => {
     let resolveB!: (value: Response) => void;
     const fetchMock = vi.fn((url: string) => {
+      // #52: the shell also reads the pending confirmations — a second,
+      // unrelated request that must neither be mistaken for the drafts
+      // list nor be the held promise.
+      if (url.includes("/actions/t4/pending")) {
+        return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+      }
       if (url.includes("daemon-a")) {
         return Promise.resolve(new Response(JSON.stringify([draftFor("A")]), { status: 200 }));
       }

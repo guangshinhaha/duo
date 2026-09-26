@@ -188,3 +188,66 @@ describe("#69 AC3 — the duo's own acts carry their own words", () => {
     expect(draftArrivalBody({ escalated: false, refused: false })).toBeNull();
   });
 });
+
+describe("#52 — a confirmation is waiting: notified natively, and the click only navigates", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    plugin.isPermissionGranted.mockReset();
+    plugin.requestPermission.mockReset();
+    plugin.sendNotification.mockReset();
+    plugin.onAction.mockReset();
+    plugin.isPermissionGranted.mockResolvedValue(true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.location.hash = "";
+  });
+
+  it("says that the duo needs a confirmation before it acts — and nothing about what it would do", async () => {
+    const { notifyConfirmationWaiting } = await import("../src/notifications.js");
+    await notifyConfirmationWaiting();
+    expect(plugin.sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Duo", body: "Your duo needs your confirmation before it acts." }),
+    );
+  });
+
+  it("clicking it opens the confirmations surface, and draft notifications still open their draft", async () => {
+    let onClick: ActionCallback | undefined;
+    plugin.onAction.mockImplementation(async (cb: ActionCallback) => {
+      onClick = cb;
+      return { unregister: () => {} };
+    });
+    const { notifyConfirmationWaiting, notifyDraftReady, wireNotificationClicks } = await import("../src/notifications.js");
+    await wireNotificationClicks();
+
+    await notifyConfirmationWaiting();
+    await notifyDraftReady("d9");
+    const [confirmation, draft] = plugin.sendNotification.mock.calls.map((call) => call[0]);
+    expect(confirmation!.id).not.toBe(draft!.id);
+
+    onClick!({ id: confirmation!.id });
+    expect(window.location.hash).toBe("#confirmations");
+    onClick!({ id: draft!.id });
+    expect(window.location.hash).toBe("#draft/d9");
+  });
+
+  it("do-not-disturb holds it like any of the duo's own acts — recorded for afterwards, pointing at the same surface", async () => {
+    localStorage.setItem("duo.dnd", JSON.stringify({ manual: true, from: null, to: null }));
+    localStorage.removeItem("duo.missed");
+    const { notifyConfirmationWaiting } = await import("../src/notifications.js");
+    await notifyConfirmationWaiting();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem("duo.missed") ?? "[]")).toEqual([
+      expect.objectContaining({ body: "Your duo needs your confirmation before it acts.", hash: "#confirmations" }),
+    ]);
+    localStorage.removeItem("duo.dnd");
+    localStorage.removeItem("duo.missed");
+  });
+
+  it("degrades to a no-op in a plain browser", async () => {
+    plugin.isPermissionGranted.mockRejectedValue(new Error("window.__TAURI_INTERNALS__ is undefined"));
+    const { notifyConfirmationWaiting } = await import("../src/notifications.js");
+    await expect(notifyConfirmationWaiting()).resolves.toBeUndefined();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+});
