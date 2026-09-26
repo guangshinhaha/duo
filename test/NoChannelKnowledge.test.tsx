@@ -77,7 +77,10 @@ describe("#43 AC1 — no channel is named in the source", () => {
     const results = await eslint.lintFiles(["src/**/*.ts", "src/**/*.tsx"]);
     const errors = results.flatMap((result) => result.messages);
     expect(errors).toEqual([]);
-  });
+    // Linting every source file is seconds of work, which a loaded machine
+    // (a parallel suite, CI) stretches past vitest's 5s default — the
+    // result is unchanged, only the patience.
+  }, 60_000);
 });
 
 describe("#43 AC2 — labels come from the daemon", () => {

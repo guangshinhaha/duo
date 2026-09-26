@@ -4,6 +4,8 @@ import { useDraft } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
 import { DraftCard } from "../components/DraftCard.js";
 import { MutationError } from "../components/MutationError.js";
+import { useConversationLink } from "../workspace/drafts.js";
+import type { WorkspaceConnection } from "../workspace/matrix.js";
 
 /**
  * One draft on its own (#25): `#draft/:id`, the address a notification
@@ -13,8 +15,18 @@ import { MutationError } from "../components/MutationError.js";
  * or lives on another duo) is a 404 the page says plainly, with the way
  * back to Review.
  */
-export function Draft({ api, draftId }: { api: DuoApiConfig; draftId: string }) {
+export function Draft({
+  api,
+  draftId,
+  connection = null,
+}: {
+  api: DuoApiConfig;
+  draftId: string;
+  /** #68: the workspace, when signed in — a draft for a message that arrived in a conversation links back into it. */
+  connection?: WorkspaceConnection | null;
+}) {
   const draft = useDraft(api, draftId);
+  const conversationLink = useConversationLink(connection);
 
   // Deciding on this page returns to the queue — the draft is dealt with
   // and Review is what's next. But an ALREADY-decided draft linked
@@ -66,7 +78,7 @@ export function Draft({ api, draftId }: { api: DuoApiConfig; draftId: string }) 
       {/* #39: the page's h1 — the card's question is content, not the
           page's name; the address names the page. */}
       <h1 className="type-heading sr-only">Draft</h1>
-      <DraftCard api={api} draft={draft.data} />
+      <DraftCard api={api} draft={draft.data} conversationHref={conversationLink(draft.data.provenance)} />
     </div>
   );
 }

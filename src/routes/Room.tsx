@@ -38,6 +38,11 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../compon
  * Live arrivals land through the query cache: the subscription invalidates
  * the timeline, the refetch is the truth, and no message is ever spliced
  * in from a second source.
+ *
+ * #68: for an owner with a paired duo, the conversation also shows the
+ * drafts the duo made for messages that arrived here — the shell's
+ * `RoomDrafts`, handed in as a slot and rendered in a region of its own
+ * beside the composer, never in the transcript.
  */
 
 /** The reaction keys the picker offers — a fixed, readable set, not a free-text field. */
@@ -93,7 +98,21 @@ function messageWords(message: RoomMessage): ReactNode {
   );
 }
 
-export function Room({ connection, roomId }: { connection: WorkspaceConnection | null; roomId: string }) {
+export function Room({
+  connection,
+  roomId,
+  drafts = null,
+}: {
+  connection: WorkspaceConnection | null;
+  roomId: string;
+  /**
+   * #68: the owner's drafts for this conversation, when the shell has a duo
+   * to ask — a slot, because the share path (#66) may not import the
+   * daemon's client: this route renders where the drafts go and knows
+   * nothing of where they come from.
+   */
+  drafts?: ReactNode;
+}) {
   const queryClient = useQueryClient();
   useEffect(() => {
     if (!connection) {
@@ -215,6 +234,10 @@ export function Room({ connection, roomId }: { connection: WorkspaceConnection |
           )}
         </section>
       </div>
+      {/* #68: outside the transcript's scroll, above the composer — the
+          owner's drafts for this conversation, never part of what its
+          members read. */}
+      {drafts}
       <RoomComposer connection={connection} roomId={roomId} roomName={roomName} members={room?.members ?? []} />
       {/* A delete asks first: the words go for everyone, and the surface
           says so in the same words it will show afterwards. */}

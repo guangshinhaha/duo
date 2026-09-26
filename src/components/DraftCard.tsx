@@ -62,7 +62,16 @@ export const IGNORE_UNDO_WINDOW_MS = 5_000;
  * the provenance rail, and Send / Edit / Ignore — the correction loop's
  * only input, so this is the component the whole product exists to serve.
  */
-export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecord }) {
+export function DraftCard({
+  api,
+  draft,
+  conversationHref,
+}: {
+  api: DuoApiConfig;
+  draft: DraftRecord;
+  /** #68: the in-app conversation this draft's message arrived in — passed by a surface showing the card away from it. */
+  conversationHref?: string;
+}) {
   const recordOutcome = useRecordOutcome(api);
   const answerEscalation = useAnswerEscalation(api);
   // #30: a draft whose provenance is the owner is an answer to a question
@@ -158,7 +167,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
           <OwnerMessage>{draft.question}</OwnerMessage>
           {/* #20: a channel-borne question carries its asker even when it
               escalated — judging the escalation still means judging who asked. */}
-          <ProvenanceLine provenance={draft.provenance} />
+          <ProvenanceLine provenance={draft.provenance} conversationHref={conversationHref} />
           <div className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] px-4 py-3 type-body text-[var(--muted)]" data-testid="escalation-reason">
             {draft.escalationReason}
           </div>
@@ -203,7 +212,7 @@ export function DraftCard({ api, draft }: { api: DuoApiConfig; draft: DraftRecor
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <OwnerMessage>{draft.question}</OwnerMessage>
         {/* #20: who asked, when the asker was a channel rather than you. */}
-        <ProvenanceLine provenance={draft.provenance} />
+        <ProvenanceLine provenance={draft.provenance} conversationHref={conversationHref} />
         <DuoMessage>
           {editing ? (
             <div className="flex w-full flex-col gap-2">

@@ -240,7 +240,9 @@ owner's side, never on yours.
   people, groups and duos, all entries in that one list.
 - **Where drafts live.** In Review — never in the transcript. The draft you are deciding renders
   in its conversation, with its provenance rail, *because Review brought you there*; the
-  transcript itself records only outcomes. The rail is permanent, not a disclosure triangle:
+  transcript itself records only outcomes. (#68: the same draft can also be decided from the
+  conversation it answers — in a region beside the composer, outside the transcript, through
+  the same card — and either place clears it from both.) The rail is permanent, not a disclosure triangle:
   "why did it say that" is the product's core promise and it should cost zero clicks.
 - **Mirror and Trust** are about your own duo, grouped under Your duo, below the conversations.
 - **Audit and Settings** are global and rare; they sit at the bottom, off the spine.

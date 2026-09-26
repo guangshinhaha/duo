@@ -382,6 +382,39 @@ hint describes, never a limit this app enforces. Attach-then-ask rides by constr
 attachment sends as its own message, in order, before the question — contiguous, same sender,
 same room, exactly what the backend associates.
 
+#68 closes the loop the product is built on inside one app: a message someone sends the owner
+in a conversation here is drafted for by the owner's duo, and the owner sends, edits, or
+ignores the draft — the edit is the correction loop's input, as it always was. **Everything
+that acts is the daemon's**, over its own workspace connection: it drafts (a channel-origin
+draft whose provenance, digital-duo #169, names the conversation and the message by the
+message's own `matrix.to` permalink) and it delivers (`POST /drafts/:id/outcome` hands a sent
+or edited draft's text back through the origin channel's seam, #170, and records
+pending/delivered/failed). The client's part is the surface, and it adds no behaviour the
+daemon lacks: it never posts a draft's text itself (that would be a second sender racing the
+daemon's delivery — the words reach the timeline as the homeserver's record, the owner's own
+message, attributed as a person). The channel kind is the daemon's string and is never
+consulted (#43); a draft belongs to a conversation exactly when its permalink parses as a
+`matrix.to` room address (`conversationOf` in `src/workspace/drafts.ts` — a room *id* only, an
+alias names nothing unambiguous, and anything else reads as no conversation), so drafts of
+other origins, legacy rows, and permalinks the client cannot read stay in Review alone.
+
+Three surfaces read the same records, under keys that already exist — nothing new is cached:
+Review (`["drafts", { outcome: "pending" }]`) and a draft's own page each link the draft back
+into its conversation, but only when the member holds that room (the shared
+`["workspace", "rooms"]` read — never a link the workspace would refuse); and the conversation
+itself renders `RoomDrafts` — the pending list and the newest window of the draft log
+(`["drafts", { limit: 50 }]`), both filtered by the conversation the provenance names — in a
+region beside the composer, **outside the transcript** (AR-14: the transcript is what the
+room's members read, and a draft is the owner's alone until sent). It renders through the very
+same `DraftCard` — Send, Edit, Ignore with the undo window, the daemon-unreachable rule (AR-15)
+— so there is one draft, one decision, and one invalidation (`["drafts"]` and `["review"]`):
+deciding it in the conversation clears it from Review and the badge, and leaving it alone
+leaves it in Review, its durable home. After a send, the region keeps one line per recent
+sent draft — "You sent your duo’s draft." and the daemon's delivery state (#21) verbatim — so
+a failed delivery is visible where the conversation is, and no retry is invented (the daemon
+exposes none). A member with no duo paired has no drafts and the region is not mounted: no
+duo, no daemon read.
+
 ## 3.3 Offline
 
 The query cache persists to storage and rehydrates at launch. Two connections fail for
