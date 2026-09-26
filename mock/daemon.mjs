@@ -190,6 +190,27 @@ function seedState() {
         summary: "The shared duo answered 41 of 55 questions over the last month.",
       },
     },
+    // The registered channel adapters (#171), as their own status probes
+    // would report them: a kind, the adapter's own label, its health, and
+    // when it last carried something. `muted` is NOT stored here — like the
+    // real describeChannels, the route reads it off the one mute store
+    // below, so a row and the policy can never disagree. One healthy, one
+    // failed (with the adapter's own reason), so both renderings are
+    // exercisable; nothing here is special to the client, which recognises
+    // neither kind.
+    channels: [
+      { kind: "slack", label: "Acme workspace", state: "connected", lastActivityAt: minutesAgo(35) },
+      {
+        kind: "mail-bridge",
+        label: "support@acme.example",
+        state: "failed",
+        reason: "Login rejected by the mail server — the app password was revoked.",
+        lastActivityAt: null,
+      },
+    ],
+    // The one mute store (#172): channel kinds, plus thread mutes scoped
+    // below a channel. Empty at boot — nothing is muted until the owner says.
+    mutePolicy: { muted: [], mutedThreads: [] },
     // The corpus /search serves (#46). Every record mentions "duo" exactly
     // once, so q=duo ranks in pure seed order (twelve records — enough to
     // page); the "vendor" trio carries three, two, and one occurrences so
@@ -555,6 +576,67 @@ export function createMockDaemon() {
       ],
       ["GET", /^\/trust\/grid$/, () => ok(state.grid)],
       ["GET", /^\/audit$/, () => ok(state.audit)],
+      [
+        "GET",
+        /^\/channels$/,
+        () =>
+          // describeChannels (#171): one row per adapter, `reason` present
+          // iff failed, `muted` matched case-insensitively against the kind
+          // in the one mute store.
+          ok(
+            state.channels.map((channel) => ({
+              ...channel,
+              muted: state.mutePolicy.muted.some((entry) => entry.toLowerCase() === channel.kind.toLowerCase()),
+            })),
+          ),
+      ],
+      ["GET", /^\/channels\/policy$/, () => ok(state.mutePolicy)],
+      [
+        "POST",
+        /^\/channels\/policy\/(mute|unmute)$/,
+        (m, body) => {
+          // #172: the same validation, in the daemon's own words — a
+          // required non-empty channel, an optional threadId, and "/"
+          // banned in both because it is the thread scope's separator.
+          const { channel, threadId } = body;
+          if (typeof channel !== "string" || channel.trim().length === 0) {
+            return fail(400, "bad_request", "channel is required and must be a non-empty string");
+          }
+          if (channel.includes("/")) {
+            return fail(
+              400,
+              "bad_request",
+              `channel must not contain "/" — it scopes a thread within a channel — got ${JSON.stringify(channel)}`,
+            );
+          }
+          if (threadId !== undefined && (typeof threadId !== "string" || threadId.trim().length === 0)) {
+            return fail(400, "bad_request", "threadId must be a non-empty string when given");
+          }
+          if (typeof threadId === "string" && threadId.includes("/")) {
+            return fail(
+              400,
+              "bad_request",
+              `threadId must not contain "/" — it scopes a thread within a channel — got ${JSON.stringify(threadId)}`,
+            );
+          }
+          const lower = channel.toLowerCase();
+          const policy = state.mutePolicy;
+          if (threadId === undefined) {
+            policy.muted = policy.muted.filter((entry) => entry.toLowerCase() !== lower);
+            if (m[1] === "mute") {
+              policy.muted.push(channel);
+            }
+          } else {
+            policy.mutedThreads = policy.mutedThreads.filter(
+              (entry) => !(entry.channel.toLowerCase() === lower && entry.threadId.toLowerCase() === threadId.toLowerCase()),
+            );
+            if (m[1] === "mute") {
+              policy.mutedThreads.push({ channel, threadId });
+            }
+          }
+          return ok(policy);
+        },
+      ],
       [
         "GET",
         /^\/search$/,

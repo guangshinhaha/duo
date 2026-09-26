@@ -26,6 +26,7 @@ import { Trust } from "./routes/Trust.js";
 import { Audit } from "./routes/Audit.js";
 import { Mirror } from "./routes/Mirror.js";
 import { Knowledge } from "./routes/Knowledge.js";
+import { Channels } from "./routes/Channels.js";
 import { SearchOverlay } from "./components/SearchOverlay.js";
 import { DuoRoster } from "./components/DuoRoster.js";
 import { NoDuoPanel } from "./components/NoDuoPanel.js";
@@ -94,6 +95,7 @@ type Route =
   | "settings"
   | "mirror"
   | "knowledge"
+  | "channels"
   | { draft: string }
   | { room: string }
   | { thread: { roomId: string; rootEventId: string } };
@@ -139,6 +141,9 @@ function routeFromHash(hash: string, fallback: Route = "review"): Route {
   }
   if (hash === "#knowledge") {
     return "knowledge";
+  }
+  if (hash === "#channels") {
+    return "channels";
   }
   if (hash === "#corrections") {
     return "corrections";
@@ -345,6 +350,9 @@ function MobileNav({
               <NavLink active={route === "knowledge"} href="#knowledge" onClick={close}>
                 Knowledge
               </NavLink>
+              <NavLink active={route === "channels"} href="#channels" onClick={close}>
+                Channels
+              </NavLink>
               <section className="mt-2 flex flex-col gap-1">
                 <div className="px-2 type-provenance uppercase text-[var(--faint)]">More</div>
                 <NavLink active={route === "trust"} href="#trust" onClick={close}>
@@ -430,6 +438,8 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       return <Mirror api={shell.api!} />;
     case "knowledge":
       return <Knowledge api={shell.api!} />;
+    case "channels":
+      return <Channels api={shell.api!} />;
     case "corrections":
       return <Corrections api={shell.api!} />;
     case "duo":
@@ -728,6 +738,12 @@ function AppShell() {
                   then what it knows (Knowledge). */}
               <NavLink active={route === "knowledge"} href="#knowledge">
                 Knowledge
+              </NavLink>
+              {/* #47: what the duo is reachable through — the bridged
+                  channels and whether each is working, right after what it
+                  knows. */}
+              <NavLink active={route === "channels"} href="#channels">
+                Channels
               </NavLink>
             </>
           )}
