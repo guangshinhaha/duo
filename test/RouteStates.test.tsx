@@ -73,9 +73,9 @@ describe("#37 AC1 — the empty queue makes the case", () => {
     // Knowledge's own sentences, not paraphrased, because they are the
     // product's argument already written.
     const facts = await screen.findByTestId("waiting-home-knowledge");
-    expect(facts).toHaveTextContent("0 records");
-    expect(facts).toHaveTextContent("No import yet — importing your records is what gives the duo something to answer from.");
-    expect(facts).toHaveTextContent("Not enough history yet — the corpus starts to mean something at 10 questions, and this duo has 0. Importing more records is what thickens it.");
+    expect(facts).toHaveTextContent("It has read 0 of your messages and notes so far");
+    expect(facts).toHaveTextContent("No import yet — importing your history is what gives the duo something to answer from.");
+    expect(facts).toHaveTextContent("Not enough history yet — your duo starts to get a picture of you at 10 questions, and it has 0. Importing more of your messages is what thickens it.");
     // The one factual pointer to what is already there.
     expect(facts).toHaveTextContent("⌘K searches what your duo knows.");
   });
@@ -107,10 +107,10 @@ describe("#37 AC1 — the empty queue makes the case", () => {
     renderWaiting();
 
     const facts = await screen.findByTestId("waiting-home-knowledge");
-    expect(facts).toHaveTextContent("312 records");
+    expect(facts).toHaveTextContent("It has read 312 of your messages and notes so far");
     // Knowledge's own last-import sentence, verbatim.
     expect(facts).toHaveTextContent("Last import");
-    expect(facts).toHaveTextContent("312 written, 4 already present, 7 DM conversations skipped.");
+    expect(facts).toHaveTextContent("312 new, 4 already there, 7 direct-message conversations left out.");
     // Past the bar: the count, and the action the facts support — asking.
     expect(facts).toHaveTextContent("41 questions so far — asking it questions is what thickens it.");
     expect(facts).not.toHaveTextContent("Not enough history yet");
@@ -132,7 +132,7 @@ describe("#37 AC1 — the empty queue makes the case", () => {
     expect(screen.getByTestId("waiting-home-knowledge")).toHaveTextContent("⌘K searches what your duo knows.");
     // No half-rendered facts: the block either has the daemon's numbers or
     // does not pretend to.
-    expect(screen.getByTestId("waiting-home-knowledge").textContent).not.toMatch(/\d+ records/);
+    expect(screen.getByTestId("waiting-home-knowledge").textContent).not.toMatch(/It has read \d+/);
   });
 });
 

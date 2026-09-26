@@ -191,12 +191,13 @@ export function DraftTray({
           </p>
         ) : (
           // AR-18: answering a passed-on question is free text that authors a standing order — desktop only.
+          <>
           <div className="hidden gap-2 md:flex">
             <input
-              aria-label="Answer it yourself — becomes a standing-order candidate"
+              aria-label="Answer it yourself"
               className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
               onChange={(e) => d.setAnswerText(e.target.value)}
-              placeholder="Answer it yourself — becomes a standing-order candidate"
+              placeholder="Answer it yourself"
               value={d.answerText}
             />
             <button
@@ -208,6 +209,10 @@ export function DraftTray({
               Answer it
             </button>
           </div>
+          <p className="hidden type-provenance text-[var(--faint)] md:block" data-testid="answer-hint">
+            Your answer is saved as a standing order for you to approve.
+          </p>
+          </>
         )
       ) : d.ignoring ? (
         // #24: the undo window. The dismissal has NOT been recorded — the tray says so, because held vs. sent is the whole point of the window.

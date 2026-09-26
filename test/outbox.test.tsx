@@ -13,7 +13,7 @@ import type { DraftRecord } from "../src/api/types.js";
 /*
  * #61: two rules for two different objects. Ordinary messages queue and
  * deliver on reconnect — that is simply what a messaging app does. Drafts
- * and duo actions (Send / Edit / Ignore / escalation answer / rule
+ * and duo actions (Send / Edit / Dismiss / escalation answer / rule
  * disposition / anything irreversible) are disabled, never queued — a Send
  * firing hours later against moved context is worse than no Send (AR-15,
  * now scoped by digital-duo#193). These tests assert each rule, and one
@@ -345,6 +345,6 @@ describe("#61 — messages queue and deliver; drafts and duo actions do not", ()
     expect(sender).not.toHaveBeenCalled();
     // The duo actions on the very same screen: disabled, never queued (AR-15).
     expect((screen.getByText("Send", { selector: "button" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByText("Ignore", { selector: "button" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText("Dismiss", { selector: "button" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

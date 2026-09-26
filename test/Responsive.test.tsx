@@ -227,7 +227,7 @@ describe("#38 AC3 — §3.1's mobile rules hold", () => {
     // out of narrow widths, still itself on the desktop it belongs to.
     vi.stubGlobal("fetch", stubFetch({ "/drafts?outcome=pending": [escalatedDraft] }));
     renderWithClient(<DraftTray api={api} draft={escalatedDraft} />);
-    const answerInput = await screen.findByLabelText("Answer it yourself — becomes a standing-order candidate");
+    const answerInput = await screen.findByLabelText("Answer it yourself");
     const authoring = answerInput.closest("div");
     expect(authoring?.className).toMatch(/(^|\s)hidden\b/);
     expect(authoring?.className).toContain("md:flex");

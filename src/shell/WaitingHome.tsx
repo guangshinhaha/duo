@@ -38,7 +38,7 @@ export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; con
           {known?.records && known.corpus ? (
             <>
               <p className="type-body text-[var(--text)]">
-                {known.records.total} record{known.records.total === 1 ? "" : "s"} so far · {lastImportSentence(known.lastImport)}
+                It has read {known.records.total} of your messages and notes so far · {lastImportSentence(known.lastImport)}
               </p>
               <p className="type-body text-[var(--text)]">{corpusSentence(known.corpus)}</p>
             </>

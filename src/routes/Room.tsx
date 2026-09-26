@@ -963,8 +963,8 @@ function RoomComposer({
       {attachments.length > 0 && (
         <p className="mt-2 type-provenance text-[var(--muted)]" data-testid="attachment-note">
           {duos.length > 0
-            ? `${duos.map((duo) => `${duoOwnerLabel(duo.userId) ?? localpartOf(duo.userId)}'s duo`).join(", ")} can read what you attach here when you ask next — text files up to 32 KiB ground the answer (the duo's own reading cap, smaller than this app's share limits); images are shared for people, and a duo can't read images yet — an open provider decision. Sharing never imports: nothing enters any duo's corpus.`
-            : "Attachments share with the people in this conversation — no duo is here. Sharing never imports: nothing enters any duo's corpus."}
+            ? `${duos.map((duo) => `${duoOwnerLabel(duo.userId) ?? localpartOf(duo.userId)}'s duo`).join(", ")} can read what you attach here when you ask next — text files up to 32 KiB are used to answer (the duo's own reading cap, smaller than this app's share limits); images are shared for people, and a duo can't read images yet — not yet. Sharing never imports: nothing is added to what any duo knows.`
+            : "Attachments share with the people in this conversation — no duo is here. Sharing never imports: nothing is added to what any duo knows."}
         </p>
       )}
       {error && (

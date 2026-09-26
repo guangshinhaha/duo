@@ -104,7 +104,7 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
             knows — private, on the owner's Mac — and says so, so the two are
             never mistaken for each other. */}
         <p className="type-provenance text-[var(--faint)]" data-testid="search-scope">
-          Your duo&apos;s private records, searched on your Mac — never on the workspace.
+          Your duo&apos;s private history, searched on your Mac — never on the workspace.
         </p>
 
         {/* The daemon's own degraded-retrieval sentence, verbatim — the
@@ -126,7 +126,7 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
                 with nothing in it is about the corpus. The knowledge read
                 is what tells them apart — never a guess. */}
             {knowledge.data?.records.total === 0
-              ? "The corpus is empty — nothing has been imported yet, so there is nothing to search."
+              ? "Your duo hasn't read anything yet — import your history and there will be something to search."
               : "Nothing matched."}
           </div>
         )}

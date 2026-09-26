@@ -82,7 +82,7 @@ describe("#25 — open a single draft", () => {
     expect(screen.getByTestId("duo-message")).toHaveTextContent("Five days per quarter.");
     expect(screen.getByText("Send", { selector: "button" })).toBeInTheDocument();
     expect(screen.getByText("Edit", { selector: "button" })).toBeInTheDocument();
-    expect(screen.getByText("Ignore", { selector: "button" })).toBeInTheDocument();
+    expect(screen.getByText("Dismiss", { selector: "button" })).toBeInTheDocument();
     expect(screen.getByText("standing order: five days")).toBeInTheDocument();
 
     // The page's content came from the single-draft route.
