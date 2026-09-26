@@ -257,6 +257,7 @@ a machine that is already on the tailnet, and that attacker gets to retry.
 /trust           grid, read-only on mobile (AR-17)
 /audit
 /settings        daemon address · paired devices (list, revoke) · forget this device
+/onboarding      the first run: import · embed · derive → ends at /mirror (#49)
 ```
 
 Mobile drops `/trust` and `/audit` to a single "More" section and hides rule authoring entirely
@@ -271,6 +272,7 @@ TanStack Query for everything server-shaped. Keys mirror the routes so invalidat
 ["review"]                           // invalidated by an outcome POST — an edit queues a candidate
 ["mirror", "rules"]  ["mirror", "rules", id]  ["mirror", "refusals"]  ["mirror", "portrait"]  ["trust", "grid"]  ["audit"]
 ["devices"]                          // GET /devices; a revoke writes the answered row in, then refetches (#48)
+["corpus", "embed"]                  // the daemon's one embed job (#49) — polled only while it says "running"
 ```
 
 The only client-owned state is the composer buffer, UI preferences, and the one label the daemon cannot supply (`deviceId`, which paired device this is, #48). No Zustand, no Redux: there
@@ -414,6 +416,22 @@ sent draft — "You sent your duo’s draft." and the daemon's delivery state (#
 a failed delivery is visible where the conversation is, and no retry is invented (the daemon
 exposes none). A member with no duo paired has no drafts and the region is not mounted: no
 duo, no daemon read.
+
+#49 puts the first run in the app, on the routes core #176 opened (`POST /corpus/import-paste`,
+`POST`/`GET /corpus/embed`) and adds no behaviour to them. The flow keeps no "first run" flag: every
+step's state is read off the daemon — records mean the import happened, the embed job's own status
+is the embed's, rules mean derivation has produced something — so a refresh, a second device, or a
+terminal run alongside all agree. "Empty" is the daemon's own fact (`GET /knowledge`: no records,
+no import ever run, no rules), and only a definite empty sends the default surface to `#onboarding`;
+a duo built in a terminal is never empty by that reading, so it opens on Review as before, and
+Setup is untouched. Embedding is a job the app starts and watches (polled only while the daemon
+says "running", the daemon's own counts rendered, its error rendered verbatim). **Derivation has no
+route** — `duo derive` is a terminal stage — so the app cannot start it and does not pretend to: the
+derive step says where it runs and watches `GET /knowledge` for its effect, and the flow ends when
+the first rules appear *while the owner is watching* (navigating to `#mirror`, approve and reject in
+reach; opened on a duo that already has rules it points at the Mirror instead of whisking there).
+Whether core should expose a derive job, as it did for embedding, is core's question; until it
+does, that step stays a terminal step the app observes.
 
 ## 3.3 Offline
 

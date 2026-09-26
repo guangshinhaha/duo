@@ -284,6 +284,18 @@ duo's own reading cap (32 KiB, the duo's door, not this app's share
 limits), images honestly not readable yet — and the composer says so in
 those words at attach time.
 
+### import / embed / derive
+
+The three stages of building a duo, in the order the daemon runs them, under
+these names in the app's first run (#49). Import reads a pasted conversation
+into the corpus; embed makes it searchable (a job the app starts and watches);
+derive finds what the duo learned from it — and derive is a terminal stage
+("`duo derive`"), which the app says plainly and watches rather than offers. A
+first run ends at the Mirror, where the owner approves or rejects the rules
+that were derived: the owner never writes a personality, they approve a draft
+of it. Counts in this flow are the daemon's own ("14 questions found", "30 of
+40 records embedded") and a job's failure reads as the daemon worded it.
+
 ### edit / delete / react / reply in thread
 
 The message verbs, each an operation on the room the homeserver holds — the

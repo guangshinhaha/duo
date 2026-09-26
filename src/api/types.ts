@@ -229,6 +229,34 @@ export interface SearchOutcome {
   warning?: string;
 }
 
+/**
+ * `POST /corpus/import-paste` (digital-duo #176): what `duo import paste`
+ * prints, verbatim. `workRelevant: false` is the zero summary of a
+ * transcript the daemon judged not work-relevant (AR-11) — a 200, not an
+ * error, and nothing was written.
+ */
+export interface PasteImportSummary {
+  workRelevant: boolean;
+  written: number;
+  skipped: number;
+  discardedAboveCeiling: number;
+}
+
+/**
+ * `GET`/`POST /corpus/embed` (digital-duo #176): the daemon's one embed
+ * job. `embedded` climbs by batch while `state` is "running"; `total` is
+ * every record in the store (the denominator `duo embed` prints); `error`
+ * is the failing error's own message, non-null only in state "error".
+ */
+export interface EmbedJobStatus {
+  state: "idle" | "running" | "done" | "error";
+  startedAt: string | null;
+  finishedAt: string | null;
+  embedded: number;
+  total: number;
+  error: string | null;
+}
+
 export type RuleReviewStatus = "pending" | "approved" | "rejected" | "superseded";
 export type RuleOrigin = "derived" | "owner_asserted";
 

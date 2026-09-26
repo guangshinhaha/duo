@@ -59,6 +59,10 @@ function RecordsSection({ knowledge }: { knowledge: DuoKnowledge }) {
       <p className="type-provenance text-[var(--faint)]" data-testid="last-import">
         {lastImportSentence(knowledge.lastImport)}
       </p>
+      {/* #49: the first run's address doubles as the way to add more — the same import, embed and derive steps. */}
+      <a className="inline-flex min-h-11 items-center self-start underline" href="#onboarding">
+        Import more history
+      </a>
     </section>
   );
 }
@@ -195,7 +199,7 @@ function KnowledgeScreen({ knowledge }: { knowledge: DuoKnowledge }) {
  * "still asking", never crash on it — the same braces-and-belt law App.tsx
  * states for the persisted cache as a whole.
  */
-function isDuoKnowledgeShape(value: unknown): value is DuoKnowledge {
+export function isDuoKnowledgeShape(value: unknown): value is DuoKnowledge {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }

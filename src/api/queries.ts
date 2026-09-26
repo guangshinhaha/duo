@@ -12,10 +12,12 @@ import type {
   DuoKnowledge,
   DuoSummary,
   EscalationUrgencyRate,
+  EmbedJobStatus,
   GridRow,
   InterruptionPortrait,
   RefusalsListing,
   PairedDevice,
+  PasteImportSummary,
   Rule,
   RuleReviewListing,
   RuleWithEvidence,
@@ -67,6 +69,8 @@ export const queryKeys = {
   escalationRate: ["escalations", "rate"] as const,
   // #48: the paired devices — GET /devices; a revoke writes into and refreshes it.
   devices: ["devices"] as const,
+  // #49: the daemon's one embed job — runtime state (one job, process-bound), so its own key rather than a corpus read.
+  embedJob: ["corpus", "embed"] as const,
   // #46: keyed by the submitted query — each distinct search is its own
   // cache entry, so revisiting a recent query is instant and a stale
   // search never blocks a new one.
@@ -413,6 +417,60 @@ export function useRevokeDevice(api: DuoApiConfig) {
       if (error || id !== api.deviceId) {
         queryClient.invalidateQueries({ queryKey: queryKeys.devices });
       }
+    },
+  });
+}
+
+/**
+ * #49: the first run, from the app — the routes digital-duo #176 opened.
+ * Each hook is a thin call: the daemon owns the parse, the work-relevance
+ * gate, the dedupe and the embed loop, and this client adds none of them.
+ *
+ * Importing sends the transcript text itself (file upload is out of #176's
+ * scope). A success moves what the Knowledge screen counts, so the
+ * knowledge read is stale the moment it lands.
+ */
+export function useImportPaste(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (transcript: string) =>
+      apiRequest<PasteImportSummary>(api, "/corpus/import-paste", { method: "POST", body: JSON.stringify({ transcript }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.knowledge });
+    },
+  });
+}
+
+/**
+ * The embed job's status, polled while it runs. Embedding a real corpus is
+ * minutes of provider round-trips, so the answer is a job to watch, not a
+ * response to wait for: `pollMs` re-asks only while the daemon says
+ * "running", and stops by itself when the job does.
+ */
+export function useEmbedJob(api: DuoApiConfig, pollMs: number) {
+  return useQuery({
+    queryKey: queryKeys.embedJob,
+    queryFn: () => apiRequest<EmbedJobStatus>(api, "/corpus/embed"),
+    refetchInterval: (query) => (query.state.data?.state === "running" ? pollMs : false),
+  });
+}
+
+/**
+ * Starts the daemon's one embed job. A 202 carries the starting status,
+ * which becomes the watched state at once. A 409 (`embed_already_running`)
+ * means a job is already running — from another device or a terminal — so
+ * the status is re-read and the same watch carries on; the daemon's own
+ * sentence still surfaces as the mutation's error.
+ */
+export function useStartEmbed(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiRequest<EmbedJobStatus>(api, "/corpus/embed", { method: "POST" }),
+    onSuccess: (status) => {
+      queryClient.setQueryData(queryKeys.embedJob, status);
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.embedJob });
     },
   });
 }

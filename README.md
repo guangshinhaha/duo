@@ -48,6 +48,11 @@ in this pass).
   The pattern is pure arrangement in `src/escalations/pattern.ts` (identical wording only).
 - **`src/routes/Setup.tsx`** — first run: paste the daemon's tailnet address and a `duo pair new`
   token.
+- **`src/routes/Onboarding.tsx`** (#49) — building a duo from the app: import a pasted export,
+  start and watch the embed job (core #176's routes), watch derivation's effect, and end at the
+  Mirror's first rules. A paired duo the daemon reports empty opens here; one built in a terminal
+  never does. Derivation itself stays a terminal step (`duo derive`) — the daemon has no route for
+  it, so the app says where it runs and watches, rather than pretending.
 - **`src/routes/Settings.tsx`** (#11) — this device's connection at `#settings`: the daemon address
   and a masked token, the address editable with Setup's own validator and wording, and "Forget this
   device" as a local forget behind a confirmation whose copy says exactly that (it does not revoke).
@@ -123,7 +128,9 @@ The asker page works against it too — open
 `ask.html#host=http%3A%2F%2F127.0.0.1%3A7720&token=ask-token`. And the push channel has a demo:
 `POST /mock/push-draft` fabricates a daemon-side draft and broadcasts `draft-ready`, so the socket,
 the refetch, and the notification path can all be watched live (mock-only; the real daemon has no
-such route and needs none).
+such route and needs none). `EMPTY=1 npm run mock` starts a duo nobody has built (the app opens
+on onboarding, #49); after importing and embedding in the app, `POST /mock/derive` stages what
+`duo derive` would have produced (mock-only — the real daemon has no route to run derivation).
 
 Swapping to the real daemon when the core work lands is Settings → Forget this device → re-pair
 with the real address and token. Nothing in `src/` knows the mock exists.

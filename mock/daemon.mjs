@@ -482,8 +482,30 @@ const fail = (status, code, message) => ({ status, body: { error: { code, messag
  * the CLI entry uses DEFAULT_PORT or $PORT), so every instance starts from
  * the seed with nothing shared between instances (KTD-3).
  */
-export function createMockDaemon() {
+export function createMockDaemon({ empty = false, embedTickMs = 400 } = {}) {
   const state = seedState();
+  // The daemon's one embed job (#176, and duo #49's flow over it), in the
+  // shape the real job reports: process-bound runtime state, idle until the
+  // first start.
+  const embedJob = { state: "idle", startedAt: null, finishedAt: null, embedded: 0, total: 0, error: null };
+  if (empty) {
+    // A duo nobody has built yet — what `duo init` leaves behind (#49). What
+    // `duo derive` would later produce is set aside for /mock/derive to
+    // stage, since the real daemon has no route to run derivation.
+    state.derivable = { rules: state.rules, portrait: state.portrait };
+    state.knowledge = { ...state.knowledge, records: { total: 0, bySource: {} }, lastImport: null };
+    state.rules = { awaitingApproval: [], weakSignals: [], inconsistent: [], approved: [], rejected: [] };
+    state.portrait = {
+      ...state.portrait,
+      totalQuestions: 0,
+      periodStart: null,
+      periodEnd: null,
+      topicBreakdown: [],
+      topFiveShare: 0,
+      busiestThreads: [],
+      tooThin: true,
+    };
+  }
   const server = createServer();
   const { broadcast } = attachDraftReadySocket(server);
 
@@ -945,6 +967,97 @@ export function createMockDaemon() {
       ],
       [
         "POST",
+        /^\/corpus\/import-paste$/,
+        (_m, body) => {
+          // #176's route: the transcript text in the body, validated in the
+          // daemon's own words, parsed by the paste adapter's own turn
+          // grammar (a line starting "Me:"/"Human:" or "Claude:"/"Assistant:";
+          // other lines fold into the turn before). The mock judges every
+          // transcript work-relevant, and — like the real second import,
+          // whose fresh timestamps defeat the dedupe — invents no dedupe.
+          if (typeof body?.transcript !== "string" || body.transcript.trim().length === 0) {
+            return fail(400, "bad_request", "transcript is required and must be a non-empty string");
+          }
+          const turns = [];
+          for (const line of body.transcript.split(/\r?\n/)) {
+            const turn = /^(human|me|assistant|claude)\s*:\s?(.*)$/i.exec(line);
+            if (turn) {
+              turns.push(turn[2]);
+            } else if (turns.length > 0 && line.trim().length > 0) {
+              turns[turns.length - 1] += `\n${line}`;
+            }
+          }
+          if (turns.length === 0) {
+            return fail(
+              400,
+              "MalformedTranscriptError",
+              'Expected a pasted transcript with lines starting "Human: " / "Assistant: " (or "Me: " / "Claude: "). Found no recognisable turn.',
+            );
+          }
+          const written = turns.filter((text) => text.trim().length > 0).length;
+          const { records } = state.knowledge;
+          state.knowledge.records = {
+            total: records.total + written,
+            bySource: { ...records.bySource, paste: (records.bySource.paste ?? 0) + written },
+          };
+          state.knowledge.lastImport = {
+            runAt: new Date().toISOString(),
+            staged: written,
+            written,
+            alreadyPresent: 0,
+            skippedDmConversations: 0,
+            discardedOtherText: 0,
+            discardedAboveCeiling: 0,
+          };
+          return ok({ workRelevant: true, written, skipped: 0, discardedAboveCeiling: 0 });
+        },
+      ],
+      [
+        "POST",
+        /^\/corpus\/embed$/,
+        () => {
+          // #176's job: 202 with the starting status (total unknown until the
+          // first batch reports it), one job at a time (409 names the running
+          // one), batches of ten so the count climbs at a watchable pace.
+          if (embedJob.state === "running") {
+            return fail(
+              409,
+              "embed_already_running",
+              "An embed is already running for this corpus; watch GET /corpus/embed for its progress.",
+            );
+          }
+          Object.assign(embedJob, { state: "running", startedAt: new Date().toISOString(), finishedAt: null, embedded: 0, total: 0, error: null });
+          const timer = setInterval(() => {
+            const total = state.knowledge.records.total;
+            embedJob.total = total;
+            embedJob.embedded = Math.min(total, embedJob.embedded + 10);
+            if (embedJob.embedded >= total) {
+              Object.assign(embedJob, { state: "done", finishedAt: new Date().toISOString() });
+              clearInterval(timer);
+            }
+          }, embedTickMs);
+          timer.unref();
+          return { status: 202, body: { ...embedJob } };
+        },
+      ],
+      ["GET", /^\/corpus\/embed$/, () => ok({ ...embedJob })],
+      [
+        "POST",
+        /^\/mock\/derive$/,
+        () => {
+          // Mock-only (the name says so): derivation is a terminal stage
+          // (`duo derive`), and the real daemon has no route to run it. This
+          // stages what it would have produced, so the app's first run can be
+          // watched end to end against the mock started with EMPTY=1.
+          if (state.derivable) {
+            state.rules = state.derivable.rules;
+            state.portrait = state.derivable.portrait;
+          }
+          return ok({ derived: true });
+        },
+      ],
+      [
+        "POST",
         /^\/mock\/push-draft$/,
         (_m, body) => {
           // Mock-only (the name says so): fabricate a draft as if the daemon
@@ -1012,7 +1125,8 @@ function filteredDrafts(state, outcomeParam, beforeParam, limitParam) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT ?? DEFAULT_PORT);
   const host = process.env.HOST ?? DEFAULT_HOST;
-  const { server } = createMockDaemon();
+  // EMPTY=1 starts a duo nobody has built yet, so the app's first run (#49) can be walked.
+  const { server } = createMockDaemon({ empty: process.env.EMPTY === "1" });
   server.listen(port, host, () => {
     console.log(`mock duo daemon on http://${host}:${port}`);
     console.log("");
@@ -1029,6 +1143,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log("");
     console.log("Push a daemon-side draft (mock-only demo of the /ws channel):");
     console.log(`  curl -X POST http://${host}:${port}/mock/push-draft -H 'Authorization: Bearer mock-token' -H 'Content-Type: application/json' -d '{"question":"Did the contract renew?"}'`);
+    console.log("");
+    console.log("Walk the first run (#49) against an empty duo: EMPTY=1 npm run mock, import in the app, then stage");
+    console.log("what `duo derive` would produce (the real daemon has no route to run it):");
+    console.log(`  curl -X POST http://${host}:${port}/mock/derive -H 'Authorization: Bearer mock-token'`);
     console.log("");
     console.log("State is in memory: restarting resets everything to the seed.");
   });
