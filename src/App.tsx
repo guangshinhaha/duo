@@ -603,6 +603,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       return (
         <Conversations
           connection={shell.connection}
+          hasSession={shell.session !== null}
           error={shell.workspaceError}
           onSignIn={shell.onWorkspaceSignIn}
           onSignOut={shell.signOutWorkspace}

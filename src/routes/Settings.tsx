@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import type { WorkspaceSession } from "../workspace/matrix.js";
+import { useWorkspaceAccess } from "../workspace/access.js";
+import { WorkspaceNotSetUp } from "../components/WorkspaceNotSetUp.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -64,6 +66,7 @@ export function Settings({
   /** #55: the daemon confirmed the duo's end — App answers by leaving the pairing and saying so. */
   onDuoEnded?: () => void;
 }) {
+  const workspaceAccess = useWorkspaceAccess();
   const [addressInput, setAddressInput] = useState(api?.baseUrl ?? "");
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
@@ -102,6 +105,8 @@ export function Settings({
               Sign out
             </button>
           </>
+        ) : workspaceAccess.kind === "hosted-pending" ? (
+          <WorkspaceNotSetUp className="flex flex-col gap-1" />
         ) : (
           <>
             <p className="type-provenance text-[var(--muted)]">No workspace signed in on this device.</p>

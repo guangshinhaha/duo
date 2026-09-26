@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
 import type { LiveArrival, NotificationMode, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
+import { WorkspaceSignInDialog } from "../src/components/WorkspaceSignInDialog.js";
 import type { StagedShare } from "../src/workspace/sharing.js";
 
 /*
@@ -2009,5 +2010,150 @@ describe("#66 — sharing files and images in a conversation", () => {
     expect(screen.getByLabelText("Message project-x")).toHaveValue("what does this say?");
     expect(fake.connection.sendFile).not.toHaveBeenCalled();
     expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * #127 (hide-the-form half): a hosted build (VITE_DUO_DAEMON_URL set) never
+ * shows the homeserver form — its workspace is the operator's, not something
+ * the person types an address for. Until auto-connect lands, Conversations
+ * and Settings say the workspace isn't set up instead. A personal daemon
+ * (no env var) keeps the manual form, exactly as #62 built it.
+ */
+describe("#127 — hosted builds never show the homeserver form", () => {
+  const HOSTED_ORIGIN = "https://duo-daemon.example.org";
+
+  async function goTo(hash: string) {
+    window.location.hash = hash;
+    window.dispatchEvent(new Event("hashchange"));
+  }
+
+  /** A hosted sign-in leaves this record beside the pairing; `connectManually` (Advanced) clears it. */
+  function seedHostedAccount() {
+    localStorage.setItem("duo.hosted-account", JSON.stringify({ origin: HOSTED_ORIGIN, ownerName: "Ada", isAdmin: false }));
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("Conversations says the workspace isn't set up, with no sign-in button", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    seedPairing();
+    seedHostedAccount();
+    stubDaemonFetch();
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("workspace-not-set-up")).toHaveTextContent("Workspace isn't set up yet");
+    expect(screen.queryByTestId("conversations-signin")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in to a workspace" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+  });
+
+  it("Settings says the same, and never opens the sign-in dialog", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    seedPairing();
+    seedHostedAccount();
+    stubDaemonFetch();
+    window.location.hash = "#settings";
+
+    await renderApp();
+
+    const workspace = await screen.findByTestId("settings-workspace");
+    expect(within(workspace).getByTestId("workspace-not-set-up")).toHaveTextContent("Workspace isn't set up yet");
+    expect(screen.queryByTestId("settings-workspace-signin")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-signin-dialog")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+  });
+
+  it("the front door's Advanced (address) screen offers pairing, not a homeserver form", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ googleClientId: "abc" }), { status: 200 })));
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("landing-advanced"));
+
+    expect(await screen.findByRole("heading", { name: "Pair a duo instead" })).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+  });
+
+  it("a hosted server without Google sign-in leads with pairing, with no workspace note above it", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ googleClientId: null }), { status: 200 })));
+
+    await renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Pair a duo instead" })).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+  });
+
+  it("a hosted build paired to a personal daemon via Advanced keeps the manual form (AC 4)", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        return new Response(JSON.stringify(url.endsWith("/hosted/config") ? { googleClientId: "abc" } : []), { status: 200 });
+      }),
+    );
+    await renderApp();
+
+    // The front door's Advanced door: pair by address, no hosted sign-in.
+    fireEvent.click(await screen.findByTestId("landing-advanced"));
+    fireEvent.change(await screen.findByLabelText("Daemon address"), { target: { value: "http://100.64.1.5:7717" } });
+    fireEvent.change(screen.getByLabelText("Token"), { target: { value: "tok" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    window.location.hash = "#settings";
+    window.dispatchEvent(new Event("hashchange"));
+    expect(await screen.findByTestId("settings-workspace-signin")).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+    expect(localStorage.getItem("duo.hosted-account")).toBeNull();
+  });
+
+  it("a stored session still connecting is not told the workspace isn't set up", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    seedPairing();
+    seedHostedAccount();
+    seedSession();
+    stubDaemonFetch();
+    vi.mocked(connect).mockReturnValue(new Promise(() => {})); // never resolves: stays connecting
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    await waitFor(() => expect(vi.mocked(connect)).toHaveBeenCalled());
+    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+  });
+
+  it("the sign-in dialog renders nothing for a hosted device, even when asked to open", () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    seedHostedAccount();
+
+    render(<WorkspaceSignInDialog open onOpenChange={() => {}} onSession={() => {}} />);
+
+    expect(screen.queryByTestId("workspace-signin-dialog")).not.toBeInTheDocument();
+  });
+
+  it("a personal daemon keeps the manual form: Conversations and Settings both offer the sign-in", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", "");
+    seedPairing();
+    stubDaemonFetch();
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    fireEvent.click(await screen.findByTestId("conversations-signin"));
+    expect(await screen.findByTestId("workspace-signin-dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("Homeserver")).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByTestId("workspace-signin-dialog"), { key: "Escape" });
+    await goTo("#settings");
+    expect(await screen.findByTestId("settings-workspace-signin")).toHaveTextContent("Sign in to a workspace");
   });
 });

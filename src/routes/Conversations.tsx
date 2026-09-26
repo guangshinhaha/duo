@@ -5,6 +5,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../compon
 import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
+import { WorkspaceNotSetUp } from "../components/WorkspaceNotSetUp.js";
+import { useWorkspaceAccess } from "../workspace/access.js";
 import { plainPreview } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { type NotificationMode, type RoomSummary, type WorkspaceConnection } from "../workspace/matrix.js";
@@ -48,16 +50,20 @@ export function roomTitle(room: RoomSummary): string {
  */
 export function Conversations({
   connection,
+  hasSession,
   error,
   onSignIn,
   onSignOut,
 }: {
   connection: WorkspaceConnection | null;
+  /** A stored session exists — the connection is null only while it connects. */
+  hasSession: boolean;
   error: string | null;
   onSignIn: () => void;
   onSignOut: () => void;
 }) {
   const queryClient = useQueryClient();
+  const workspaceAccess = useWorkspaceAccess();
   // Live arrivals refresh the list the same way every other reader does:
   // invalidation, never a second copy of the data.
   useEffect(() => {
@@ -88,6 +94,18 @@ export function Conversations({
   if (!connection) {
     // Reached by URL without a session (the owner-only app has no link
     // here): say what's missing and offer the way in — never a dead end.
+    // A hosted build has no way in to offer (#127): it says the workspace
+    // isn't set up, with no sign-in button — but only when there is no
+    // session: a stored one is still connecting, and "nothing to do" would
+    // be false for it.
+    if (workspaceAccess.kind === "hosted-pending" && !hasSession) {
+      return (
+        <div className="p-6">
+          <h1 className="type-heading sr-only">Conversations</h1>
+          <WorkspaceNotSetUp className="flex flex-col gap-1" />
+        </div>
+      );
+    }
     return (
       <div className="p-6">
         <h1 className="type-heading sr-only">Conversations</h1>
