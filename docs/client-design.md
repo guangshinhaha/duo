@@ -32,6 +32,9 @@ plus either TestFlight or a direct install. A supervised, MDM-enrolled phone can
 these, and a personal phone reaching a work machine over Tailscale may itself be the policy
 problem rather than the solution.
 
+**Status (#152):** the phone target is decided in [`phone-shell.md`](phone-shell.md) — an installable
+web app first, Tauri mobile second — and G4 itself is still open until someone tries on a phone.
+
 **Mitigation that needs no approval:** the client is a web app first (build step C3) and a
 packaged app second. A responsive web client reached over Tailscale in mobile Safari is not as
 good, but it is not blocked on Apple or on MDM, and it proves the surface before anyone signs
