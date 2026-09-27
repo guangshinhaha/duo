@@ -137,7 +137,9 @@ describe("ConnectToClaude (digital-duo#227)", () => {
     expect(await screen.findByTestId("connect-claude-address")).toHaveTextContent("https://daemon.example/mcp");
     expect(screen.getByTestId("connect-claude-none")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Generate/ })).toBeNull();
-    expect(screen.queryByTestId("connect-claude-history")).toBeNull();
+    // The prompt holds no secret and is what the owner needs right after connecting, so it is there before anything is.
+    expect(screen.getByTestId("connect-claude-prompt").textContent).toBe(PROMPT);
+    expect(screen.getByTestId("connect-claude-history")).toHaveTextContent("Once Claude is connected, paste this into a claude.ai chat");
   });
 
   it("in sign-in mode lists who is connected, offers the history prompt, and disconnects one on request", async () => {
@@ -160,7 +162,8 @@ describe("ConnectToClaude (digital-duo#227)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
     await waitFor(() => expect(daemon.revoked).toEqual(["g1"]));
     expect(await screen.findByTestId("connect-claude-none")).toBeInTheDocument();
-    expect(screen.queryByTestId("connect-claude-history")).toBeNull();
+    // Disconnecting the last Claude does not take the prompt away.
+    expect(screen.getByTestId("connect-claude-prompt").textContent).toBe(PROMPT);
   });
 
   it("offers neither card while the mode is unknown: no Generate button before the daemon answers, or if it fails", async () => {
