@@ -3,6 +3,7 @@ import { useDraftsFeed, usePendingDrafts } from "../api/queries.js";
 import { conversationOf } from "../workspace/drafts.js";
 import { DeliveryStateLine } from "./DeliveryStateLine.js";
 import { DraftTray } from "./DraftTray.js";
+import { useStickToEnd } from "../shell/stickToEnd.js";
 
 /**
  * #68, re-shaped by the chat-first move (#142): the drafts of one
@@ -24,6 +25,9 @@ import { DraftTray } from "./DraftTray.js";
  *
  * Only a paired member has drafts at all; the caller mounts this only then.
  */
+/** How long "Delivered." stays at the end of a conversation after the send it confirms. */
+const DELIVERED_NEWS_MS = 5 * 60_000;
+
 export function RoomDrafts({ api, roomId }: { api: DuoApiConfig; roomId: string }) {
   const pending = usePendingDrafts(api);
   const feed = useDraftsFeed(api);
@@ -32,17 +36,25 @@ export function RoomDrafts({ api, roomId }: { api: DuoApiConfig; roomId: string 
   // The conversation's outcomes: what was sent from a draft here, and how
   // its delivery went. Read from the newest window of the draft log — the
   // recent past is what an owner checking on a delivery is asking about.
+  // Only while there is news (#183 review): a delivered reply is already in
+  // the transcript as the owner's own message, so an old "Delivered." at the
+  // end would read as newer than it is. In flight or failed always shows;
+  // delivered shows just after the send, as its confirmation.
+  const now = Date.now();
   const sent = (feed.data?.pages.flat() ?? []).filter(
     (draft) =>
       (draft.outcome === "sent" || draft.outcome === "edited") &&
       draft.delivery !== null &&
+      (draft.delivery.state !== "delivered" || now - Date.parse(draft.outcomeRecordedAt ?? "") < DELIVERED_NEWS_MS) &&
       conversationOf(draft.provenance)?.roomId === roomId,
   );
+  // A draft arriving brings the chat to its end, so the draft ⏎/E/X act on is on screen.
+  const end = useStickToEnd<HTMLDivElement>(waiting.map((draft) => draft.id).join(","));
 
   // The wrapper is stable even when empty, so a decision moving a draft
   // from "waiting" to "sent" is one region changing, not one unmounting.
   return (
-    <div data-testid="room-drafts">
+    <div data-testid="room-drafts" ref={end}>
       {(waiting.length > 0 || sent.length > 0) && (
         <section aria-label="Drafts from your duo" className="mt-5 flex flex-col gap-4">
           {sent.map((draft) => (

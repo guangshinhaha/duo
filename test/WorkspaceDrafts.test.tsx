@@ -165,7 +165,7 @@ function fakeDaemon(initial: DraftRecord[], delivery: DraftRecord["delivery"] = 
           ? {
               ...draft,
               outcome: body.outcome as DraftRecord["outcome"],
-              outcomeRecordedAt: "2026-01-02T00:00:00.000Z",
+              outcomeRecordedAt: new Date().toISOString(),
               sentText: body.sentText ?? draft.draftText,
               delivery: body.outcome === "discarded" ? null : delivery,
             }
@@ -382,14 +382,16 @@ describe("#68 AC2 — sending replies in the conversation, and delivery is visib
     expect(fake.connection.send).not.toHaveBeenCalled();
   });
 
-  it("a sent draft's delivery state reads in its conversation — in flight, delivered, or failed with the daemon's reason", async () => {
+  it("a sent draft's delivery state reads in its conversation — in flight, just delivered, or failed with the daemon's reason; an old delivery is not news", async () => {
     seed();
-    const sent = (id: string, delivery: DraftRecord["delivery"]) =>
-      draftFor({ id, outcome: "sent", outcomeRecordedAt: "2026-01-02T00:00:00.000Z", sentText: DRAFT_TEXT, delivery });
+    const sent = (id: string, delivery: DraftRecord["delivery"], at = "2026-01-02T00:00:00.000Z") =>
+      draftFor({ id, outcome: "sent", outcomeRecordedAt: at, sentText: DRAFT_TEXT, delivery });
     const daemon = fakeDaemon([
       sent("d1", { state: "pending" }),
-      sent("d2", { state: "delivered" }),
+      sent("d2", { state: "delivered" }, new Date().toISOString()),
       sent("d3", { state: "failed", reason: "the homeserver said no" }),
+      // Delivered long ago: already in the transcript as the owner's own message.
+      sent("d4", { state: "delivered" }),
     ]);
     vi.stubGlobal("fetch", daemon.fetchMock);
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
@@ -673,5 +675,38 @@ describe("#183, #184 — a person's chat, Telegram-style", () => {
     expect(screen.queryByTestId("inspector")).toBeNull();
     fireEvent.click(await screen.findByTestId("info-toggle"));
     expect(await within(await screen.findByTestId("inspector")).findByTestId("room-info")).toHaveTextContent("project-x");
+  });
+});
+
+describe("#186 review — the draft is where the owner will see it", () => {
+  it("a conversation opens at its end, so the draft ⏎/E/X act on is on screen", async () => {
+    stubDesktop();
+    seed();
+    vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" })]).fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+    // happy-dom lays nothing out; give the transcript's scroller a height to scroll through.
+    const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(4000);
+
+    await renderApp();
+    navigate(ROOM_HASH);
+    const card = await within(await screen.findByTestId("room-drafts")).findByTestId("draft-tray");
+    const scroller = card.closest<HTMLElement>(".overflow-y-auto")!;
+    await waitFor(() => expect(scroller.scrollTop).toBe(4000));
+    height.mockRestore();
+  });
+
+  it("a view opened at an older message shows no draft: newer messages come after it", async () => {
+    stubDesktop();
+    seed();
+    vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" })]).fetchMock);
+    const fake = fakeConnection({ [PROJECT]: [BOSE_MESSAGE] });
+    // Opened at a message, the workspace returns the window around it.
+    (fake.connection as unknown as { timelineAt: unknown }).timelineAt = vi.fn(async () => [BOSE_MESSAGE]);
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate(`${ROOM_HASH}/${encodeURIComponent(BOSE_EVENT)}`);
+    await screen.findByTestId("room-timeline");
+    expect(screen.queryByTestId("draft-tray")).toBeNull();
   });
 });

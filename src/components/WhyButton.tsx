@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { DraftRecord } from "../api/types.js";
 import { WhyPanel } from "../shell/Inspector.js";
 import { useBackClosesSheet } from "../shell/sheetHistory.js";
@@ -9,11 +9,28 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } fr
  * Why? beside a draft (#185): the why opens only when asked — a small
  * popover next to the draft on a desktop, a bottom sheet on a phone (where
  * the back gesture closes it first). Escape or a click elsewhere closes the
- * popover and hands focus back to the button.
+ * popover and hands focus back to the button. The popover is placed against
+ * the window, not the transcript it sits in, so a scroll area never clips it:
+ * above the button when there is more room there, below otherwise, and kept
+ * inside the window's edges.
  */
+const POPOVER_WIDTH = 320;
+const GAP = 8;
+
+function placeBeside(button: HTMLElement): CSSProperties {
+  const rect = button.getBoundingClientRect();
+  const width = Math.min(POPOVER_WIDTH, window.innerWidth - GAP * 2);
+  const left = Math.min(Math.max(rect.right - width, GAP), window.innerWidth - width - GAP);
+  const above = rect.top;
+  const below = window.innerHeight - rect.bottom;
+  return above >= below
+    ? { position: "fixed", left, width, bottom: window.innerHeight - rect.top + GAP, maxHeight: above - GAP * 2 }
+    : { position: "fixed", left, width, top: rect.bottom + GAP, maxHeight: below - GAP * 2 };
+}
 export function WhyButton({ draft }: { draft: DraftRecord }) {
   const desktop = useMediaQuery(DESKTOP_QUERY);
   const [open, setOpen] = useState(false);
+  const [place, setPlace] = useState<CSSProperties>({});
   const button = useRef<HTMLButtonElement | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
   useBackClosesSheet(open && !desktop, () => setOpen(false));
@@ -48,13 +65,18 @@ export function WhyButton({ draft }: { draft: DraftRecord }) {
   }, [open, desktop]);
 
   return (
-    <span className="relative inline-flex">
+    <span className="inline-flex">
       <button
         aria-expanded={open}
         aria-haspopup="dialog"
         className="inline-flex min-h-11 items-center px-1 type-provenance text-[var(--muted)] underline"
         data-testid="tray-why"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          if (!open && desktop && button.current) {
+            setPlace(placeBeside(button.current));
+          }
+          setOpen(!open);
+        }}
         ref={button}
         type="button"
       >
@@ -63,10 +85,11 @@ export function WhyButton({ draft }: { draft: DraftRecord }) {
       {desktop && open && (
         <div
           aria-label="Why your duo wrote this"
-          className="absolute bottom-full right-0 z-30 mb-2 max-h-[70dvh] w-80 overflow-y-auto shape-container p-4 shadow-lg"
+          className="z-30 overflow-y-auto shape-container p-4 shadow-lg"
           data-testid="why-popover"
           ref={panel}
           role="dialog"
+          style={place}
           tabIndex={-1}
         >
           <WhyPanel draft={draft} />

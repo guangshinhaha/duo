@@ -924,6 +924,8 @@ describe("#64 AC3 — threads and reactions work", () => {
     // The reaction follows the message into its thread view.
     navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
+    // A thread has its own header, where the Info button lives (#184).
+    expect(within(screen.getByTestId("thread-header")).getByRole("heading", { level: 1 })).toHaveTextContent("thread");
     expect(within(messageRow("what's our refund policy?")).getByTestId("room-reaction")).toHaveTextContent("👍 1");
 
     // Back in the conversation, the chip takes the reaction back.

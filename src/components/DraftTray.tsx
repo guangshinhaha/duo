@@ -155,7 +155,7 @@ export function DraftTray({
       </DuoLine>
       </div>
 
-      <p className="flex flex-wrap items-center gap-x-2 type-provenance text-[var(--muted)]" data-testid="draft-tray-why">
+      <div className="flex flex-wrap items-center gap-x-2 type-provenance text-[var(--muted)]" data-testid="draft-tray-why">
         {(rules.length > 0 || others > 0) && (
           <span>
             {rules.length > 0 && <>Standing order: {rules.map((rule) => rule.label).join(" · ")}</>}
@@ -164,7 +164,7 @@ export function DraftTray({
           </span>
         )}
         <WhyButton draft={draft} />
-      </p>
+      </div>
 
       {!draft.refused && !d.reachable && (
         <p className="type-provenance text-[var(--escalate)]" data-testid="draft-tray-offline" role="status">

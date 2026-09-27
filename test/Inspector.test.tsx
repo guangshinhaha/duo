@@ -151,6 +151,15 @@ describe("Why? beside the draft — only when asked (#185)", () => {
     expect(document.activeElement).toBe(button);
   });
 
+  it("is placed against the window, not inside the transcript's scroll, so it is never clipped", async () => {
+    stubDesktop();
+    mount(<DraftTray api={api} draft={draft()} />);
+    fireEvent.click(screen.getByTestId("tray-why"));
+    const popover = await screen.findByTestId("why-popover");
+    expect(popover.style.position).toBe("fixed");
+    expect(Number.parseFloat(popover.style.left)).toBeGreaterThanOrEqual(8);
+  });
+
   it("a click elsewhere closes the popover", async () => {
     stubDesktop();
     mount(<DraftTray api={api} draft={draft()} />);

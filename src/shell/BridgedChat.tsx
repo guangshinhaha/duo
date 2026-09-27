@@ -1,5 +1,6 @@
 import type { DuoApiConfig } from "../api/client.js";
 import type { DraftRecord } from "../api/types.js";
+import { useStickToEnd } from "./stickToEnd.js";
 import { DeliveryStateLine } from "../components/DeliveryStateLine.js";
 import { DraftTray } from "../components/DraftTray.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
@@ -76,6 +77,8 @@ function OwnerSide({ draft }: { draft: DraftRecord }) {
 export function BridgedChat({ api, chatId }: { api: DuoApiConfig; chatId: string }) {
   const { chats, isLoading } = useBridgedChats(api);
   const chat = chats.find((candidate) => candidate.id === chatId);
+  // Opens at its end — the newest question and any draft — and follows new ones.
+  const scroller = useStickToEnd<HTMLDivElement>(chat ? `${chat.drafts.length}:${chat.waiting.map((draft) => draft.id).join(",")}` : "");
 
   if (isLoading && !chat) {
     return <RouteLoading />;
@@ -114,7 +117,7 @@ export function BridgedChat({ api, chatId }: { api: DuoApiConfig; chatId: string
           </p>
         </div>
       </header>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-4" ref={scroller}>
         <section className="flex flex-col gap-5" data-testid="bridged-turns">
           {chat.drafts.map((draft) => {
             const day = dayLabel(draft.createdAt);

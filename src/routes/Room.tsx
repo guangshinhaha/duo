@@ -6,6 +6,7 @@ import { RoomDuoAnswer } from "../components/RoomDuoAnswer.js";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
 import { InfoButton } from "../shell/InfoButton.js";
+import { useStickToEnd } from "../shell/stickToEnd.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -180,6 +181,8 @@ export function Room({
   };
 
   const [deleteTarget, setDeleteTarget] = useState<RoomMessage | null>(null);
+  // Opens at its end (the newest message, then any draft), unless opened at an older message.
+  const scroller = useStickToEnd<HTMLDivElement>(timeline.data?.[timeline.data.length - 1]?.eventId ?? "", at === undefined);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -216,7 +219,7 @@ export function Room({
         <h1 className="min-w-0 truncate type-heading">{roomName}</h1>
         <InfoButton />
       </header>
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6" ref={scroller}>
         <a
           className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
           data-testid="back-to-conversations"
@@ -259,8 +262,9 @@ export function Room({
         </section>
         {/* #68, #183: the owner's drafts for this conversation, at the end of
             the owner's own view of it — unsent, visible only here, never
-            part of what its members read until Send. */}
-        {drafts}
+            part of what its members read until Send. Only at the live
+            end: a view opened at an older message has newer ones after it. */}
+        {at === undefined && drafts}
       </div>
       {at === undefined ? (
         <RoomComposer connection={connection} roomId={roomId} roomName={roomName} members={room?.members ?? []} />
