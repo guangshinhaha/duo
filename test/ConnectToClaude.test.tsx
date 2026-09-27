@@ -9,6 +9,9 @@ const SECRET_PATH = "/mcp/s3cr3t-token-value";
 
 interface Daemon {
   connector: { id: string; createdAt: string } | null;
+  /** Set to make the daemon a sign-in one (digital-duo#240): a plain address and connections, no secret to mint. */
+  signIn?: { url: string; connections: { id: string; clientName: string; createdAt: string; lastUsedAt: string | null }[] };
+  revoked?: string[];
   failMint?: boolean;
   mints: number;
 }
@@ -18,6 +21,15 @@ function stubDaemon(daemon: Daemon) {
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input)).pathname.replace(/^\/t\/[a-z0-9]+/, "");
+      const revoke = /^\/connector\/connections\/([^/]+)\/revoke$/.exec(path);
+      if (revoke && init?.method === "POST" && daemon.signIn) {
+        daemon.revoked = [...(daemon.revoked ?? []), decodeURIComponent(revoke[1])];
+        daemon.signIn = { ...daemon.signIn, connections: daemon.signIn.connections.filter((c) => c.id !== decodeURIComponent(revoke[1])) };
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (path === "/connector" && daemon.signIn && init?.method !== "POST") {
+        return new Response(JSON.stringify({ mode: "signin", connector: null, ...daemon.signIn, historyPrompt: PROMPT }), { status: 200 });
+      }
       if (path === "/connector" && init?.method === "POST") {
         if (daemon.failMint) {
           return new Response(JSON.stringify({ error: { code: "boom", message: "The daemon could not mint a connector." } }), { status: 500 });
@@ -117,5 +129,37 @@ describe("ConnectToClaude (digital-duo#227)", () => {
     renderCard({ baseUrl: "https://daemon.example/t/abc123", token: "tok" });
     await clickGenerate();
     expect(await screen.findByTestId("connect-claude-url")).toHaveTextContent(`https://daemon.example/t/abc123${SECRET_PATH}`);
+  });
+
+  it("in sign-in mode shows the plain address, no generate button, and says nothing is connected yet", async () => {
+    stubDaemon({ connector: null, mints: 0, signIn: { url: "https://daemon.example/mcp", connections: [] } });
+    renderCard();
+    expect(await screen.findByTestId("connect-claude-address")).toHaveTextContent("https://daemon.example/mcp");
+    expect(screen.getByTestId("connect-claude-none")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Generate/ })).toBeNull();
+    expect(screen.queryByTestId("connect-claude-history")).toBeNull();
+  });
+
+  it("in sign-in mode lists who is connected, offers the history prompt, and disconnects one on request", async () => {
+    const daemon: Daemon = {
+      connector: null,
+      mints: 0,
+      signIn: {
+        url: "https://daemon.example/mcp",
+        connections: [{ id: "g1", clientName: "Claude", createdAt: "2026-09-26T03:00:00.000Z", lastUsedAt: null }],
+      },
+    };
+    stubDaemon(daemon);
+    renderCard();
+
+    const row = await screen.findByTestId("connect-claude-connection");
+    expect(row).toHaveTextContent("Claude, connected");
+    expect(row).toHaveTextContent("not used yet");
+    expect(screen.getByTestId("connect-claude-prompt").textContent).toBe(PROMPT);
+
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(daemon.revoked).toEqual(["g1"]));
+    expect(await screen.findByTestId("connect-claude-none")).toBeInTheDocument();
+    expect(screen.queryByTestId("connect-claude-history")).toBeNull();
   });
 });

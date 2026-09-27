@@ -17,6 +17,7 @@ import { shouldPersistQuery } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Admin } from "./routes/Admin.js";
+import { Connect } from "./routes/Connect.js";
 import { Join } from "./routes/Join.js";
 import { Landing } from "./routes/Landing.js";
 import { configuredDaemonOrigin, pairedHostedAccount, readHostedAccount, writeHostedAccount } from "./api/hosted.js";
@@ -91,6 +92,17 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * invite sees the Join screen, never Setup or the shell. Tracked apart from
  * `Route` because it is not a place in the app; it is the way in.
  */
+function useHashStartingWith(prefix: string): string | null {
+  const read = () => (window.location.hash.startsWith(prefix) ? window.location.hash : null);
+  const [hash, setHash] = useState<string | null>(read);
+  useEffect(() => {
+    const onHashChange = () => setHash(read());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  return hash;
+}
+
 function useJoinHash(): string | null {
   const read = () => (window.location.hash.startsWith("#join") ? window.location.hash : null);
   const [hash, setHash] = useState<string | null>(read);
@@ -651,6 +663,12 @@ function AppShell() {
   // The default surface is the chat list, whoever is signed in (docs/design-language.md §6.2).
   const route = useHashRoute("chats");
   const joinHash = useJoinHash();
+  // claude.ai's sign-in lands here (#connect?host=…&request=…, digital-duo#240) and, like an invite, outranks the shell.
+  const connectHash = useHashStartingWith("#connect");
+
+  if (connectHash) {
+    return <Connect hash={connectHash} />;
+  }
 
   if (joinHash) {
     return (

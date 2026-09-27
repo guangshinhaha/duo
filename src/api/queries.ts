@@ -646,6 +646,17 @@ export function useMintConnector(api: DuoApiConfig) {
   });
 }
 
+/** `POST /connector/connections/:id/revoke` — disconnects one Claude at once; it has to sign in again to come back. */
+export function useRevokeConnection(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiRequest<{ ok: true }>(api, `/connector/connections/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.connector });
+    },
+  });
+}
+
 export function useTrustPromotions(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.trustPromotions, queryFn: () => apiRequest<PromotionOffer[]>(api, "/trust/promotions") });
 }

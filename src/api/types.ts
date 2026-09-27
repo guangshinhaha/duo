@@ -578,8 +578,21 @@ export interface MintedDevice {
 // GET says whether one exists (its URL is never recoverable) and carries the prompt
 // the owner pastes into claude.ai to feed their past chats; POST answers the URL
 // path exactly once, to be joined to the daemon address.
+export interface ConnectorConnection {
+  readonly id: string;
+  readonly clientName: string;
+  readonly createdAt: string;
+  readonly lastUsedAt: string | null;
+}
+
+// `mode` is "signin" where the daemon connects Claude by Google sign-in (digital-duo#240): there is one
+// plain `url` to paste and `connections` to disconnect, and no secret to mint. Absent or "secret": the
+// secret-URL connector above. An older daemon sends no `mode`.
 export interface ConnectorStatus {
+  readonly mode?: "secret" | "signin";
   readonly connector: { readonly id: string; readonly createdAt: string } | null;
+  readonly url?: string;
+  readonly connections?: readonly ConnectorConnection[];
   readonly historyPrompt: string;
 }
 
