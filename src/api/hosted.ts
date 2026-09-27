@@ -207,8 +207,23 @@ export function trustedDaemonOrigins(api: DuoApiConfig | null): string[] {
 }
 
 /** `GET {host}/oauth/requests/:id` — who is asking to connect. 404 `request_expired` once it has lapsed or been decided. */
-export async function fetchConnectRequest(target: ConnectRequest): Promise<{ clientName: string }> {
-  return readAnswer<{ clientName: string }>(await fetch(`${target.host}/oauth/requests/${encodeURIComponent(target.request)}`));
+export async function fetchConnectRequest(target: ConnectRequest): Promise<ConnectRequestInfo> {
+  return readAnswer<ConnectRequestInfo>(await fetch(`${target.host}/oauth/requests/${encodeURIComponent(target.request)}`));
+}
+
+/** One thing Claude may be allowed to do, in the daemon's own words (digital-duo#256). */
+export interface ConnectScope {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  /** Whether the daemon suggests ticking it. Sending never is. */
+  readonly defaultOn: boolean;
+}
+
+/** Who is asking to connect, and what they asked for. `scopes` is absent from a daemon that predates permissions. */
+export interface ConnectRequestInfo {
+  readonly clientName: string;
+  readonly scopes?: readonly ConnectScope[];
 }
 
 /**
@@ -217,10 +232,15 @@ export async function fetchConnectRequest(target: ConnectRequest): Promise<{ cli
  * the request stays open to try another account), `deny` declines. Either way
  * the answer is where to send the browser back to, at claude.ai.
  */
-export async function decideConnect(target: ConnectRequest, decision: { credential: string } | "deny"): Promise<{ redirectTo: string }> {
+export async function decideConnect(
+  target: ConnectRequest,
+  decision: { credential: string; scopes?: readonly string[] } | "deny",
+): Promise<{ redirectTo: string }> {
   const base = `${target.host}/oauth/requests/${encodeURIComponent(target.request)}`;
   return readAnswer<{ redirectTo: string }>(
-    decision === "deny" ? await postJson(`${base}/deny`, {}) : await postJson(`${base}/approve`, { credential: decision.credential }),
+    decision === "deny"
+      ? await postJson(`${base}/deny`, {})
+      : await postJson(`${base}/approve`, { credential: decision.credential, ...(decision.scopes === undefined ? {} : { scopes: decision.scopes }) }),
   );
 }
 

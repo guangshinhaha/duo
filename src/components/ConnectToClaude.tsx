@@ -87,6 +87,11 @@ function SignInConnector({ api, status }: { api: DuoApiConfig; status: Connector
                 <span className="type-body">
                   {connection.clientName}, connected {new Date(connection.createdAt).toLocaleDateString()}
                   {connection.lastUsedAt ? `, last used ${new Date(connection.lastUsedAt).toLocaleDateString()}` : ", not used yet"}
+                  {connection.scopes && connection.scopes.length > 0 && (
+                    <span className="block type-provenance text-[var(--muted)]" data-testid="connect-claude-permissions">
+                      May: {connection.scopes.map((scope) => PERMISSION_LABELS[scope] ?? scope).join(", ")}
+                    </span>
+                  )}
                 </span>
                 <button
                   className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)] disabled:opacity-40"
@@ -114,6 +119,14 @@ function SignInConnector({ api, status }: { api: DuoApiConfig; status: Connector
     </section>
   );
 }
+
+/** The plain names for the permission ids the daemon reports; an id this build does not know is shown as it is. */
+const PERMISSION_LABELS: Readonly<Record<string, string>> = {
+  "duo:read": "read",
+  "duo:save": "save",
+  "duo:operate": "operate",
+  "duo:send": "send",
+};
 
 function SecretUrlConnector({ api }: { api: DuoApiConfig }) {
   const status = useConnector(api);

@@ -10,7 +10,7 @@ const SECRET_PATH = "/mcp/s3cr3t-token-value";
 interface Daemon {
   connector: { id: string; createdAt: string } | null;
   /** Set to make the daemon a sign-in one (digital-duo#240): a plain address and connections, no secret to mint. */
-  signIn?: { url: string; connections: { id: string; clientName: string; createdAt: string; lastUsedAt: string | null }[] };
+  signIn?: { url: string; connections: { id: string; clientName: string; createdAt: string; lastUsedAt: string | null; scopes?: string[] }[] };
   revoked?: string[];
   failMint?: boolean;
   mints: number;
@@ -148,7 +148,7 @@ describe("ConnectToClaude (digital-duo#227)", () => {
       mints: 0,
       signIn: {
         url: "https://daemon.example/mcp",
-        connections: [{ id: "g1", clientName: "Claude", createdAt: "2026-09-26T03:00:00.000Z", lastUsedAt: null }],
+        connections: [{ id: "g1", clientName: "Claude", createdAt: "2026-09-26T03:00:00.000Z", lastUsedAt: null, scopes: ["duo:read", "duo:operate"] }],
       },
     };
     stubDaemon(daemon);
@@ -157,6 +157,7 @@ describe("ConnectToClaude (digital-duo#227)", () => {
     const row = await screen.findByTestId("connect-claude-connection");
     expect(row).toHaveTextContent("Claude, connected");
     expect(row).toHaveTextContent("not used yet");
+    expect(screen.getByTestId("connect-claude-permissions")).toHaveTextContent("May: read, operate");
     expect(screen.getByTestId("connect-claude-prompt").textContent).toBe(PROMPT);
 
     fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
@@ -178,5 +179,12 @@ describe("ConnectToClaude (digital-duo#227)", () => {
     expect(await screen.findByTestId("connect-claude-load-error")).toHaveTextContent("The daemon could not be reached.");
     expect(screen.queryByRole("button", { name: /Generate/ })).toBeNull();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("shows no permissions line for a connection that reports none", async () => {
+    stubDaemon({ connector: null, mints: 0, signIn: { url: "https://daemon.example/mcp", connections: [{ id: "g1", clientName: "Claude", createdAt: "2026-09-26T03:00:00.000Z", lastUsedAt: null, scopes: [] }] } });
+    renderCard();
+    expect(await screen.findByTestId("connect-claude-connection")).toBeInTheDocument();
+    expect(screen.queryByTestId("connect-claude-permissions")).toBeNull();
   });
 });

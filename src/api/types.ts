@@ -583,6 +583,8 @@ export interface ConnectorConnection {
   readonly clientName: string;
   readonly createdAt: string;
   readonly lastUsedAt: string | null;
+  /** What the owner allowed at sign-in, as permission ids (digital-duo#256). Absent from a daemon that predates them. */
+  readonly scopes?: readonly string[];
 }
 
 // `mode` is "signin" where the daemon connects Claude by Google sign-in (digital-duo#240): there is one

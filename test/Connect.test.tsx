@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.js";
 import { parseConnectHash } from "../src/api/hosted.js";
@@ -40,6 +40,8 @@ function installFakeGoogle(credential = "google-id-token") {
       },
     },
   };
+  // Google's popup can finish after the button is gone from the page: this fires the callback it registered, button or not.
+  return { fire: () => callback?.({ credential }) };
 }
 
 type Route = (init: RequestInit | undefined) => Response | Promise<Response>;
@@ -73,6 +75,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
   delete window.google;
 });
+
+const PERMISSIONS = [
+  { id: "duo:read", label: "Read", description: "Search your duo and ask it questions.", defaultOn: true },
+  { id: "duo:save", label: "Save", description: "Add notes to your duo.", defaultOn: true },
+  { id: "duo:operate", label: "Operate", description: "Embed, derive and draft replies.", defaultOn: true },
+  { id: "duo:send", label: "Send", description: "Record a draft as sent, which can deliver a message as you.", defaultOn: false },
+];
+const withPermissions = (permissions = PERMISSIONS) => daemon({ "GET /oauth/requests/req-1": () => ok({ clientName: "Claude", scopes: permissions }) });
 
 describe("parseConnectHash", () => {
   it("reads the daemon address and the request id, and refuses anything incomplete or not http(s)", () => {
@@ -222,5 +232,126 @@ describe("Connect", () => {
     expect(await screen.findByTestId("connect")).toBeInTheDocument();
     expect(await screen.findByTestId("connect-google")).toBeInTheDocument();
     expect(screen.queryByText(/Sign in to your workspace/)).toBeNull();
+  });
+});
+
+describe("Connect: what the owner allows (digital-duo#256)", () => {
+  it("lists what Claude is asking for in the daemon's words, ticks the usual three, and leaves Send unticked", async () => {
+    installFakeGoogle();
+    routeFetch(withPermissions());
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+
+    expect(await screen.findByTestId("connect-scopes")).toHaveTextContent("Choose what it may do");
+    for (const id of ["duo:read", "duo:save", "duo:operate"]) {
+      expect(within(screen.getByTestId(`connect-scope-${id}`)).getByRole("checkbox")).toBeChecked();
+    }
+    expect(within(screen.getByTestId("connect-scope-duo:send")).getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("connect-scope-duo:send")).toHaveTextContent("can deliver a message as you");
+    expect(screen.queryByTestId("connect-send-warning")).toBeNull();
+    expect(screen.queryByText(/it can't read what is in your duo/)).toBeNull();
+  });
+
+  it("sends exactly what is ticked with the approval, and warns when Send is ticked", async () => {
+    installFakeGoogle("the-credential");
+    const fetchMock = routeFetch({
+      ...withPermissions(),
+      "POST /oauth/requests/req-1/approve": () => ok({ redirectTo: `${CALLBACK}?code=abc&state=xyz`, ownerName: "Sam" }),
+    });
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+
+    await screen.findByTestId("connect-scopes");
+    fireEvent.click(within(screen.getByTestId("connect-scope-duo:send")).getByRole("checkbox"));
+    expect(screen.getByTestId("connect-send-warning")).toHaveTextContent("Send lets Claude act as you");
+    fireEvent.click(within(screen.getByTestId("connect-scope-duo:save")).getByRole("checkbox"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in with Google" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/approve"))).toBe(true));
+    const approve = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/approve"));
+    expect(JSON.parse(String(approve?.[1]?.body))).toEqual({ credential: "the-credential", scopes: ["duo:read", "duo:operate", "duo:send"] });
+  });
+
+  it("offers no sign-in while nothing is ticked, and still lets the owner decline", async () => {
+    installFakeGoogle();
+    routeFetch(withPermissions());
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+
+    await screen.findByTestId("connect-scopes");
+    for (const id of ["duo:read", "duo:save", "duo:operate"]) {
+      fireEvent.click(within(screen.getByTestId(`connect-scope-${id}`)).getByRole("checkbox"));
+    }
+    expect(screen.getByTestId("connect-choose-one")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in with Google" })).toBeNull();
+    expect(screen.getByTestId("connect-decline")).toBeInTheDocument();
+  });
+
+  it("shows only what Claude asked for", async () => {
+    installFakeGoogle();
+    routeFetch(withPermissions([PERMISSIONS[0]]));
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+    await screen.findByTestId("connect-scopes");
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+  });
+
+  it("falls back to the old wording, and sends no permissions, against a daemon that predates them", async () => {
+    installFakeGoogle();
+    const fetchMock = routeFetch({ ...daemon(), "POST /oauth/requests/req-1/approve": () => ok({ redirectTo: `${CALLBACK}?code=abc`, ownerName: "Sam" }) });
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+
+    await screen.findByTestId("connect");
+    expect(screen.queryByTestId("connect-scopes")).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in with Google" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/approve"))).toBe(true));
+    const approve = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/approve"));
+    expect(JSON.parse(String(approve?.[1]?.body))).toEqual({ credential: "google-id-token" });
+  });
+});
+
+describe("Connect: the choice at the moment Google answers (digital-duo#256 review)", () => {
+  it("sends nothing when everything was unticked while the Google popup was open", async () => {
+    const google = installFakeGoogle();
+    const fetchMock = routeFetch({ ...withPermissions(), "POST /oauth/requests/req-1/approve": () => ok({ redirectTo: `${CALLBACK}?code=abc` }) });
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+
+    await screen.findByTestId("connect-scopes");
+    await screen.findByRole("button", { name: "Sign in with Google" });
+    for (const id of ["duo:read", "duo:save", "duo:operate"]) {
+      fireEvent.click(within(screen.getByTestId(`connect-scope-${id}`)).getByRole("checkbox"));
+    }
+    expect(screen.queryByRole("button", { name: "Sign in with Google" })).toBeNull();
+    google.fire();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/approve"))).toBe(false);
+  });
+
+  it("sends what is ticked when Google answers, not what was ticked when the button was clicked", async () => {
+    const google = installFakeGoogle("the-credential");
+    const fetchMock = routeFetch({ ...withPermissions(), "POST /oauth/requests/req-1/approve": () => ok({ redirectTo: `${CALLBACK}?code=abc` }) });
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+
+    await screen.findByRole("button", { name: "Sign in with Google" });
+    fireEvent.click(within(screen.getByTestId("connect-scope-duo:operate")).getByRole("checkbox"));
+    google.fire();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/approve"))).toBe(true));
+    const approve = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/approve"));
+    expect(JSON.parse(String(approve?.[1]?.body)).scopes).toEqual(["duo:read", "duo:save"]);
+  });
+
+  it("never ticks Send for the owner, even when the daemon's list says to", async () => {
+    installFakeGoogle();
+    routeFetch(withPermissions(PERMISSIONS.map((permission) => ({ ...permission, defaultOn: true }))));
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+    await screen.findByTestId("connect-scopes");
+    expect(within(screen.getByTestId("connect-scope-duo:send")).getByRole("checkbox")).not.toBeChecked();
+    expect(within(screen.getByTestId("connect-scope-duo:read")).getByRole("checkbox")).toBeChecked();
+  });
+
+  it("says there is nothing to allow when the daemon lists no permissions, instead of an empty checklist", async () => {
+    installFakeGoogle();
+    routeFetch(withPermissions([]));
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+    expect(await screen.findByTestId("connect-nothing-offered")).toBeInTheDocument();
+    expect(screen.queryByTestId("connect-scopes")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in with Google" })).toBeNull();
+    expect(screen.getByTestId("connect-decline")).toBeInTheDocument();
   });
 });

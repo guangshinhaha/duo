@@ -661,7 +661,7 @@ function AppShell() {
   const connectHash = useHashStartingWith("#connect");
 
   if (connectHash) {
-    return <Connect hash={connectHash} trustedOrigins={trustedDaemonOrigins(api)} />;
+    return <Connect hash={connectHash} key={connectHash} trustedOrigins={trustedDaemonOrigins(api)} />;
   }
 
   if (joinHash) {

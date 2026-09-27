@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiRequestError } from "../api/client.js";
-import { decideConnect, fetchConnectRequest, fetchHostedConfig, parseConnectHash } from "../api/hosted.js";
+import { decideConnect, fetchConnectRequest, fetchHostedConfig, parseConnectHash, type ConnectScope } from "../api/hosted.js";
 import { GoogleSignInButton } from "../components/GoogleSignInButton.js";
+
+/** The one permission that lets Claude act as the owner. It is never ticked for them, whatever the daemon's list says. */
+const SEND_SCOPE = "duo:send";
 
 /** Where the browser may be sent back to after the owner decides: Claude's own origins, and nothing the server names. */
 const CLAUDE_ORIGINS: ReadonlySet<string> = new Set(["https://claude.ai", "https://claude.com"]);
@@ -69,6 +72,9 @@ export function Connect({
   const [configFailed, setConfigFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [clientName, setClientName] = useState<string | null>(null);
+  // What Claude asked for, in the daemon's words, and which of it the owner has ticked. Null from a daemon that predates permissions.
+  const [scopes, setScopes] = useState<readonly ConnectScope[] | null>(null);
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expired, setExpired] = useState(false);
@@ -87,7 +93,14 @@ export function Connect({
       .then((config) => !cancelled && setClientId(config.googleClientId ?? null))
       .catch(() => !cancelled && setConfigFailed(true));
     fetchConnectRequest({ host, request })
-      .then((answer) => !cancelled && setClientName(answer.clientName))
+      .then((answer) => {
+        if (cancelled) {
+          return;
+        }
+        setClientName(answer.clientName);
+        setScopes(answer.scopes ?? null);
+        setChosen(new Set((answer.scopes ?? []).filter((scope) => scope.defaultOn && scope.id !== SEND_SCOPE).map((scope) => scope.id)));
+      })
       .catch((reason: unknown) => {
         if (cancelled) {
           return;
@@ -103,13 +116,32 @@ export function Connect({
     };
   }, [host, request, attempt]);
 
+  // The Google popup can finish long after the button was clicked, and the checklist stays editable meanwhile, so what to
+  // send is read from here when the credential arrives, not from the render the button last saw.
+  const chosenRef = useRef(chosen);
+  chosenRef.current = chosen;
+
+  const toggle = (id: string) =>
+    setChosen((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) {
+        next.add(id);
+      }
+      return next;
+    });
+
   const decide = (decision: { credential: string } | "deny") => {
     if (!target || !trusted || pending) {
       return;
     }
+    const ticked = [...chosenRef.current];
+    if (decision !== "deny" && scopes && ticked.length === 0) {
+      // Everything was unticked while Google's popup was open: send nothing rather than what was ticked a moment ago.
+      return;
+    }
     setPending(true);
     setError(null);
-    decideConnect(target, decision)
+    decideConnect(target, decision === "deny" ? decision : { ...decision, scopes: scopes ? ticked : undefined })
       .then(({ redirectTo }) => {
         if (!isFollowable(redirectTo)) {
           // The daemon has already taken the answer, so this must not claim nothing happened.
@@ -161,9 +193,29 @@ export function Connect({
               )
             ) : (
               <>
-                <p className="type-body">
-                  {who} is asking to save notes to your duo when you tell it to. It can add notes; it can&apos;t read what is in your duo or act as you.
-                </p>
+                {scopes && scopes.length > 0 ? (
+                  <fieldset className="flex flex-col gap-2" data-testid="connect-scopes">
+                    <legend className="type-body">{who} is asking to work with your duo. Choose what it may do:</legend>
+                    {scopes.map((scope) => (
+                      <label className="flex items-start gap-2" data-testid={`connect-scope-${scope.id}`} key={scope.id}>
+                        <input checked={chosen.has(scope.id)} className="mt-1 h-4 w-4" disabled={pending} onChange={() => toggle(scope.id)} type="checkbox" />
+                        <span className="flex flex-col">
+                          <span className="type-body">{scope.label}</span>
+                          <span className="type-provenance text-[var(--muted)]">{scope.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                    {chosen.has("duo:send") && (
+                      <p className="type-provenance text-[var(--escalate)]" data-testid="connect-send-warning" role="status">
+                        Send lets Claude act as you. Only allow it if you want that.
+                      </p>
+                    )}
+                  </fieldset>
+                ) : scopes ? null : (
+                  <p className="type-body">
+                    {who} is asking to save notes to your duo when you tell it to. It can add notes; it can&apos;t read what is in your duo or act as you.
+                  </p>
+                )}
                 <p className="type-provenance text-[var(--muted)]" data-testid="connect-host">
                   Your duo is on <span className="type-identifier">{new URL(target.host).host}</span>. You can disconnect {who} any time from Settings.
                 </p>
@@ -183,6 +235,14 @@ export function Connect({
                 ) : clientId === undefined ? (
                   <p className="type-provenance text-[var(--muted)]" role="status">
                     Connecting…
+                  </p>
+                ) : scopes && scopes.length === 0 ? (
+                  <p className="type-body text-[var(--muted)]" data-testid="connect-nothing-offered" role="status">
+                    {who} isn&apos;t asking for anything this server offers, so there is nothing to allow. You can decline.
+                  </p>
+                ) : scopes && chosen.size === 0 ? (
+                  <p className="type-body text-[var(--muted)]" data-testid="connect-choose-one" role="status">
+                    Choose at least one thing above to continue, or decline.
                   </p>
                 ) : clientId ? (
                   <div className="flex flex-col gap-3" data-testid="connect-google">
