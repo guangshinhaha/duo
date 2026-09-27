@@ -151,6 +151,79 @@ export function configuredDaemonOrigin(): string | null {
   }
 }
 
+/** A claude.ai sign-in the daemon sent this person to: the daemon's address and the id of the pending request. */
+export interface ConnectRequest {
+  readonly host: string;
+  readonly request: string;
+}
+
+/** Loopback is the one place plain http is accepted: a local daemon in development. */
+function isLoopback(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+/**
+ * Reads `#connect?host=…&request=…` (digital-duo#240); null when the hash isn't one or lacks either half.
+ * The host is reduced to its origin, and only https (or loopback http) is accepted. Whether that origin is a
+ * server this app trusts is a separate question (`trustedDaemonOrigins`): a link is anyone's to write, and the
+ * Google sign-in this page collects must go only where the app already sends it.
+ */
+export function parseConnectHash(hash: string): ConnectRequest | null {
+  if (!hash.startsWith("#connect")) {
+    return null;
+  }
+  const params = new URLSearchParams(hash.slice("#connect".length).replace(/^\?/, ""));
+  const host = params.get("host")?.trim();
+  const request = params.get("request")?.trim();
+  if (!host || !request) {
+    return null;
+  }
+  try {
+    const parsed = new URL(host);
+    if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopback(parsed.hostname))) {
+      return null;
+    }
+    return { host: parsed.origin, request };
+  } catch {
+    return null;
+  }
+}
+
+/** The daemon origins this app already trusts with a sign-in: the one this build was made for, and the one it is paired to. */
+export function trustedDaemonOrigins(api: DuoApiConfig | null): string[] {
+  const origins: string[] = [];
+  const configured = configuredDaemonOrigin();
+  if (configured) {
+    origins.push(configured);
+  }
+  if (api) {
+    try {
+      origins.push(new URL(api.baseUrl).origin);
+    } catch {
+      // A malformed stored address trusts nothing.
+    }
+  }
+  return origins;
+}
+
+/** `GET {host}/oauth/requests/:id` — who is asking to connect. 404 `request_expired` once it has lapsed or been decided. */
+export async function fetchConnectRequest(target: ConnectRequest): Promise<{ clientName: string }> {
+  return readAnswer<{ clientName: string }>(await fetch(`${target.host}/oauth/requests/${encodeURIComponent(target.request)}`));
+}
+
+/**
+ * The owner's answer to a claude.ai sign-in: a Google credential approves (the
+ * daemon looks up the duo that account owns; 404 `no_duo` when it owns none, and
+ * the request stays open to try another account), `deny` declines. Either way
+ * the answer is where to send the browser back to, at claude.ai.
+ */
+export async function decideConnect(target: ConnectRequest, decision: { credential: string } | "deny"): Promise<{ redirectTo: string }> {
+  const base = `${target.host}/oauth/requests/${encodeURIComponent(target.request)}`;
+  return readAnswer<{ redirectTo: string }>(
+    decision === "deny" ? await postJson(`${base}/deny`, {}) : await postJson(`${base}/approve`, { credential: decision.credential }),
+  );
+}
+
 /** `GET {origin}/hosted/config` — whether this server signs people in with Google, and as which app. */
 export async function fetchHostedConfig(origin: string): Promise<HostedConfig> {
   return readAnswer<HostedConfig>(await fetch(`${origin}/hosted/config`));

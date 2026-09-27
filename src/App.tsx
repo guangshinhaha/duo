@@ -17,9 +17,10 @@ import { shouldPersistQuery } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Admin } from "./routes/Admin.js";
+import { Connect } from "./routes/Connect.js";
 import { Join } from "./routes/Join.js";
 import { Landing } from "./routes/Landing.js";
-import { configuredDaemonOrigin, pairedHostedAccount, readHostedAccount, writeHostedAccount } from "./api/hosted.js";
+import { configuredDaemonOrigin, pairedHostedAccount, readHostedAccount, trustedDaemonOrigins, writeHostedAccount } from "./api/hosted.js";
 import { Settings } from "./routes/Settings.js";
 import { Onboarding } from "./routes/Onboarding.js";
 import { WaitingHome } from "./shell/WaitingHome.js";
@@ -85,6 +86,18 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
 // Route = the location hash, no router dependency: the grammar, and where every
 // retired address lives now, is shell/routes.ts.
 
+/** The location hash while it starts with `prefix`, else null; follows `hashchange`. */
+function useHashStartingWith(prefix: string): string | null {
+  const read = () => (window.location.hash.startsWith(prefix) ? window.location.hash : null);
+  const [hash, setHash] = useState<string | null>(read);
+  useEffect(() => {
+    const onHashChange = () => setHash(read());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [prefix]);
+  return hash;
+}
+
 /**
  * Invite-only hosted mode: `#join?host=…&invite=…` is an invite link, and it
  * outranks every other surface — paired or not, a person who opened an
@@ -92,14 +105,7 @@ const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-
  * `Route` because it is not a place in the app; it is the way in.
  */
 function useJoinHash(): string | null {
-  const read = () => (window.location.hash.startsWith("#join") ? window.location.hash : null);
-  const [hash, setHash] = useState<string | null>(read);
-  useEffect(() => {
-    const onHashChange = () => setHash(read());
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
-  return hash;
+  return useHashStartingWith("#join");
 }
 
 function useHashRoute(fallback: Route): Route {
@@ -651,6 +657,12 @@ function AppShell() {
   // The default surface is the chat list, whoever is signed in (docs/design-language.md §6.2).
   const route = useHashRoute("chats");
   const joinHash = useJoinHash();
+  // claude.ai's sign-in lands here (#connect?host=…&request=…, digital-duo#240) and, like an invite, outranks the shell.
+  const connectHash = useHashStartingWith("#connect");
+
+  if (connectHash) {
+    return <Connect hash={connectHash} trustedOrigins={trustedDaemonOrigins(api)} />;
+  }
 
   if (joinHash) {
     return (

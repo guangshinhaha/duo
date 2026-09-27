@@ -141,14 +141,18 @@ domain types.
 | `POST` | `/ask-links` | `MintedAskLink` — 201, the token shown once (`{ name, expiresInHours? }`) | `serve/tokens` |
 | `POST` | `/ask-links/:id/revoke` | 204 — the link stops on its next use | `serve/tokens` |
 | `POST` | `/devices` | `MintedDevice` — 201, pairs another device from a paired one; the token shown once | `serve/tokens` |
-| `GET` | `/connector` | `ConnectorStatus` — whether a claude.ai connector exists (its URL is never recoverable), plus the prompt the owner pastes into claude.ai to feed past chats (digital-duo #227) | `serve/mcp`, `serve/tokens` |
+| `GET` | `/connector` | `ConnectorStatus` — `mode` "secret": whether a claude.ai connector exists (its URL is never recoverable); `mode` "signin" (hosted sign-in, digital-duo #240): the plain `url` to paste and the `connections`, no secret. Either way the prompt the owner pastes into claude.ai to feed past chats (digital-duo #227, #240) | `serve/mcp`, `serve/tokens` |
 | `POST` | `/connector` | `MintedConnector` — 201, mints the connector URL path shown once and revokes any earlier one (digital-duo #227) | `serve/tokens` |
+| `POST` | `/connector/connections/:id/revoke` | `{ ok }` — disconnects one connected Claude at once (sign-in mode only, else 404; digital-duo #240) | `serve/mcp` |
 | `GET` | `/trust/promotions` | `PromotionOffer[]` — the batched digest (#54) | `trust/promotion` |
 | `POST` | `/trust/promotions/:topicId/:tier` | the moved `TrustCell` — `{ decision: "accept" \| "decline" }`; nothing promotes without it | `trust/promotion` |
 | `POST` | `/trust/grant` | `GrantOutcome` — `{ scopeText, tier, topicId? }`; "ambiguous" returns candidates for a picker, never a guess; T4 absent (trust-surface.md) | `trust/grants` |
 | `POST` | `/hosted/signup` | `HostedSignupResult` — at the daemon ORIGIN, not a duo's base URL; no bearer, the invite is the credential (`{ invite, credential }` with Google sign-in configured, `{ invite, name }` without); 403 `invite_invalid` / `invite_wrong_account`, 409 `already_has_duo` | `hosted` |
 | `GET` | `/hosted/config` | `HostedConfig` — at the daemon ORIGIN, public: `{ googleClientId }`, null when sign-in isn't configured | `hosted` |
 | `POST` | `/hosted/login` | `HostedSignupResult` — at the daemon ORIGIN: `{ credential }` (a Google ID token) in, this account's duo (`basePath` "" for the root duo) and a fresh device token out; 404 `no_duo` | `hosted` |
+| `GET` | `/oauth/requests/:id` | `{ clientName }` — at the daemon ORIGIN: who is asking to connect, for the `#connect` sign-in page; 404 `request_expired` (digital-duo #240) | `hosted` |
+| `POST` | `/oauth/requests/:id/approve` | `{ redirectTo, ownerName }` — at the daemon ORIGIN: `{ credential }` (a Google ID token) in, where to send the browser back to Claude out; 404 `no_duo` when the account owns no duo, the request stays open (digital-duo #240) | `hosted` |
+| `POST` | `/oauth/requests/:id/deny` | `{ redirectTo }` — at the daemon ORIGIN: the owner declined; back to Claude with `access_denied` (digital-duo #240) | `hosted` |
 | `GET` | `/hosted/invites` | `HostedInviteRow[]` — at the daemon ORIGIN, admin only (Bearer: the admin's own device token); never a code | `hosted` |
 | `POST` | `/hosted/invites` | `MintedHostedInvite` — 201, admin only (`{ name, orgId?, email?, expiresInHours? }`; no `orgId` means the default org); the code and link shown once | `hosted` |
 | `GET` | `/hosted/orgs` | `HostedOrg[]` (`{ id, name, createdAt, memberCount }`) — at the daemon ORIGIN, super admin only (401 no credential, 403 anyone else); the Admin screen (#128) | `hosted` |
