@@ -102,17 +102,21 @@ describe("#142 — the tray says whose it is, how sure it is, and who can see it
     expect(screen.getByTestId("draft-tray-why")).toHaveTextContent("Drew on 2 sources");
   });
 
-  it("a passed-on question reads in the vocabulary's words and offers to be answered; a refusal offers nothing", () => {
+  it("a passed-on question says so in plain words, keeps the daemon's reasoning behind Why?, and offers to be answered; a refusal offers nothing", async () => {
     mount(<DraftTray api={api} draft={passedOn} />);
-    expect(screen.getByTestId("draft-tray-line")).toHaveTextContent("Your duo escalated a question to you.");
-    expect(screen.getByTestId("escalation-reason")).toHaveTextContent("No rule covers this.");
+    expect(screen.getByTestId("draft-tray-line")).toHaveTextContent("I don't have enough on this to answer it well, so I'm passing it to you.");
+    // #185: the daemon's own reasoning is not the first thing you read.
+    expect(screen.queryByTestId("escalation-reason")).toBeNull();
+    fireEvent.click(screen.getByTestId("tray-why"));
+    expect(await screen.findByTestId("escalation-reason")).toHaveTextContent("No rule covers this.");
+    fireEvent.click(screen.getByTestId("tray-why"));
     expect(screen.getByRole("button", { name: "Answer it" })).toBeDisabled(); // nothing typed yet
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     cleanup();
 
     mount(<DraftTray api={api} draft={refused} />);
-    expect(screen.getByTestId("draft-tray-line")).toHaveTextContent("Your duo refused this one.");
-    // Nothing to decide — only the way to read why (no inspector beside it here).
+    expect(screen.getByTestId("draft-tray-line")).toHaveTextContent("This is something you told me not to answer for you.");
+    // Nothing to decide — only the way to read why.
     expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Why?"]);
     expect(screen.queryByRole("textbox")).toBeNull();
   });

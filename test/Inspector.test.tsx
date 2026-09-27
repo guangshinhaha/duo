@@ -7,13 +7,13 @@ import type { DuoApiConfig } from "../src/api/client.js";
 import type { DraftRecord } from "../src/api/types.js";
 import { DraftTray } from "../src/components/DraftTray.js";
 import { DuoInfo, RoomInfo, WhyPanel, whyReading } from "../src/shell/Inspector.js";
-import { InspectorVisibleProvider } from "../src/shell/InspectorContext.js";
 import type { RoomSummary } from "../src/workspace/matrix.js";
 import { stubDesktop, stubPhone } from "./desktop.js";
 
 /*
- * The inspector (#147): why a draft says what it says, at zero clicks beside
- * the chat on a desktop, and one tap (a sheet) where there is no room.
+ * Why? and Info (#184, #185): a draft's why opens beside it only when asked —
+ * a popover on a desktop, a sheet on a phone — and the Info panel is a side
+ * column that opens from the chat header or ⌘I, closed by default.
  */
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
@@ -135,8 +135,42 @@ describe("RoomInfo and DuoInfo — when nothing is waiting", () => {
   });
 });
 
-describe("the tray's Why? sheet — one tap where there is no room for the column", () => {
-  it("opens the same panel as a sheet, and closes it", async () => {
+describe("Why? beside the draft — only when asked (#185)", () => {
+  it("on a desktop opens a popover next to the draft; Escape closes it and gives focus back", async () => {
+    stubDesktop();
+    mount(<DraftTray api={api} draft={draft()} />);
+    expect(screen.queryByTestId("why-panel")).toBeNull();
+    const button = screen.getByTestId("tray-why");
+    fireEvent.click(button);
+    const popover = await screen.findByTestId("why-popover");
+    expect(popover).toHaveAttribute("role", "dialog");
+    expect(within(popover).getByTestId("why-rule")).toBeInTheDocument();
+    expect(screen.queryByTestId("why-sheet")).toBeNull();
+    act(() => void fireEvent.keyDown(window, { key: "Escape" }));
+    await waitFor(() => expect(screen.queryByTestId("why-popover")).toBeNull());
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("is placed against the window, not inside the transcript's scroll, so it is never clipped", async () => {
+    stubDesktop();
+    mount(<DraftTray api={api} draft={draft()} />);
+    fireEvent.click(screen.getByTestId("tray-why"));
+    const popover = await screen.findByTestId("why-popover");
+    expect(popover.style.position).toBe("fixed");
+    expect(Number.parseFloat(popover.style.left)).toBeGreaterThanOrEqual(8);
+  });
+
+  it("a click elsewhere closes the popover", async () => {
+    stubDesktop();
+    mount(<DraftTray api={api} draft={draft()} />);
+    fireEvent.click(screen.getByTestId("tray-why"));
+    await screen.findByTestId("why-popover");
+    fireEvent.mouseDown(document.body);
+    await waitFor(() => expect(screen.queryByTestId("why-popover")).toBeNull());
+  });
+
+  it("on a phone opens the same panel as a bottom sheet, and closes it", async () => {
+    stubPhone();
     mount(<DraftTray api={api} draft={draft()} />);
     fireEvent.click(screen.getByTestId("tray-why"));
     const sheet = await screen.findByTestId("why-sheet");
@@ -146,18 +180,13 @@ describe("the tray's Why? sheet — one tap where there is no room for the colum
     await waitFor(() => expect(screen.queryByTestId("why-sheet")).toBeNull());
   });
 
-  it("offers no Why? where the inspector is already showing it", () => {
-    mount(
-      <InspectorVisibleProvider value>
-        <DraftTray api={api} draft={draft()} />
-      </InspectorVisibleProvider>,
-    );
-    expect(screen.queryByTestId("tray-why")).toBeNull();
+  it("the one-line why stays on the draft itself", () => {
+    mount(<DraftTray api={api} draft={draft()} />);
     expect(screen.getByTestId("draft-tray-why")).toHaveTextContent("Standing order: Deploy access");
   });
 });
 
-describe("the inspector column in the shell", () => {
+describe("the Info panel in the shell (#184)", () => {
   function shell(drafts: DraftRecord[]) {
     localStorage.setItem("duo.api-config", JSON.stringify(api));
     vi.stubGlobal(
@@ -166,62 +195,66 @@ describe("the inspector column in the shell", () => {
     );
   }
 
-  it("is a third column on a wide window whenever there is a draft to explain, and needs no clicks", async () => {
+  it("is closed by default, even with a draft waiting — nothing opens on the right by itself", async () => {
     stubDesktop();
     shell([draft({ provenance: { origin: "owner" } })]);
     window.location.hash = "#duo";
     render(<App />);
-    const inspector = await screen.findByTestId("inspector");
-    expect(inspector).toHaveAttribute("aria-label", "Details");
-    expect(await within(inspector).findByTestId("why-reading")).toHaveTextContent("Your duo is sure of this answer.");
-    // …so the tray does not repeat it behind a button.
-    await waitFor(() => expect(screen.queryByTestId("tray-why")).toBeNull());
+    await screen.findByTestId("draft-tray");
+    expect(screen.queryByTestId("inspector")).toBeNull();
+    expect(screen.getByTestId("info-toggle")).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("shows Your duo's way into its profile when nothing is waiting, and nothing at all on the list", async () => {
+  it("opens from the chat header and shows Your duo's way into its profile; closes again", async () => {
+    stubDesktop();
+    shell([]);
+    window.location.hash = "#duo";
+    render(<App />);
+    fireEvent.click(await screen.findByTestId("info-toggle"));
+    const panel = await screen.findByTestId("inspector");
+    expect(panel).toHaveAttribute("aria-label", "Info");
+    expect(within(panel).getByTestId("duo-info")).toBeInTheDocument();
+    expect(localStorage.getItem("duo.inspector")).toBe("open");
+    fireEvent.click(screen.getByTestId("info-toggle"));
+    await waitFor(() => expect(screen.queryByTestId("inspector")).toBeNull());
+    expect(localStorage.getItem("duo.inspector")).toBe("closed");
+  });
+
+  it("⌘I opens and closes it, and the choice is remembered on this device", async () => {
     stubDesktop();
     shell([]);
     window.location.hash = "#duo";
     const view = render(<App />);
-    expect(await screen.findByTestId("duo-info")).toBeInTheDocument();
-    view.unmount();
-    window.location.hash = "#chats";
-    render(<App />);
-    await screen.findByTestId("chat-list");
-    expect(screen.queryByTestId("inspector")).toBeNull();
-  });
-
-  it("⌘I turns it off and on, and the choice is remembered on this device", async () => {
-    stubDesktop();
-    shell([draft({ provenance: { origin: "owner" } })]);
-    window.location.hash = "#duo";
-    const view = render(<App />);
-    await screen.findByTestId("inspector");
+    await screen.findByTestId("info-toggle");
     act(() => void fireEvent.keyDown(window, { key: "i", metaKey: true }));
-    await waitFor(() => expect(screen.queryByTestId("inspector")).toBeNull());
-    expect(localStorage.getItem("duo.inspector")).toBe("closed");
-    // With it off, the tray offers Why? again, and there is a way to bring it back.
-    expect(await screen.findByTestId("tray-why")).toBeInTheDocument();
-    expect(screen.getByTestId("inspector-show")).toBeInTheDocument();
+    expect(await screen.findByTestId("inspector")).toBeInTheDocument();
     view.unmount();
 
-    render(<App />); // a fresh launch: still off
-    await screen.findByTestId("draft-tray");
-    expect(screen.queryByTestId("inspector")).toBeNull();
-    fireEvent.click(await screen.findByTestId("inspector-show"));
+    render(<App />); // a fresh launch: still open
     expect(await screen.findByTestId("inspector")).toBeInTheDocument();
-    expect(localStorage.getItem("duo.inspector")).toBe("open");
     fireEvent.click(screen.getByTestId("inspector-hide"));
     await waitFor(() => expect(screen.queryByTestId("inspector")).toBeNull());
   });
 
-  it("is not on a phone: there the tray's Why? sheet is the way", async () => {
+  it("has nothing to show on the list, so no button and no panel", async () => {
+    stubDesktop();
+    shell([]);
+    localStorage.setItem("duo.inspector", "open");
+    window.location.hash = "#chats";
+    render(<App />);
+    await screen.findByTestId("chat-list");
+    expect(screen.queryByTestId("inspector")).toBeNull();
+    expect(screen.queryByTestId("info-toggle")).toBeNull();
+  });
+
+  it("is not on a phone: there is no room for it, so no button", async () => {
     stubPhone();
     shell([draft({ provenance: { origin: "owner" } })]);
     window.location.hash = "#duo";
     render(<App />);
     await screen.findByTestId("draft-tray");
     expect(screen.queryByTestId("inspector")).toBeNull();
+    expect(screen.queryByTestId("info-toggle")).toBeNull();
     expect(screen.getByTestId("tray-why")).toBeInTheDocument();
   });
 });

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronLeft, PanelRight, X } from "lucide-react";
+import { ChevronLeft, X } from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
 import { Mark } from "../components/Mark.js";
 import { OfflineBar } from "../components/OfflineBar.js";
@@ -15,7 +15,7 @@ import { ChatList } from "./ChatList.js";
 import { useWaitingCount } from "./waiting.js";
 import { DESKTOP_QUERY, useMediaQuery } from "./useMediaQuery.js";
 import { InspectorBody, useInspectorTarget } from "./Inspector.js";
-import { InspectorVisibleProvider } from "./InspectorContext.js";
+import { InfoPanelProvider } from "./InspectorContext.js";
 import type { Route } from "./routes.js";
 
 /**
@@ -43,13 +43,13 @@ function WaitingMirror({ api }: { api: DuoApiConfig }) {
 export const INSPECTOR_QUERY = "(min-width: 1100px)";
 const INSPECTOR_KEY = "duo.inspector";
 
-/** Whether the owner wants the inspector on — remembered on this device, on by default. */
+/** Whether the owner has the Info panel open — remembered on this device, closed by default (#184). */
 function useInspectorPreference(): [boolean, (open: boolean) => void] {
   const [open, setOpenState] = useState(() => {
     try {
-      return localStorage.getItem(INSPECTOR_KEY) !== "closed";
+      return localStorage.getItem(INSPECTOR_KEY) === "open";
     } catch {
-      return true;
+      return false;
     }
   });
   const setOpen = (next: boolean): void => {
@@ -173,7 +173,7 @@ export function ChatShell({
   const filterWaiting = useWaitingFilter(route);
   const showList = desktop || atHome;
   const showPane = desktop || !atHome;
-  // The inspector (docs/design-language.md §6.2): why a draft says what it says, at zero clicks — a third column when there is room and something to inspect.
+  // The Info panel (#184): a third column only when the owner opens it — from the chat header or ⌘I — and there is room.
   const wide = useMediaQuery(INSPECTOR_QUERY);
   const target = useInspectorTarget(api, connection, route);
   const [inspectorOn, setInspectorOn] = useInspectorPreference();
@@ -204,7 +204,7 @@ export function ChatShell({
       {api && (route === "chats" || route === "waiting") && (
         <FirstRun api={api} />
       )}
-      <InspectorVisibleProvider value={showInspector}>
+      <InfoPanelProvider value={{ available: desktop && wide && target !== null, open: inspectorOn, toggle: () => setInspectorOn(!inspectorOn) }}>
         <div className="flex min-h-0 flex-1">
           {showList && (
             <ListTag
@@ -250,35 +250,24 @@ export function ChatShell({
                 data-testid="pane"
               >
                 {route === "chats" ? <EmptyPane hasDuo={api !== null} /> : pane}
-                {desktop && wide && target !== null && !inspectorOn && (
-                  <button
-                    aria-label="Show details (⌘I)"
-                    className="absolute right-4 top-4 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface)] text-[var(--muted)]"
-                    data-testid="inspector-show"
-                    onClick={() => setInspectorOn(true)}
-                    type="button"
-                  >
-                    <PanelRight aria-label="Show details" size={18} />
-                  </button>
-                )}
               </main>
             </div>
           )}
           {showInspector && target && (
             <aside
-              aria-label="Details"
+              aria-label="Info"
               className="flex min-h-0 w-80 shrink-0 flex-col overflow-y-auto border-l border-[var(--edge)] bg-[var(--surface)]"
               data-testid="inspector"
             >
               <div className="flex justify-end px-2 pt-2">
                 <button
-                  aria-label="Hide details (⌘I)"
+                  aria-label="Hide info (⌘I)"
                   className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--muted)]"
                   data-testid="inspector-hide"
                   onClick={() => setInspectorOn(false)}
                   type="button"
                 >
-                  <X aria-label="Hide details" size={18} />
+                  <X aria-label="Hide info" size={18} />
                 </button>
               </div>
               <div className="p-4 pt-0">
@@ -287,7 +276,7 @@ export function ChatShell({
             </aside>
           )}
         </div>
-      </InspectorVisibleProvider>
+      </InfoPanelProvider>
       {overlays}
     </div>
   );

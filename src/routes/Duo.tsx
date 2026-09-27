@@ -16,6 +16,7 @@ import { StructuredText } from "../components/StructuredText.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { TrainingCards } from "../components/TrainingCards.js";
 import { isOwnTurn } from "../workspace/drafts.js";
+import { InfoButton } from "../shell/InfoButton.js";
 
 // Where "your own turn" is decided lives with the provenance readers; re-exported for the surfaces that name it here.
 export { isOwnTurn };
@@ -59,15 +60,16 @@ function dayLabel(iso: string): string {
 /**
  * One turn: what you asked, on your side of the chat, and — once it has been
  * decided — what your duo said, behind its line with what it drew on
- * beneath. A turn still waiting on you has only your side here; its answer
- * is in the tray above the box you type in, because a draft is never part of
- * the transcript until it is decided (AR-14).
+ * beneath. A turn still waiting on you has its answer right under your
+ * question, with Keep, Edit and Dismiss under it (#182).
  */
-function Turn({ draft }: { draft: DraftRecord }) {
+function Turn({ api, draft, keyboard }: { api: DuoApiConfig; draft: DraftRecord; keyboard: boolean }) {
   const pending = draft.outcome === null && !(draft.escalated && draft.refused);
   return (
     <div className="flex flex-col gap-2" data-testid="thread-entry">
       <OwnerMessage bubble>{draft.question}</OwnerMessage>
+      {/* #182: an answer waiting on you is a message like any other, with its buttons under it. */}
+      {pending && <DraftTray api={api} draft={draft} keyboard={keyboard} />}
       {!pending && (
         <>
           <div className="max-w-[90%]">
@@ -104,7 +106,7 @@ function Turn({ draft }: { draft: DraftRecord }) {
  * with or without a workspace. Ask it anything below; what you asked reads
  * on your side, and its answers on its side — always behind its line, with
  * the sources it drew on underneath. An answer waiting on you (Keep, Edit,
- * Dismiss) is the tray above the box you type in, exactly as in any chat.
+ * Dismiss) is a message in the chat with its buttons under it (#182).
  *
  * This is the read-back of the loop and where its asking lives; the thread
  * context a question may carry (`threadContext`) is metadata on its answer,
@@ -166,6 +168,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
           </h1>
           <p className="type-provenance text-[var(--faint)]">Only you can see this chat</p>
         </div>
+        <InfoButton />
       </header>
       <div className="flex-1 overflow-y-auto p-4" ref={scroller}>
         {/* Older history arrives on demand (#29), at the top where older things are. */}
@@ -193,7 +196,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
               return (
                 <div className="flex flex-col gap-5" key={draft.id}>
                   {divider && <p className="self-center type-identifier text-[var(--faint)]">{day}</p>}
-                  <Turn draft={draft} />
+                  <Turn api={api} draft={draft} keyboard={draft.id === waiting[0]?.id} />
                 </div>
               );
             })}
@@ -204,14 +207,6 @@ export function Duo({ api }: { api: DuoApiConfig }) {
           <TrainingCards api={api} />
         </div>
       </div>
-      {/* Answers waiting on you: above the composer, never in the transcript (AR-14). */}
-      {waiting.length > 0 && (
-        <div className="flex max-h-96 flex-col overflow-y-auto" data-testid="duo-drafts">
-          {waiting.map((draft, index) => (
-            <DraftTray api={api} draft={draft} key={draft.id} keyboard={index === 0} />
-          ))}
-        </div>
-      )}
       <Composer api={api} thread={null} />
     </div>
   );

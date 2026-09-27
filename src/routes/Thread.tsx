@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { InfoButton } from "../shell/InfoButton.js";
 import { MessageBody } from "./Room.js";
 import { roomTitle } from "../shell/roomTitle.js";
 import type { RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
@@ -137,7 +138,10 @@ export function ThreadView({
 
   return (
     <div className="flex h-full flex-col">
-      <h1 className="type-heading sr-only">{roomName} — thread</h1>
+      <header className="flex items-center gap-3 border-b border-[var(--edge)] px-4 py-2" data-testid="thread-header">
+        <h1 className="min-w-0 truncate type-heading">{roomName} — thread</h1>
+        <InfoButton />
+      </header>
       <div className="flex-1 overflow-y-auto p-6">
         <a
           className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
