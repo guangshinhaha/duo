@@ -70,13 +70,16 @@ afterEach(() => {
   window.location.hash = "";
   cleanup();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   delete window.google;
 });
 
 describe("parseConnectHash", () => {
   it("reads the daemon address and the request id, and refuses anything incomplete or not http(s)", () => {
     expect(parseConnectHash(HASH)).toEqual({ host: HOST, request: "req-1" });
-    expect(parseConnectHash(`#connect?host=${encodeURIComponent(`${HOST}/`)}&request=r`)).toEqual({ host: HOST, request: "r" });
+    expect(parseConnectHash(`#connect?host=${encodeURIComponent(`${HOST}/some/path?x=1`)}&request=r`)).toEqual({ host: HOST, request: "r" });
+    expect(parseConnectHash(`#connect?host=${encodeURIComponent("http://localhost:7717")}&request=r`)).toEqual({ host: "http://localhost:7717", request: "r" });
+    expect(parseConnectHash(`#connect?host=${encodeURIComponent("http://api.example.org")}&request=r`)).toBeNull();
     expect(parseConnectHash("#connect?host=&request=r")).toBeNull();
     expect(parseConnectHash(`#connect?host=${encodeURIComponent(HOST)}`)).toBeNull();
     expect(parseConnectHash(`#connect?host=${encodeURIComponent("javascript:alert(1)")}&request=r`)).toBeNull();
@@ -89,7 +92,7 @@ describe("Connect", () => {
     installFakeGoogle("the-credential");
     const navigate = vi.fn();
     const fetchMock = routeFetch(daemon({ "POST /oauth/requests/req-1/approve": () => ok({ redirectTo: `${CALLBACK}?code=abc&state=xyz`, ownerName: "Sam" }) }));
-    render(<Connect hash={HASH} navigate={navigate} />);
+    render(<Connect hash={HASH} navigate={navigate} trustedOrigins={[HOST]} />);
 
     expect(await screen.findByRole("heading")).toHaveTextContent("Connect Claude to your duo");
     await waitFor(() => expect(screen.getByTestId("connect-google")).toBeInTheDocument());
@@ -106,7 +109,7 @@ describe("Connect", () => {
     installFakeGoogle();
     const navigate = vi.fn();
     routeFetch(daemon({ "POST /oauth/requests/req-1/approve": () => failure(404, "no_duo", "no duo") }));
-    render(<Connect hash={HASH} navigate={navigate} />);
+    render(<Connect hash={HASH} navigate={navigate} trustedOrigins={[HOST]} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Sign in with Google" }));
     expect(await screen.findByTestId("connect-error")).toHaveTextContent("There's no duo for this Google account, so nothing was connected");
@@ -117,7 +120,7 @@ describe("Connect", () => {
   it("says a lapsed request has expired instead of offering sign-in", async () => {
     installFakeGoogle();
     routeFetch(daemon({ "GET /oauth/requests/req-1": () => failure(404, "request_expired", "gone") }));
-    render(<Connect hash={HASH} navigate={vi.fn()} />);
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
     expect(await screen.findByTestId("connect-expired")).toHaveTextContent("This connection request has expired. Start again from Claude.");
     expect(screen.queryByTestId("connect-google")).toBeNull();
   });
@@ -126,42 +129,98 @@ describe("Connect", () => {
     installFakeGoogle();
     const navigate = vi.fn();
     routeFetch(daemon({ "POST /oauth/requests/req-1/deny": () => ok({ redirectTo: `${CALLBACK}?error=access_denied&state=xyz` }) }));
-    render(<Connect hash={HASH} navigate={navigate} />);
+    render(<Connect hash={HASH} navigate={navigate} trustedOrigins={[HOST]} />);
 
     fireEvent.click(await screen.findByTestId("connect-decline"));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith(`${CALLBACK}?error=access_denied&state=xyz`));
     expect(screen.getByTestId("connect-declined")).toHaveTextContent("Nothing was connected");
   });
 
-  it("never follows a redirect that is not https", async () => {
+  it.each([
+    ["a script address", "javascript:alert(1)"],
+    ["an https address that is not Claude's", "https://phish.example/callback?code=abc"],
+    ["an address that reads as claude.ai but carries credentials", "https://claude.ai@phish.example/callback"],
+    ["plain http on Claude's own host", "http://claude.ai/api/mcp/auth_callback?code=abc"],
+  ])("never follows %s the server names, and does not claim nothing happened", async (_label, redirectTo) => {
     installFakeGoogle();
     const navigate = vi.fn();
-    routeFetch(daemon({ "POST /oauth/requests/req-1/approve": () => ok({ redirectTo: "javascript:alert(1)" }) }));
-    render(<Connect hash={HASH} navigate={navigate} />);
+    routeFetch(daemon({ "POST /oauth/requests/req-1/approve": () => ok({ redirectTo }) }));
+    render(<Connect hash={HASH} navigate={navigate} trustedOrigins={[HOST]} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Sign in with Google" }));
-    expect(await screen.findByTestId("connect-error")).toHaveTextContent("won't follow");
+    const message = await screen.findByTestId("connect-error");
+    expect(message).toHaveTextContent("won't follow");
+    expect(message).toHaveTextContent("check whether it connected");
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("follows claude.com as well as claude.ai", async () => {
+    installFakeGoogle();
+    const navigate = vi.fn();
+    routeFetch(daemon({ "POST /oauth/requests/req-1/approve": () => ok({ redirectTo: "https://claude.com/api/mcp/auth_callback?code=abc" }) }));
+    render(<Connect hash={HASH} navigate={navigate} trustedOrigins={[HOST]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in with Google" }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("https://claude.com/api/mcp/auth_callback?code=abc"));
+  });
+
+  it("sends nothing to a server the link names but the app does not trust, and offers no sign-in", async () => {
+    installFakeGoogle();
+    const fetchMock = routeFetch(daemon());
+    const evil = `#connect?host=${encodeURIComponent("https://evil.example")}&request=req-1`;
+    render(<Connect hash={evil} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+
+    expect(screen.getByTestId("connect-untrusted")).toHaveTextContent("evil.example");
+    expect(screen.queryByTestId("connect-google")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in with Google" })).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("offers no sign-in until the daemon has confirmed the request is live", async () => {
+    installFakeGoogle();
+    let release: (response: Response) => void = () => {};
+    routeFetch(daemon({ "GET /oauth/requests/req-1": () => new Promise<Response>((resolve) => (release = resolve)) }));
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+
+    await screen.findByText("Connecting…");
+    expect(screen.queryByRole("button", { name: "Sign in with Google" })).toBeNull();
+    release(ok({ clientName: "Claude" }));
+    expect(await screen.findByRole("button", { name: "Sign in with Google" })).toBeInTheDocument();
+  });
+
+  it("reports a failed sign-in lookup as a problem to retry, not as a server without sign-in, and keeps Decline", async () => {
+    installFakeGoogle();
+    let configCalls = 0;
+    routeFetch(daemon({ "GET /hosted/config": () => (++configCalls === 1 ? failure(500, "boom", "boom") : ok({ googleClientId: CLIENT_ID })) }));
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
+
+    expect(await screen.findByTestId("connect-config-failed")).toBeInTheDocument();
+    expect(screen.queryByTestId("connect-no-sign-in")).toBeNull();
+    expect(screen.getByTestId("connect-decline")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("button", { name: "Sign in with Google" })).toBeInTheDocument();
   });
 
   it("says so when the link is incomplete, or the server has no sign-in", async () => {
     installFakeGoogle();
     routeFetch(daemon());
-    render(<Connect hash="#connect?host=&request=" navigate={vi.fn()} />);
+    render(<Connect hash="#connect?host=&request=" navigate={vi.fn()} trustedOrigins={[HOST]} />);
     expect(screen.getByTestId("connect-invalid")).toBeInTheDocument();
     cleanup();
 
     routeFetch(daemon({ "GET /hosted/config": () => ok({ googleClientId: null }) }));
-    render(<Connect hash={HASH} navigate={vi.fn()} />);
+    render(<Connect hash={HASH} navigate={vi.fn()} trustedOrigins={[HOST]} />);
     expect(await screen.findByTestId("connect-no-sign-in")).toBeInTheDocument();
   });
 
   it("is what the app opens on a #connect link, ahead of its own front door", async () => {
     installFakeGoogle();
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOST);
     routeFetch(daemon());
     window.location.hash = HASH;
     render(<App />);
     expect(await screen.findByTestId("connect")).toBeInTheDocument();
+    expect(await screen.findByTestId("connect-google")).toBeInTheDocument();
     expect(screen.queryByText(/Sign in to your workspace/)).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DuoApiConfig } from "../src/api/client.js";
 import { ConnectToClaude } from "../src/components/ConnectToClaude.js";
@@ -161,5 +161,19 @@ describe("ConnectToClaude (digital-duo#227)", () => {
     await waitFor(() => expect(daemon.revoked).toEqual(["g1"]));
     expect(await screen.findByTestId("connect-claude-none")).toBeInTheDocument();
     expect(screen.queryByTestId("connect-claude-history")).toBeNull();
+  });
+
+  it("offers neither card while the mode is unknown: no Generate button before the daemon answers, or if it fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    renderCard();
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Generate/ })).toBeNull();
+    cleanup();
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "boom", message: "The daemon could not be reached." } }), { status: 500 })));
+    renderCard();
+    expect(await screen.findByTestId("connect-claude-load-error")).toHaveTextContent("The daemon could not be reached.");
+    expect(screen.queryByRole("button", { name: /Generate/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 });

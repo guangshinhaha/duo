@@ -157,26 +157,53 @@ export interface ConnectRequest {
   readonly request: string;
 }
 
-/** Reads `#connect?host=…&request=…` (digital-duo#240); null when the hash isn't one or lacks either half. */
+/** Loopback is the one place plain http is accepted: a local daemon in development. */
+function isLoopback(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+/**
+ * Reads `#connect?host=…&request=…` (digital-duo#240); null when the hash isn't one or lacks either half.
+ * The host is reduced to its origin, and only https (or loopback http) is accepted. Whether that origin is a
+ * server this app trusts is a separate question (`trustedDaemonOrigins`): a link is anyone's to write, and the
+ * Google sign-in this page collects must go only where the app already sends it.
+ */
 export function parseConnectHash(hash: string): ConnectRequest | null {
   if (!hash.startsWith("#connect")) {
     return null;
   }
   const params = new URLSearchParams(hash.slice("#connect".length).replace(/^\?/, ""));
-  const host = params.get("host")?.trim().replace(/\/+$/, "");
+  const host = params.get("host")?.trim();
   const request = params.get("request")?.trim();
   if (!host || !request) {
     return null;
   }
   try {
     const parsed = new URL(host);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopback(parsed.hostname))) {
       return null;
     }
+    return { host: parsed.origin, request };
   } catch {
     return null;
   }
-  return { host, request };
+}
+
+/** The daemon origins this app already trusts with a sign-in: the one this build was made for, and the one it is paired to. */
+export function trustedDaemonOrigins(api: DuoApiConfig | null): string[] {
+  const origins: string[] = [];
+  const configured = configuredDaemonOrigin();
+  if (configured) {
+    origins.push(configured);
+  }
+  if (api) {
+    try {
+      origins.push(new URL(api.baseUrl).origin);
+    } catch {
+      // A malformed stored address trusts nothing.
+    }
+  }
+  return origins;
 }
 
 /** `GET {host}/oauth/requests/:id` — who is asking to connect. 404 `request_expired` once it has lapsed or been decided. */

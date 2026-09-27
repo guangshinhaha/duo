@@ -19,7 +19,38 @@ import { MutationError } from "./MutationError.js";
  */
 export function ConnectToClaude({ api }: { api: DuoApiConfig }) {
   const status = useConnector(api);
-  if (status.data?.mode === "signin") {
+  // The mode is only known from the daemon's answer: until then (or if it never comes) neither card is offered, so a
+  // sign-in daemon is never shown a "Generate connector URL" button that would send a request it refuses.
+  if (status.isPending) {
+    return (
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-connect-claude">
+        <h2 className="type-heading">Connect to Claude</h2>
+        <p className="type-provenance text-[var(--muted)]" role="status">
+          Loading…
+        </p>
+      </section>
+    );
+  }
+  if (status.isError) {
+    return (
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-connect-claude">
+        <h2 className="type-heading">Connect to Claude</h2>
+        <p className="type-provenance text-[var(--refused)]" data-testid="connect-claude-load-error" role="status">
+          {status.error.message}
+        </p>
+        <div>
+          <button
+            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
+            onClick={() => void status.refetch()}
+            type="button"
+          >
+            Try again
+          </button>
+        </div>
+      </section>
+    );
+  }
+  if (status.data.mode === "signin") {
     return <SignInConnector api={api} status={status.data} />;
   }
   return <SecretUrlConnector api={api} />;
