@@ -432,8 +432,8 @@ export async function revokeOrgAdmin(origin: string, token: string, orgId: strin
  * `api.baseUrl` (origin plus basePath) is where they are and no other server's. Callers reach these only once
  * `pairedHostedAccount` has matched that origin, so the device token goes to the paired daemon and to no other.
  */
-export function orgUrl(api: DuoApiConfig, path = ""): string {
-  return `${api.baseUrl}/org${path}`;
+export function orgUrl(api: DuoApiConfig, path: string): string {
+  return `${api.baseUrl}${path}`;
 }
 
 function orgGet(api: DuoApiConfig, path: string): Promise<Response> {
@@ -445,7 +445,7 @@ function orgGet(api: DuoApiConfig, path: string): Promise<Response> {
  * answer isn't the documented shape (an older or different server): that is "no usable answer", never a role.
  */
 export async function fetchOrgOverview(api: DuoApiConfig): Promise<OrgOverview | null> {
-  const raw = await readAnswer<unknown>(await orgGet(api, ""));
+  const raw = await readAnswer<unknown>(await orgGet(api, "/org"));
   const fields = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   const org = typeof fields.org === "object" && fields.org !== null ? (fields.org as Record<string, unknown>) : {};
   const id = str(org.id);
@@ -458,12 +458,12 @@ export async function fetchOrgOverview(api: DuoApiConfig): Promise<OrgOverview |
 
 /** `GET {basePath}/org/members` — org admins only; 403 for anyone else. */
 export async function listOwnOrgMembers(api: DuoApiConfig): Promise<HostedOrgMember[]> {
-  return readOrgMembers(await readAnswer<unknown>(await orgGet(api, "/members")));
+  return readOrgMembers(await readAnswer<unknown>(await orgGet(api, "/org/members")));
 }
 
 /** `GET {basePath}/org/invites` — this org's pending invites, and no other org's. */
 export async function listOwnOrgInvites(api: DuoApiConfig): Promise<OrgPendingInvite[]> {
-  const raw = await readAnswer<unknown>(await orgGet(api, "/invites"));
+  const raw = await readAnswer<unknown>(await orgGet(api, "/org/invites"));
   const invites: OrgPendingInvite[] = [];
   for (const row of Array.isArray(raw) ? raw : []) {
     const fields = typeof row === "object" && row !== null ? (row as Record<string, unknown>) : {};
@@ -480,12 +480,12 @@ export async function listOwnOrgInvites(api: DuoApiConfig): Promise<OrgPendingIn
 
 /** `POST {basePath}/org/invites` — 201; always into this org (no org id is sent), and the code and link are shown once. */
 export async function createOwnOrgInvite(api: DuoApiConfig, input: Omit<CreateInviteInput, "orgId">): Promise<MintedHostedInvite> {
-  return readAnswer<MintedHostedInvite>(await postJson(orgUrl(api, "/invites"), input, api.token));
+  return readAnswer<MintedHostedInvite>(await postJson(orgUrl(api, "/org/invites"), input, api.token));
 }
 
 /** `POST {basePath}/org/rename` — answers `{ org: { id, name } }`. */
 export async function renameOwnOrg(api: DuoApiConfig, name: string): Promise<{ id: string; name: string } | null> {
-  const raw = await readAnswer<{ org?: { id?: unknown; name?: unknown } } | null>(await postJson(orgUrl(api, "/rename"), { name }, api.token));
+  const raw = await readAnswer<{ org?: { id?: unknown; name?: unknown } } | null>(await postJson(orgUrl(api, "/org/rename"), { name }, api.token));
   const id = str(raw?.org?.id);
   const renamed = str(raw?.org?.name);
   return id !== null && renamed !== null ? { id, name: renamed } : null;
@@ -493,12 +493,12 @@ export async function renameOwnOrg(api: DuoApiConfig, name: string): Promise<{ i
 
 /** `POST {basePath}/org/admins/:duoId/grant` — an org admin appoints a member of their own org. */
 export async function grantOwnOrgAdmin(api: DuoApiConfig, duoId: string): Promise<OrgAdminChange> {
-  return readChange(await readAnswer<unknown>(await postNothing(orgUrl(api, `/admins/${encodeURIComponent(duoId)}/grant`), api.token)));
+  return readChange(await readAnswer<unknown>(await postNothing(orgUrl(api, `/org/admins/${encodeURIComponent(duoId)}/grant`), api.token)));
 }
 
 /** `POST {basePath}/org/admins/:duoId/revoke` — 409 `last_org_admin` for the org's last one (only the super admin may). Revoking one's own id steps down. */
 export async function revokeOwnOrgAdmin(api: DuoApiConfig, duoId: string): Promise<OrgAdminChange> {
-  return readChange(await readAnswer<unknown>(await postNothing(orgUrl(api, `/admins/${encodeURIComponent(duoId)}/revoke`), api.token)));
+  return readChange(await readAnswer<unknown>(await postNothing(orgUrl(api, `/org/admins/${encodeURIComponent(duoId)}/revoke`), api.token)));
 }
 
 /**
@@ -566,7 +566,7 @@ export function pairedHostedAccount(api: DuoApiConfig | null): HostedAccount | n
   }
 }
 
-/** The id `GET …/members` calls this device's own duo: the tenant id in the pairing's `/t/<id>` path, or `root` for the server's original duo. Null when the address is neither. */
+/** The id `GET …/members` calls this device's own duo: the tenant id in the pairing's base path, or `root` for the server's original duo. Null when the address is neither. */
 export function pairedDuoId(api: DuoApiConfig): string | null {
   try {
     const path = new URL(api.baseUrl).pathname.replace(/\/+$/, "");

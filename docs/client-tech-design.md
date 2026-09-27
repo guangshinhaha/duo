@@ -159,11 +159,15 @@ domain types.
 | `POST` | `/hosted/orgs` | `HostedOrg` — 201, super admin only (`{ name }`); 400 bad name, 409 name taken | `hosted` |
 | `POST` | `/hosted/orgs/:orgId/rename` | `HostedOrg` — super admin only (`{ name }`; POST because the daemon's CORS allows only GET and POST); 404 unknown org, 409 name taken | `hosted` |
 | `GET` | `/hosted/orgs/:orgId/members` | `HostedOrgMember[]` (`{ duoId, name, email, isRoot, joinedAt, isAdmin, superAdmin, orgRole, appointedBy, appointedByName, appointedAt, orgAdminLog }`) — super admin only; 404 unknown org; the client fills what an older daemon leaves out | `hosted` |
-| `POST` | `/hosted/orgs/:orgId/admins/:duoId/grant`, `…/revoke` | `{ member, changed }` — super admin only, no body; 409 `super_admin_protected` / `root_not_appointable`; the super admin may revoke an org's last org admin (#254) | `hosted` |
-| `GET` | `<basePath>/org` | `{ org: { id, name }, role, superAdmin }` — inside the paired duo (`api.baseUrl`), any member; how the app learns its role, asked on load, on focus and once a minute, never persisted; 404 `not_found` in no org (#254) | `hosted` |
-| `GET` | `<basePath>/org/members`, `/org/invites` | the org's people (as above) and its pending invites (`{ id, name, email, orgId, createdAt, expiresAt }`) — org admins only, their own org only; 403 for anyone else (#254) | `hosted` |
-| `POST` | `<basePath>/org/invites`, `/org/rename` | 201 `MintedHostedInvite` (no org id sent: it is always this org's; 409 `too_many_invites`) and `{ org }` (409 `name_unavailable`) — org admins only (#254) | `hosted` |
-| `POST` | `<basePath>/org/admins/:duoId/grant`, `…/revoke` | `{ member, changed }` — org admins, in their own org, no body; 403 once the role is gone, 409 `last_org_admin` / `super_admin_protected` / `root_not_appointable`; revoking one's own id steps down (#254) | `hosted` |
+| `POST` | `/hosted/orgs/:orgId/admins/:duoId/grant` | `{ member, changed }` — super admin only, no body; 409 `super_admin_protected` / `root_not_appointable` (#254) | `hosted` |
+| `POST` | `/hosted/orgs/:orgId/admins/:duoId/revoke` | `{ member, changed }` — super admin only, no body; may revoke an org's last org admin (#254) | `hosted` |
+| `GET` | `/org` | `{ org: { id, name }, role, superAdmin }` — inside the paired duo, so under its `basePath` (`api.baseUrl`), any member; how the app learns its role, asked on load, on focus and once a minute, never persisted; 404 `not_found` in no org (#254) | `hosted` |
+| `GET` | `/org/members` | the org's people (shape as the super admin's list) — org admins only, their own org only; 403 for anyone else (#254) | `hosted` |
+| `GET` | `/org/invites` | `[{ id, name, email, orgId, createdAt, expiresAt }]` — org admins only, this org's pending invites, never a code (#254) | `hosted` |
+| `POST` | `/org/invites` | 201 `MintedHostedInvite` — org admins only (`{ name, email?, expiresInHours? }`; no org id is sent, it is always this org's); 409 `too_many_invites` (#254) | `hosted` |
+| `POST` | `/org/rename` | `{ org: { id, name } }` — org admins only (`{ name }`); 409 `name_unavailable` (#254) | `hosted` |
+| `POST` | `/org/admins/:duoId/grant` | `{ member, changed }` — org admins, in their own org, no body; 409 `super_admin_protected` / `root_not_appointable` (#254) | `hosted` |
+| `POST` | `/org/admins/:duoId/revoke` | `{ member, changed }` — org admins, no body; 403 once the role is gone, 409 `last_org_admin` / `super_admin_protected`; revoking one's own id steps down (#254) | `hosted` |
 | `GET` | `/search?q=&limit=&cursor=` | `HybridSearchOutcome` — `duo search`'s own hybrid read (#174) | `ingest/embeddings` |
 | `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178); the Activity tab's "Where it runs out" (#54) never calls it — opening a screen must not send | `escalation/digest` |
 | `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; that section walks every page at `limit=100` before it counts | `escalation/digest` |

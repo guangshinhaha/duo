@@ -327,7 +327,7 @@ function MemberRow({
   const canRevoke = isOrgAdmin && !lastOrgAdminForOrgAdmin && !(viewer === "org" && member.superAdmin && !isSelf);
   return (
     <li
-      className="shape-entry flex flex-col gap-1 px-4 py-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+      className="shape-entry flex flex-col gap-1 px-4 py-3"
       data-testid="admin-member"
       ref={rowRef}
       tabIndex={-1}
@@ -844,7 +844,7 @@ function SteppedDown({ orgName }: { orgName: string }) {
     ref.current?.focus();
   }, []);
   return (
-    <div className="mx-auto flex max-w-xl flex-col gap-3 p-6 outline-none" data-testid="admin-stepped-down" ref={ref} role="status" tabIndex={-1}>
+    <div className="mx-auto flex max-w-xl flex-col gap-3 p-6" data-testid="admin-stepped-down" ref={ref} role="status" tabIndex={-1}>
       <h1 className="type-heading">You&apos;re no longer an org admin</h1>
       <p className="type-body text-[var(--muted)]">
         You&apos;re still a member of {orgName}, and your duo is unchanged. The Admin entry leaves your app. To manage the org again, another org admin or the super admin can appoint you.
