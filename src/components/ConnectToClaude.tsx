@@ -103,15 +103,14 @@ function SignInConnector({ api, status }: { api: DuoApiConfig; status: Connector
         <MutationError error={revoke.error} />
       </div>
 
-      {connections.length > 0 && (
-        <div className="flex flex-col gap-2" data-testid="connect-claude-history">
-          <h3 className="type-heading">Bring in your history</h3>
-          <p className="type-body">
-            Paste this into a claude.ai chat. Claude searches your past chats (paid plans) and saves notes to your duo. They are Claude&apos;s summaries, not exact copies; for an exact copy import your Claude export.
-          </p>
-          <CopyableSecret label="Prompt" multiline testId="connect-claude-prompt" value={status.historyPrompt} />
-        </div>
-      )}
+      {/* The prompt holds no secret, so it is always offered: it is what the owner reaches for right after connecting. */}
+      <div className="flex flex-col gap-2" data-testid="connect-claude-history">
+        <h3 className="type-heading">Bring in your history</h3>
+        <p className="type-body">
+          {connections.length === 0 ? "Once Claude is connected, paste" : "Paste"} this into a claude.ai chat. Claude searches your past chats (paid plans) and saves notes to your duo. They are Claude&apos;s summaries, not exact copies; for an exact copy import your Claude export.
+        </p>
+        <CopyableSecret label="Prompt" multiline testId="connect-claude-prompt" value={status.historyPrompt} />
+      </div>
     </section>
   );
 }
