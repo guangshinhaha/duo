@@ -180,4 +180,11 @@ describe("ConnectToClaude (digital-duo#227)", () => {
     expect(screen.queryByRole("button", { name: /Generate/ })).toBeNull();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
+
+  it("shows no permissions line for a connection that reports none", async () => {
+    stubDaemon({ connector: null, mints: 0, signIn: { url: "https://daemon.example/mcp", connections: [{ id: "g1", clientName: "Claude", createdAt: "2026-09-26T03:00:00.000Z", lastUsedAt: null, scopes: [] }] } });
+    renderCard();
+    expect(await screen.findByTestId("connect-claude-connection")).toBeInTheDocument();
+    expect(screen.queryByTestId("connect-claude-permissions")).toBeNull();
+  });
 });

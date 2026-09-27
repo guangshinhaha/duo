@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiRequestError } from "../api/client.js";
 import { decideConnect, fetchConnectRequest, fetchHostedConfig, parseConnectHash, type ConnectScope } from "../api/hosted.js";
 import { GoogleSignInButton } from "../components/GoogleSignInButton.js";
+
+/** The one permission that lets Claude act as the owner. It is never ticked for them, whatever the daemon's list says. */
+const SEND_SCOPE = "duo:send";
 
 /** Where the browser may be sent back to after the owner decides: Claude's own origins, and nothing the server names. */
 const CLAUDE_ORIGINS: ReadonlySet<string> = new Set(["https://claude.ai", "https://claude.com"]);
@@ -96,7 +99,7 @@ export function Connect({
         }
         setClientName(answer.clientName);
         setScopes(answer.scopes ?? null);
-        setChosen(new Set((answer.scopes ?? []).filter((scope) => scope.defaultOn).map((scope) => scope.id)));
+        setChosen(new Set((answer.scopes ?? []).filter((scope) => scope.defaultOn && scope.id !== SEND_SCOPE).map((scope) => scope.id)));
       })
       .catch((reason: unknown) => {
         if (cancelled) {
@@ -113,6 +116,11 @@ export function Connect({
     };
   }, [host, request, attempt]);
 
+  // The Google popup can finish long after the button was clicked, and the checklist stays editable meanwhile, so what to
+  // send is read from here when the credential arrives, not from the render the button last saw.
+  const chosenRef = useRef(chosen);
+  chosenRef.current = chosen;
+
   const toggle = (id: string) =>
     setChosen((current) => {
       const next = new Set(current);
@@ -126,9 +134,14 @@ export function Connect({
     if (!target || !trusted || pending) {
       return;
     }
+    const ticked = [...chosenRef.current];
+    if (decision !== "deny" && scopes && ticked.length === 0) {
+      // Everything was unticked while Google's popup was open: send nothing rather than what was ticked a moment ago.
+      return;
+    }
     setPending(true);
     setError(null);
-    decideConnect(target, decision === "deny" ? decision : { ...decision, scopes: scopes ? [...chosen] : undefined })
+    decideConnect(target, decision === "deny" ? decision : { ...decision, scopes: scopes ? ticked : undefined })
       .then(({ redirectTo }) => {
         if (!isFollowable(redirectTo)) {
           // The daemon has already taken the answer, so this must not claim nothing happened.
@@ -180,7 +193,7 @@ export function Connect({
               )
             ) : (
               <>
-                {scopes ? (
+                {scopes && scopes.length > 0 ? (
                   <fieldset className="flex flex-col gap-2" data-testid="connect-scopes">
                     <legend className="type-body">{who} is asking to work with your duo. Choose what it may do:</legend>
                     {scopes.map((scope) => (
@@ -198,7 +211,7 @@ export function Connect({
                       </p>
                     )}
                   </fieldset>
-                ) : (
+                ) : scopes ? null : (
                   <p className="type-body">
                     {who} is asking to save notes to your duo when you tell it to. It can add notes; it can&apos;t read what is in your duo or act as you.
                   </p>
@@ -222,6 +235,10 @@ export function Connect({
                 ) : clientId === undefined ? (
                   <p className="type-provenance text-[var(--muted)]" role="status">
                     Connecting…
+                  </p>
+                ) : scopes && scopes.length === 0 ? (
+                  <p className="type-body text-[var(--muted)]" data-testid="connect-nothing-offered" role="status">
+                    {who} isn&apos;t asking for anything this server offers, so there is nothing to allow. You can decline.
                   </p>
                 ) : scopes && chosen.size === 0 ? (
                   <p className="type-body text-[var(--muted)]" data-testid="connect-choose-one" role="status">

@@ -87,7 +87,7 @@ function SignInConnector({ api, status }: { api: DuoApiConfig; status: Connector
                 <span className="type-body">
                   {connection.clientName}, connected {new Date(connection.createdAt).toLocaleDateString()}
                   {connection.lastUsedAt ? `, last used ${new Date(connection.lastUsedAt).toLocaleDateString()}` : ", not used yet"}
-                  {connection.scopes && (
+                  {connection.scopes && connection.scopes.length > 0 && (
                     <span className="block type-provenance text-[var(--muted)]" data-testid="connect-claude-permissions">
                       May: {connection.scopes.map((scope) => PERMISSION_LABELS[scope] ?? scope).join(", ")}
                     </span>
