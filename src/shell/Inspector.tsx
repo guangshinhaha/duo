@@ -1,15 +1,12 @@
 import type { ReactNode } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { usePendingDrafts } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
 import { hairlineState, type HairlineState } from "../components/ConfidenceHairline.js";
 import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { Mark } from "../components/Mark.js";
 import { ProvenanceLine } from "../components/ProvenanceLine.js";
 import { Timestamp } from "../components/Timestamp.js";
-import { conversationOf, isOwnTurn } from "../workspace/drafts.js";
 import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
-import { bridgedIdOf, isBridgedId } from "./bridged.js";
 import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
 import { PROFILE_TABS, type ProfileTab, type Route } from "./routes.js";
 import { useHeldRooms } from "./waiting.js";
@@ -52,7 +49,7 @@ export function WhyPanel({ draft }: { draft: DraftRecord }) {
   const drew = draft.sources.filter((source) => source.kind !== "rule");
   return (
     <div className="flex flex-col gap-4" data-testid="why-panel">
-      <h2 className="type-heading">Why your duo drafted this</h2>
+      <h2 className="type-heading">Why your duo wrote this</h2>
       <dl className="flex flex-col gap-4">
         <Field label="Trust reading" testId="why-reading">
           {whyReading(state)}
@@ -105,6 +102,11 @@ export function WhyPanel({ draft }: { draft: DraftRecord }) {
             "Where this came from wasn't recorded."
           )}
         </Field>
+        {draft.escalated && draft.escalationReason && (
+          <Field label="In its own words" testId="why-reason">
+            <span data-testid="escalation-reason">{draft.escalationReason}</span>
+          </Field>
+        )}
         <Field label="When" testId="why-when">
           <Timestamp iso={draft.createdAt} />
         </Field>
@@ -172,47 +174,28 @@ export function DuoInfo() {
   );
 }
 
-export type InspectorTarget =
-  | { kind: "draft"; draft: DraftRecord }
-  | { kind: "room"; room: RoomSummary }
-  | { kind: "duo" };
+export type InspectorTarget = { kind: "room"; room: RoomSummary } | { kind: "duo" };
 
 /**
- * What the inspector is about, from where the owner is. In a chat with a
- * draft waiting: that draft's why. In a chat without one: the chat itself. In
- * Your duo: the waiting answer's why, or a way into its profile. On a draft's
- * own page: its why. Anywhere else (the list, Settings, a profile tab) there
- * is nothing to inspect and no column.
+ * What the Info panel is about, from where the owner is (#184): in a
+ * conversation, the conversation — who is in it, its duos; in Your duo, a
+ * way into its profile. A draft's why is no longer here: it opens beside the
+ * draft, when asked (#185). Anywhere else there is nothing to show.
  */
 export function useInspectorTarget(api: DuoApiConfig | null, connection: WorkspaceConnection | null, route: Route): InspectorTarget | null {
-  const pending = usePendingDrafts(api).data;
   const rooms = useHeldRooms(connection);
-  const waiting = (Array.isArray(pending) ? pending : []).filter((draft) => draft.outcome === null && !(draft.escalated && draft.refused));
-  const oldest = (list: DraftRecord[]) => [...list].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
-
   if (typeof route === "object" && ("chat" in route || "thread" in route)) {
     const roomId = "chat" in route ? route.chat : route.thread.roomId;
-    const draft = oldest(
-      waiting.filter((candidate) => (isBridgedId(roomId) ? bridgedIdOf(candidate) === roomId : conversationOf(candidate.provenance)?.roomId === roomId)),
-    );
-    if (draft) {
-      return { kind: "draft", draft };
-    }
     const room = rooms.find((candidate) => candidate.roomId === roomId);
     return room ? { kind: "room", room } : null;
   }
-  if (route === "duo") {
-    const draft = oldest(waiting.filter(isOwnTurn));
-    return draft ? { kind: "draft", draft } : api ? { kind: "duo" } : null;
-  }
-  if (typeof route === "object" && "draft" in route) {
-    const draft = waiting.find((candidate) => candidate.id === route.draft);
-    return draft ? { kind: "draft", draft } : null;
+  if (route === "duo" && api) {
+    return { kind: "duo" };
   }
   return null;
 }
 
-/** The inspector's content for a target — the desktop column's body. */
+/** The Info panel's content for a target. */
 export function InspectorBody({ target }: { target: InspectorTarget }) {
-  return target.kind === "draft" ? <WhyPanel draft={target.draft} /> : target.kind === "room" ? <RoomInfo room={target.room} /> : <DuoInfo />;
+  return target.kind === "room" ? <RoomInfo room={target.room} /> : <DuoInfo />;
 }

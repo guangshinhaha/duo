@@ -151,14 +151,16 @@ describe("#144 — your duo is one continuous chat", () => {
     expect(dismissed).toHaveTextContent("about leave");
   });
 
-  it("holds an answer waiting on you out of the transcript: your question is there, its answer is the tray above the composer", async () => {
+  it("an answer waiting on you is a message right under your question, with its buttons under it — one transcript, no second strip (#182)", async () => {
     renderWithClient(<Duo api={api} />);
     await screen.findByTestId("thread-group");
     const waiting = turnFor("question 1");
     expect(within(waiting).getByTestId("owner-message")).toHaveTextContent("question 1");
-    expect(within(waiting).queryByTestId("duo-answer")).toBeNull();
     expect(within(waiting).queryByTestId("entry-outcome")).toBeNull();
-    const tray = within(screen.getByTestId("duo-drafts")).getByTestId("draft-tray");
+    expect(screen.queryByTestId("duo-drafts")).toBeNull();
+    const tray = within(waiting).getByTestId("draft-tray");
+    // An answer to you, not an outgoing message: not dashed as unsent.
+    expect(tray).not.toHaveAttribute("data-unsent");
     expect(tray).toHaveTextContent("draft 1");
     // Self-asked, so its verbs are Keeps: nobody is being sent anything.
     expect(within(tray).getByRole("button", { name: "Keep" })).toBeInTheDocument();

@@ -357,6 +357,19 @@ there until it is dispositioned.**
 > in the chat it answers, not in a separate surface. **Why:** the risk is non-use, and a queue you
 > must visit is a reason not to open the app.
 
+> **Amended 2026-09-27 (#180, #181).** In use, the tray read as a second scrolling strip wedged
+> between transcript and composer. The owner chose (mockup board C) to show the draft **inline, at the
+> end of the owner's own view of the transcript**, on the owner's side, with Send · Edit · Dismiss ·
+> Why? under it. **Kept:** nothing reaches the conversation or its members until Send (the daemon
+> delivers, and the owner's real message then arrives in the draft's place); the draft is visibly
+> *unsent* — dashed, the duo's attribution line (AR-13), "only you can see this · not sent" — so it
+> cannot pass for a sent message; it sits after the last real message, never between them; an
+> untouched draft persists until decided and is counted in Waiting on you; offline, Send is
+> disabled, never queued (AR-15). **Changed:** "never in the transcript" becomes "never in the
+> transcript anyone else reads". **Why:** one transcript and one composer, the model every messenger
+> teaches; the dashed, labelled draft answers the original worry that a dismissed or ignored draft
+> looks like an unread message.
+
 ### AR-15 · The phone is asleep when the Mac is — MEDIUM
 `AR-10` accepted "the duo is asleep when your laptop is" for v1, reasoning that if you were asleep
 you were not answering either. The thin client makes it sharper: close the lid mid-afternoon and
