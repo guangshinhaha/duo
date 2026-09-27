@@ -516,6 +516,8 @@ export interface HostedSignupResult {
   readonly ownerName: string;
   /** May mint invites from Settings. Absent from a daemon that predates sign-in — read as false. */
   readonly isAdmin?: boolean;
+  /** #254: this duo's role in its org — `org_admin` manages the org, `member` is anyone else (the super admin is `isAdmin`, apart). Absent from a daemon that predates org admins. */
+  readonly orgRole?: "member" | "org_admin";
   /** The org this duo belongs to (null for the root duo of a server with no org for it). Absent from a daemon that predates orgs. */
   readonly orgId?: string | null;
 }

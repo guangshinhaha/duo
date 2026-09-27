@@ -13,14 +13,22 @@ import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationC
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
-import { shouldPersistQuery } from "./api/queries.js";
+import { shouldPersistQuery, useOrgOverview } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Admin } from "./routes/Admin.js";
 import { Connect } from "./routes/Connect.js";
 import { Join } from "./routes/Join.js";
 import { Landing } from "./routes/Landing.js";
-import { configuredDaemonOrigin, pairedHostedAccount, readHostedAccount, trustedDaemonOrigins, writeHostedAccount } from "./api/hosted.js";
+import {
+  adminRoleOf,
+  configuredDaemonOrigin,
+  pairedHostedAccount,
+  readHostedAccount,
+  trustedDaemonOrigins,
+  writeHostedAccount,
+  type AdminRole,
+} from "./api/hosted.js";
 import { Settings } from "./routes/Settings.js";
 import { Onboarding } from "./routes/Onboarding.js";
 import { WaitingHome } from "./shell/WaitingHome.js";
@@ -198,16 +206,20 @@ async function dispatchArrival(
 }
 
 /**
- * #128: the hosted account this browser is signed in as, when it is a super admin and it is the
- * account of the server this app is paired with — what decides whether the Admin entry is drawn and
- * what the Admin screen talks to. The sign-in answer's flag, read from this device: the daemon
- * re-checks it on every admin call, so a stale "yes" only ever shows an entry whose screen then
- * says it isn't for you. The bearer token is `api.token`, so the admin calls go to the origin of
- * `api.baseUrl` and to no other: a stored account for a different server never receives it.
+ * #128, #254: which admin screens this browser may open, and the server to open them against. The Admin entry
+ * is drawn, and the Admin screen talks, only for a hosted account of the server this app is paired with, and
+ * only as the role the daemon says (`adminRoleOf`): the super admin's, an org admin's, or none. The stored
+ * account's flags are a first paint's hint; the daemon's answer to `GET {basePath}/org` corrects them, and it
+ * re-checks the role on every admin call anyway, so a stale "yes" only ever shows an entry whose screen says it
+ * isn't for you. The bearer token is `api.token`: super admin calls go to the origin of `api.baseUrl` and to no
+ * other, an org admin's to `api.baseUrl` itself, and a stored account for a different server receives neither.
  */
-function adminAccount(api: DuoApiConfig | null) {
+function adminAccess(api: DuoApiConfig | null, overview: ReturnType<typeof useOrgOverview>): { role: AdminRole; origin: string | null } {
   const account = pairedHostedAccount(api);
-  return account?.isAdmin ? account : null;
+  // A "no org" or "not yours" is an answer too, and it outranks whatever an earlier answer left in the cache.
+  const refused = overview.error instanceof ApiRequestError && (overview.error.status === 404 || overview.error.status === 403);
+  const role = adminRoleOf(account, refused ? undefined : overview.data, refused);
+  return { role, origin: role ? (account?.origin ?? null) : null };
 }
 
 /** #49: where onboarding lands — the duo's Rules, on the ones the daemon just derived, to approve or reject. */
@@ -226,6 +238,8 @@ interface SurfaceContext {
   onPairDuo: () => void;
   onWorkspaceSignIn: () => void;
   onDuoEnded: () => void;
+  /** #254: the admin screens this device may open, and where. */
+  admin: { role: AdminRole; origin: string | null };
 }
 
 /** Settings: the index of its sections, or one section alone (#148). */
@@ -248,7 +262,11 @@ function settingsSurface(section: SettingsSectionId | "index", shell: SurfaceCon
 function routeSurface(route: Route, shell: SurfaceContext) {
   if (typeof route === "object") {
     if ("adminOrg" in route) {
-      return shell.api ? <Admin api={shell.api} origin={adminAccount(shell.api)?.origin ?? null} orgId={route.adminOrg} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
+      return shell.api ? (
+        <Admin api={shell.api} origin={shell.admin.origin} orgId={route.adminOrg} role={shell.admin.role} />
+      ) : (
+        <NoDuoPanel onPairDuo={shell.onPairDuo} />
+      );
     }
     if ("chat" in route && isBridgedId(route.chat)) {
       return shell.api ? <BridgedChat api={shell.api} chatId={route.chat} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
@@ -295,7 +313,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
     case "settings":
       return settingsSurface("index", shell);
     case "admin":
-      return <Admin api={shell.api!} origin={adminAccount(shell.api)?.origin ?? null} orgId={null} />;
+      return <Admin api={shell.api!} origin={shell.admin.origin} orgId={null} role={shell.admin.role} />;
     case "confirmations":
       return <Confirmations api={shell.api!} />;
     case "duo":
@@ -360,6 +378,10 @@ function AppShell() {
     }
   });
   const hostedActive = isHostedAccess(hosted.access);
+  // #254: the person's role, asked of the daemon each time the app opens and on a timer and focus after (never
+  // read back from storage), so an appointment or a revoke reaches a phone that is already signed in.
+  const overview = useOrgOverview(api, pairedHostedAccount(api) !== null);
+  const admin = adminAccess(api, overview);
   const activeSession = hostedActive ? hosted.session : session;
   // The public front door: a signed-out visitor who arrives at the bare
   // root of a hosted build sees the landing page, not the sign-in card.
@@ -772,7 +794,7 @@ function AppShell() {
   );
   const footer = (
     <>
-      {adminAccount(api) && (
+      {admin.role && (
         <a
           aria-current={route === "admin" || (typeof route === "object" && "adminOrg" in route) ? "page" : undefined}
           className="inline-flex min-h-11 items-center type-provenance text-[var(--muted)] aria-[current=page]:text-[var(--text)]"
@@ -813,6 +835,7 @@ function AppShell() {
           onPairDuo: openPairDuo,
           onWorkspaceSignIn: openWorkspaceSignIn,
           onDuoEnded: duoEnded,
+          admin,
         })}
         route={route}
         session={activeSession}

@@ -89,7 +89,22 @@ export interface HostedOrg {
   readonly memberCount: number;
 }
 
-/** A row of `GET {origin}/hosted/orgs/:orgId/members`: one person and their duo. `duoId` is `root` for the server's original duo. */
+/** A duo's role inside its org. The super admin is not a role here: it is a separate mark (`superAdmin`), above every org. */
+export type OrgRole = "member" | "org_admin";
+
+/** One line of a member's appoint/revoke history, oldest first. */
+export interface OrgAdminLogRow {
+  readonly at: string;
+  readonly action: "grant" | "revoke";
+  /** Who did it, in words: "Super admin", or the acting person's name. Null when the daemon no longer knows them. */
+  readonly byName: string | null;
+}
+
+/**
+ * A row of an org's people (`GET {origin}/hosted/orgs/:orgId/members` for the super admin, `GET {basePath}/org/members`
+ * for an org admin, the same shape): one person and their duo. `duoId` is `root` for the server's original duo.
+ * `readOrgMembers` fills every optional field, so a daemon that predates org admins reads as "everyone is a member".
+ */
 export interface HostedOrgMember {
   readonly duoId: string;
   /** The person's name — the one they gave (or Google gave) when their duo was made. */
@@ -99,8 +114,31 @@ export interface HostedOrgMember {
   /** The server's original duo, the one that predates invites. */
   readonly isRoot: boolean;
   readonly joinedAt: string | null;
-  /** Also a super admin of this server. */
+  /** Also the super admin of this server (the daemon's older name for `superAdmin`). */
   readonly isAdmin: boolean;
+  readonly superAdmin: boolean;
+  readonly orgRole: OrgRole;
+  /** Who appointed this org admin: a person's name or "Super admin". Null for a member, or when unknown. */
+  readonly appointedByName: string | null;
+  readonly appointedAt: string | null;
+  readonly orgAdminLog: readonly OrgAdminLogRow[];
+}
+
+/** `GET {basePath}/org` — what the signed-in duo is in its org. Any member may ask; it is how the app learns its role. */
+export interface OrgOverview {
+  readonly org: { readonly id: string; readonly name: string };
+  readonly role: OrgRole;
+  /** Also the super admin of this server. */
+  readonly superAdmin: boolean;
+}
+
+/** A row of `GET {basePath}/org/invites`: this org's invite that has not been used or expired. The code is never listed. */
+export interface OrgPendingInvite {
+  readonly id: string;
+  readonly name: string;
+  readonly email: string | null;
+  readonly createdAt: string;
+  readonly expiresAt: string;
 }
 
 /** Reads a daemon answer the way `apiRequest` does: a non-2xx body becomes an `ApiRequestError` with the daemon's own code. */
@@ -309,9 +347,158 @@ export async function renameOrg(origin: string, token: string, orgId: string, na
   return readAnswer<HostedOrg>(await postJson(`${origin}/hosted/orgs/${encodeURIComponent(orgId)}/rename`, { name }, token));
 }
 
+function str(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function isoOrNull(value: unknown): string | null {
+  const text = str(value);
+  return text !== null && !Number.isNaN(Date.parse(text)) ? text : null;
+}
+
+/** Reads the people an org's members route answers. Anything but the documented shape is dropped or defaulted, never thrown: a bad row must not take the screen down. */
+export function readOrgMembers(raw: unknown): HostedOrgMember[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const members: HostedOrgMember[] = [];
+  for (const row of raw) {
+    const fields = typeof row === "object" && row !== null ? (row as Record<string, unknown>) : {};
+    const duoId = str(fields.duoId);
+    const name = str(fields.name);
+    if (duoId === null || name === null) {
+      continue;
+    }
+    const superAdmin = fields.superAdmin === true || fields.isAdmin === true;
+    const orgRole: OrgRole = fields.orgRole === "org_admin" ? "org_admin" : "member";
+    const log: OrgAdminLogRow[] = [];
+    for (const entry of Array.isArray(fields.orgAdminLog) ? fields.orgAdminLog : []) {
+      const item = typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>) : {};
+      const at = isoOrNull(item.at);
+      if (at !== null && (item.action === "grant" || item.action === "revoke")) {
+        log.push({ at, action: item.action, byName: str(item.byName) });
+      }
+    }
+    members.push({
+      duoId,
+      name,
+      email: str(fields.email),
+      isRoot: fields.isRoot === true,
+      joinedAt: isoOrNull(fields.joinedAt),
+      isAdmin: superAdmin,
+      superAdmin,
+      orgRole,
+      appointedByName: orgRole === "org_admin" ? str(fields.appointedByName) : null,
+      appointedAt: orgRole === "org_admin" ? isoOrNull(fields.appointedAt) : null,
+      orgAdminLog: log,
+    });
+  }
+  return members;
+}
+
 /** `GET {origin}/hosted/orgs/:orgId/members` — 404 for an org that doesn't exist. */
 export async function listOrgMembers(origin: string, token: string, orgId: string): Promise<HostedOrgMember[]> {
-  return adminGet<HostedOrgMember[]>(`${origin}/hosted/orgs/${encodeURIComponent(orgId)}/members`, token);
+  return readOrgMembers(await adminGet<unknown>(`${origin}/hosted/orgs/${encodeURIComponent(orgId)}/members`, token));
+}
+
+/** A POST with no body and no content type: grant and revoke name everything in the path, and the daemon ignores a body. */
+async function postNothing(url: string, token: string): Promise<Response> {
+  return fetch(url, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** What appointing or revoking answers: whether anything changed (appointing an org admin twice is not an error). */
+export interface OrgAdminChange {
+  readonly changed: boolean;
+}
+
+function readChange(raw: unknown): OrgAdminChange {
+  return { changed: !(typeof raw === "object" && raw !== null && (raw as { changed?: unknown }).changed === false) };
+}
+
+/** `POST {origin}/hosted/orgs/:orgId/admins/:duoId/grant` — the super admin appoints. 404 for an unknown org or member, 409 `super_admin_protected` or `root_not_appointable`. */
+export async function grantOrgAdmin(origin: string, token: string, orgId: string, duoId: string): Promise<OrgAdminChange> {
+  const base = `${origin}/hosted/orgs/${encodeURIComponent(orgId)}/admins/${encodeURIComponent(duoId)}`;
+  return readChange(await readAnswer<unknown>(await postNothing(`${base}/grant`, token)));
+}
+
+/** `POST {origin}/hosted/orgs/:orgId/admins/:duoId/revoke` — the super admin revokes, and may revoke an org's last org admin. */
+export async function revokeOrgAdmin(origin: string, token: string, orgId: string, duoId: string): Promise<OrgAdminChange> {
+  const base = `${origin}/hosted/orgs/${encodeURIComponent(orgId)}/admins/${encodeURIComponent(duoId)}`;
+  return readChange(await readAnswer<unknown>(await postNothing(`${base}/revoke`, token)));
+}
+
+/**
+ * #254: the org admin's own routes live inside the duo, under its `basePath` like the workspace session's, so
+ * `api.baseUrl` (origin plus basePath) is where they are and no other server's. Callers reach these only once
+ * `pairedHostedAccount` has matched that origin, so the device token goes to the paired daemon and to no other.
+ */
+export function orgUrl(api: DuoApiConfig, path = ""): string {
+  return `${api.baseUrl}/org${path}`;
+}
+
+function orgGet(api: DuoApiConfig, path: string): Promise<Response> {
+  return fetch(orgUrl(api, path), { headers: { Authorization: `Bearer ${api.token}` } });
+}
+
+/**
+ * `GET {basePath}/org` — the signed-in duo's org and role (404 `not_found` when it is in no org). Null when the
+ * answer isn't the documented shape (an older or different server): that is "no usable answer", never a role.
+ */
+export async function fetchOrgOverview(api: DuoApiConfig): Promise<OrgOverview | null> {
+  const raw = await readAnswer<unknown>(await orgGet(api, ""));
+  const fields = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const org = typeof fields.org === "object" && fields.org !== null ? (fields.org as Record<string, unknown>) : {};
+  const id = str(org.id);
+  const name = str(org.name);
+  if (id === null || name === null) {
+    return null;
+  }
+  return { org: { id, name }, role: fields.role === "org_admin" ? "org_admin" : "member", superAdmin: fields.superAdmin === true };
+}
+
+/** `GET {basePath}/org/members` — org admins only; 403 for anyone else. */
+export async function listOwnOrgMembers(api: DuoApiConfig): Promise<HostedOrgMember[]> {
+  return readOrgMembers(await readAnswer<unknown>(await orgGet(api, "/members")));
+}
+
+/** `GET {basePath}/org/invites` — this org's pending invites, and no other org's. */
+export async function listOwnOrgInvites(api: DuoApiConfig): Promise<OrgPendingInvite[]> {
+  const raw = await readAnswer<unknown>(await orgGet(api, "/invites"));
+  const invites: OrgPendingInvite[] = [];
+  for (const row of Array.isArray(raw) ? raw : []) {
+    const fields = typeof row === "object" && row !== null ? (row as Record<string, unknown>) : {};
+    const id = str(fields.id);
+    const name = str(fields.name);
+    const createdAt = isoOrNull(fields.createdAt);
+    const expiresAt = isoOrNull(fields.expiresAt);
+    if (id !== null && name !== null && createdAt !== null && expiresAt !== null) {
+      invites.push({ id, name, email: str(fields.email), createdAt, expiresAt });
+    }
+  }
+  return invites;
+}
+
+/** `POST {basePath}/org/invites` — 201; always into this org (no org id is sent), and the code and link are shown once. */
+export async function createOwnOrgInvite(api: DuoApiConfig, input: Omit<CreateInviteInput, "orgId">): Promise<MintedHostedInvite> {
+  return readAnswer<MintedHostedInvite>(await postJson(orgUrl(api, "/invites"), input, api.token));
+}
+
+/** `POST {basePath}/org/rename` — answers `{ org: { id, name } }`. */
+export async function renameOwnOrg(api: DuoApiConfig, name: string): Promise<{ id: string; name: string } | null> {
+  const raw = await readAnswer<{ org?: { id?: unknown; name?: unknown } } | null>(await postJson(orgUrl(api, "/rename"), { name }, api.token));
+  const id = str(raw?.org?.id);
+  const renamed = str(raw?.org?.name);
+  return id !== null && renamed !== null ? { id, name: renamed } : null;
+}
+
+/** `POST {basePath}/org/admins/:duoId/grant` — an org admin appoints a member of their own org. */
+export async function grantOwnOrgAdmin(api: DuoApiConfig, duoId: string): Promise<OrgAdminChange> {
+  return readChange(await readAnswer<unknown>(await postNothing(orgUrl(api, `/admins/${encodeURIComponent(duoId)}/grant`), api.token)));
+}
+
+/** `POST {basePath}/org/admins/:duoId/revoke` — 409 `last_org_admin` for the org's last one (only the super admin may). Revoking one's own id steps down. */
+export async function revokeOwnOrgAdmin(api: DuoApiConfig, duoId: string): Promise<OrgAdminChange> {
+  return readChange(await readAnswer<unknown>(await postNothing(orgUrl(api, `/admins/${encodeURIComponent(duoId)}/revoke`), api.token)));
 }
 
 /**
@@ -324,6 +511,11 @@ export interface HostedAccount {
   readonly origin: string;
   readonly ownerName: string;
   readonly isAdmin: boolean;
+  /**
+   * The role the sign-in answer carried (#254) — a hint for the first paint, never an authority: the app asks the
+   * daemon for the live role (`GET {basePath}/org`) and that answer decides. Absent from a daemon that predates org admins.
+   */
+  readonly orgRole?: OrgRole;
 }
 
 const ACCOUNT_KEY = "duo.hosted-account";
@@ -351,7 +543,7 @@ export function writeHostedAccount(account: HostedAccount | null): void {
 
 /** The account record a sign-in or sign-up answer amounts to. */
 export function accountFor(origin: string, result: HostedSignupResult): HostedAccount {
-  return { origin, ownerName: result.ownerName, isAdmin: result.isAdmin === true };
+  return { origin, ownerName: result.ownerName, isAdmin: result.isAdmin === true, ...(result.orgRole === "org_admin" || result.orgRole === "member" ? { orgRole: result.orgRole } : {}) };
 }
 
 /**
@@ -372,6 +564,49 @@ export function pairedHostedAccount(api: DuoApiConfig | null): HostedAccount | n
   } catch {
     return null;
   }
+}
+
+/** The id `GET …/members` calls this device's own duo: the tenant id in the pairing's `/t/<id>` path, or `root` for the server's original duo. Null when the address is neither. */
+export function pairedDuoId(api: DuoApiConfig): string | null {
+  try {
+    const path = new URL(api.baseUrl).pathname.replace(/\/+$/, "");
+    if (path === "") {
+      return "root";
+    }
+    const tenant = /^\/t\/([^/]+)$/.exec(path);
+    return tenant ? decodeURIComponent(tenant[1]!) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What the admin screens are for this person: the super admin's (every org), an org admin's (their own), or neither. */
+export type AdminRole = "super" | "org" | null;
+
+/**
+ * #254: which admin screens this signed-in device may open, from the stored account and the daemon's live
+ * answer to `GET {basePath}/org` (`useOrgOverview`). The stored account is a per-browser hint and the daemon
+ * the authority, in this order:
+ *
+ * - an answer (`live` a role) decides both: an org admin now, the super admin now. A stored "admin" flag the
+ *   answer contradicts is stale, and the entry goes.
+ * - a "no" (404: in no org; 403) is final for the org role, but says nothing about the super admin, so
+ *   the stored flag still decides that one (the root duo of a server with no org for it is asked, and 404s).
+ * - no answer yet (loading, offline, a server or answer we can't read): the stored flag, and the role the
+ *   sign-in carried, stand in. That only ever draws an entry; the daemon re-checks every call it opens.
+ *
+ * `live` is the answer when there is one; `refused` says the daemon answered "no org" (404) or "not yours" (403).
+ */
+export function adminRoleOf(account: HostedAccount | null, live: OrgOverview | null | undefined, refused: boolean): AdminRole {
+  if (!account) {
+    return null;
+  }
+  const superAdmin = live ? live.superAdmin : account.isAdmin;
+  if (superAdmin) {
+    return "super";
+  }
+  const orgAdmin = live ? live.role === "org_admin" : refused ? false : account.orgRole === "org_admin";
+  return orgAdmin ? "org" : null;
 }
 
 /**

@@ -125,7 +125,7 @@ describe("#128 — who sees the way in", () => {
 
   it("a 401 is the same note", async () => {
     daemon({ "GET /hosted/orgs": () => json({ error: { code: "unauthorized", message: "Only an admin can do this." } }, 401) });
-    withClient(<Admin api={api} origin={ORIGIN} orgId={null} />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="super" />);
     expect(await screen.findByTestId("admin-not-available")).toBeInTheDocument();
   });
 
@@ -152,7 +152,7 @@ describe("#128 — who sees the way in", () => {
 describe("#128 — the org list", () => {
   it("lists every org with its member count, each linking to its own page, using this device's token", async () => {
     const mock = daemon({ "GET /hosted/orgs": () => json([DEFAULT_ORG, PLATFORM]) });
-    withClient(<Admin api={api} origin={ORIGIN} orgId={null} />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="super" />);
     const rows = await screen.findAllByTestId("admin-org");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("Default");
@@ -174,7 +174,7 @@ describe("#128 — the org list", () => {
         return json({ ...org, memberCount: 0 }, 201);
       },
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId={null} />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="super" />);
     await screen.findAllByTestId("admin-org");
 
     fireEvent.change(screen.getByRole("textbox", { name: "Name of the org" }), { target: { value: "  Agency B  " } });
@@ -192,7 +192,7 @@ describe("#128 — the org list", () => {
 
   it("can't create with an empty name", async () => {
     daemon({ "GET /hosted/orgs": () => json([]) });
-    withClient(<Admin api={api} origin={ORIGIN} orgId={null} />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="super" />);
     expect(await screen.findByTestId("admin-orgs-empty")).toHaveTextContent("No orgs yet.");
     expect(screen.getByRole("button", { name: "Create org" })).toBeDisabled();
   });
@@ -202,7 +202,7 @@ describe("#128 — the org list", () => {
       "GET /hosted/orgs": () => json([PLATFORM]),
       "POST /hosted/orgs": () => json({ error: { code: "org_name_taken", message: 'There is already an org named "Platform team".' } }, 409),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId={null} />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="super" />);
     await screen.findAllByTestId("admin-org");
     fireEvent.change(screen.getByRole("textbox", { name: "Name of the org" }), { target: { value: "platform team" } });
     fireEvent.click(screen.getByRole("button", { name: "Create org" }));
@@ -223,13 +223,15 @@ describe("#128 — one org", () => {
       "GET /hosted/orgs": () => json([PLATFORM]),
       "GET /hosted/orgs/plat1/members": () => json(MEMBERS),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     const rows = await screen.findAllByTestId("admin-member");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("Shin");
     expect(rows[0]).toHaveTextContent("Shin's duo");
     expect(within(rows[0]!).getByTestId("admin-member-root")).toHaveTextContent("Root duo");
-    expect(rows[0]).toHaveTextContent("Admin");
+    // The older `isAdmin` flag reads as the super admin: its own words, never "Org admin".
+    expect(within(rows[0]!).getByTestId("admin-member-super-admin")).toHaveTextContent("Super admin");
+    expect(within(rows[0]!).queryByTestId("admin-member-org-admin")).toBeNull();
     expect(rows[1]).toHaveTextContent("Kim's duo");
     expect(rows[1]).toHaveTextContent("kim@example.com");
     expect(within(rows[1]!).queryByTestId("admin-member-root")).toBeNull();
@@ -239,13 +241,13 @@ describe("#128 — one org", () => {
 
   it("says so when nobody has joined yet", async () => {
     daemon({ "GET /hosted/orgs": () => json([{ ...PLATFORM, memberCount: 0 }]), "GET /hosted/orgs/plat1/members": () => json([]) });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     expect(await screen.findByTestId("admin-members-empty")).toBeInTheDocument();
   });
 
   it("an org that isn't there is a note with the way back, not a crash", async () => {
     daemon({ "GET /hosted/orgs": () => json([PLATFORM]) });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="gone" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="gone" role="super" />);
     expect(await screen.findByTestId("admin-org-missing")).toHaveTextContent("There is no org with this address.");
     expect(screen.getByTestId("admin-back")).toBeInTheDocument();
   });
@@ -260,7 +262,7 @@ describe("#128 — one org", () => {
         return json({ ...PLATFORM, name });
       },
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.click(await screen.findByTestId("admin-rename"));
     const input = screen.getByRole("textbox", { name: "New name" });
     expect(input).toHaveValue("Platform team");
@@ -273,17 +275,18 @@ describe("#128 — one org", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ name: "Platform" });
   });
 
-  it("a rename to a taken name shows the daemon's words and leaves the form open", async () => {
+  it("a rename to a taken name says the name isn't available and leaves the form open", async () => {
     daemon({
       "GET /hosted/orgs": () => json([PLATFORM, DEFAULT_ORG]),
       "GET /hosted/orgs/plat1/members": () => json([]),
       "POST /hosted/orgs/plat1/rename": () => json({ error: { code: "org_name_taken", message: 'There is already an org named "Default".' } }, 409),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.click(await screen.findByTestId("admin-rename"));
     fireEvent.change(screen.getByRole("textbox", { name: "New name" }), { target: { value: "default" } });
     fireEvent.click(screen.getByRole("button", { name: "Save name" }));
-    expect(await screen.findByTestId("mutation-error")).toHaveTextContent('There is already an org named "Default".');
+    expect(await screen.findByTestId("mutation-error")).toHaveTextContent("That name isn't available. Choose a different one.");
+    expect(screen.getByTestId("mutation-error")).not.toHaveTextContent("Default");
     expect(screen.getByRole("textbox", { name: "New name" })).toBeInTheDocument();
     expect(screen.getByTestId("admin-org-name")).toHaveTextContent("Platform team");
   });
@@ -308,7 +311,7 @@ describe("#128 — one org", () => {
           201,
         ),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     await screen.findByTestId("admin-invite");
     expect(screen.getByRole("heading", { name: "Invite someone into Platform team" })).toBeInTheDocument();
 
@@ -334,7 +337,7 @@ describe("#128 — one org", () => {
       "POST /hosted/invites": () =>
         json({ id: "i2", name: "Lee", email: null, orgId: "plat1", expiresAt: "2099-01-01T00:00:00.000Z", code: "onlycode", link: null }, 201),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Lee" } });
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
     expect(await screen.findByTestId("admin-invite-code")).toHaveTextContent("onlycode");
@@ -344,7 +347,7 @@ describe("#128 — one org", () => {
 
   it("an email without an @ can't be submitted", async () => {
     daemon({ "GET /hosted/orgs": () => json([PLATFORM]), "GET /hosted/orgs/plat1/members": () => json([]) });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
     fireEvent.change(screen.getByRole("textbox", { name: /google/i }), { target: { value: "sam" } });
     expect(screen.getByRole("button", { name: "Create invite link" })).toBeDisabled();
@@ -356,7 +359,7 @@ describe("#128 — one org", () => {
       "GET /hosted/orgs/plat1/members": () => json([]),
       "POST /hosted/invites": () => json({ error: { code: "org_not_found", message: 'There is no org "plat1".' } }, 404),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
     expect(await screen.findByTestId("mutation-error")).toHaveTextContent('There is no org "plat1".');
@@ -403,7 +406,7 @@ describe("#128 — review fixes", () => {
       "GET /hosted/orgs/plat1/members": () => json([]),
       "POST /hosted/invites": () => json(MINTED, 201),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
     const minted = await screen.findByTestId("admin-invite-minted");
@@ -418,7 +421,7 @@ describe("#128 — review fixes", () => {
       "GET /hosted/orgs/plat1/members": () => json([]),
       "POST /hosted/invites": () => json({ ...MINTED, link: null }, 201),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
     expect(await screen.findByRole("button", { name: "Copy invite code" })).toBeInTheDocument();
@@ -435,7 +438,7 @@ describe("#128 — review fixes", () => {
         return json({ ...PLATFORM, name });
       },
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.click(await screen.findByTestId("admin-rename"));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "New name" })).toHaveFocus());
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -453,7 +456,7 @@ describe("#128 — review fixes", () => {
       "GET /hosted/orgs": () => json([]),
       "POST /hosted/orgs": () => json({ ...AGENCY }, 201),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId={null} />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="super" />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Name of the org" }), { target: { value: "Agency" } });
     fireEvent.click(screen.getByRole("button", { name: "Create org" }));
     expect(await screen.findByTestId("admin-org-created")).toHaveTextContent("Open it in the list above to invite people in.");
@@ -526,7 +529,7 @@ describe("#128 — addresses that aren't an org", () => {
       "GET /hosted/orgs/x%20y%2Fz/members": () => json([]),
       "POST /hosted/orgs/x%20y%2Fz/rename": () => json({ ...odd, name: "Renamed" }),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="x y/z" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="x y/z" role="super" />);
     await screen.findByTestId("admin-members-empty");
     expect(callsTo(mock, "GET", "/hosted/orgs/x%20y%2Fz/members")).toHaveLength(1);
     fireEvent.click(screen.getByTestId("admin-rename"));
@@ -541,7 +544,7 @@ describe("#128 — the daemon says no", () => {
 
   it.each([401, 403])("a %i on the people is the plain note", async (status) => {
     daemon({ ...orgRoutes, "GET /hosted/orgs/plat1/members": () => json({ error: { code: "forbidden", message: "Only an admin can do this." } }, status) });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     expect(await screen.findByTestId("admin-not-available")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-org-page")).toBeNull();
   });
@@ -552,7 +555,7 @@ describe("#128 — the daemon says no", () => {
       ...orgRoutes,
       "GET /hosted/orgs/plat1/members": () => (ok ? json([]) : json({ error: { code: "org_not_found", message: 'There is no org "plat1".' } }, 404)),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     expect(await screen.findByTestId("admin-members-error")).toHaveTextContent('There is no org "plat1".');
     ok = true;
     fireEvent.click(screen.getByTestId("admin-members-retry"));
@@ -566,7 +569,7 @@ describe("#128 — the daemon says no", () => {
       "GET /hosted/orgs/plat1/members": () => json([]),
       "POST /hosted/orgs/plat1/rename": () => json({ error: { code: "no", message: `Refused with ${status}.` } }, status),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.click(await screen.findByTestId("admin-rename"));
     fireEvent.change(screen.getByRole("textbox", { name: "New name" }), { target: { value: "Other" } });
     fireEvent.click(screen.getByRole("button", { name: "Save name" }));
@@ -580,7 +583,7 @@ describe("#128 — the daemon says no", () => {
       "GET /hosted/orgs/plat1/members": () => json([]),
       "POST /hosted/invites": () => json({ error: { code: "no", message: `Refused with ${status}.` } }, status),
     });
-    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" />);
+    withClient(<Admin api={api} origin={ORIGIN} orgId="plat1" role="super" />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
     expect(await screen.findByTestId("mutation-error")).toHaveTextContent(`Refused with ${status}.`);
