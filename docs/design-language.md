@@ -166,7 +166,7 @@ It is always present, it is never truncated before the name, and it is never the
 └─────────────────────────────────────────────┘
 ```
 
-Primary action: Send (Signal fill). Secondary: Edit, Dismiss (ghost). In the chat-first shell this card is the **draft tray**, docked above the composer and never in the transcript (§6.2). When offline the primary
+Primary action: Send (Signal fill). Secondary: Edit, Dismiss (ghost). In the chat-first shell this card is the **draft**, inline at the end of the owner's own view of the transcript, visibly unsent (§6.2, #181). When offline the primary
 action is disabled rather than queued (AR-15), and the reason shows under the button.
 
 ### 4.3 Provenance rail
@@ -274,7 +274,7 @@ here."
 |---|---|---|
 | Global | ⌘K | Search what your duo knows |
 | Global | ⌘1–9 | Open the first nine chats (Your duo is ⌘1) |
-| Global | ⌘I | Toggle the inspector |
+| Global | ⌘I | Toggle the Info panel |
 | Global | ? | Show the keyboard map |
 | Chats | J / K | Next / previous chat (in Waiting on you: next waiting chat) |
 | Draft tray | ⏎ | Send |
@@ -334,12 +334,17 @@ row. The three-group sidebar shipped in #132 is replaced by this.
 2. **Your duo is a chat.** Pinned first, always present, works with no workspace. Ask it anything;
    answers arrive behind the hairline with their sources. Training arrives here as occasional
    cards: rules to confirm, trust offers, "I got that wrong" notices, a weekly digest.
-3. **The draft tray** docks above the composer of the chat a draft answers: attribution line,
-   hairline state, the draft, a one-line why, and **Send ⏎ · Edit E · Dismiss X**. It is never in the
-   transcript. A passed-on question shows **Answer it**; a refusal shows the reason only.
-4. **The inspector** (desktop, ⌘I) shows why a draft says what it says — trust reading, standing
-   orders hit, sources, who asked. With no draft it shows the contact; in Your duo it shows the
-   profile. On phone the tray's **Why?** opens the same content as a bottom sheet.
+3. **The draft** sits inline at the end of the owner's own view of the chat it answers, on the
+   owner's side (#181, #183): attribution line, hairline state, the draft, a one-line why, and
+   **Send ⏎ · Edit E · Dismiss X · Why?** under it. In a chat with other people it is dashed and says
+   "only you can see this · not sent" — nobody else sees it until Send. In Your duo an answer waiting on
+   you is simply the duo's reply, with **Keep · Edit · Dismiss** (#182). A passed-on question says so in
+   plain words and shows **Answer it**; a refusal says what it is. The daemon's own reasoning is behind
+   **Why?**.
+4. **Why?** opens beside the draft, only when asked: a small popover on desktop, a bottom sheet on a
+   phone (#185) — trust reading in words, standing orders hit, sources, who asked.
+   **Info** (the chat header's ⓘ, or ⌘I) opens a side panel, closed by default: the contact or group,
+   who and which duos are in it; in Your duo, its profile (#184).
 5. **The duo's profile** (tap its name): **Portrait**, **Knows**, **May do**, **Rules**,
    **Activity**. It is where you go to understand the duo, never where you must go to use it.
 6. **Settings** (list header): Notifications · Appearance · Devices · Ask links · Connect to

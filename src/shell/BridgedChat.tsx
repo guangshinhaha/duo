@@ -129,17 +129,15 @@ export function BridgedChat({ api, chatId }: { api: DuoApiConfig; chatId: string
             );
           })}
         </section>
+        {/* #183: the duo's draft at the end of the owner's view, unsent — nothing reaches the platform until Send. */}
+        {chat.waiting.length > 0 && (
+          <section aria-label="Drafts from your duo" className="mt-5 flex flex-col gap-4" data-testid="bridged-drafts">
+            {chat.waiting.map((draft, index) => (
+              <DraftTray api={api} draft={draft} key={draft.id} keyboard={index === 0} />
+            ))}
+          </section>
+        )}
       </div>
-      {chat.waiting.length > 0 && (
-        <section aria-label="Drafts from your duo" className="flex max-h-96 flex-col overflow-y-auto" data-testid="bridged-drafts">
-          <p className="border-t border-[var(--edge)] px-4 pt-3 type-provenance text-[var(--muted)]">
-            Only you can see your duo’s drafts — nothing is sent to {sourceLabel(chat.channelKind)} until you send one.
-          </p>
-          {chat.waiting.map((draft, index) => (
-            <DraftTray api={api} draft={draft} key={draft.id} keyboard={index === 0} />
-          ))}
-        </section>
-      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { Paperclip, X } from "lucide-react";
 import { RoomDuoAnswer } from "../components/RoomDuoAnswer.js";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
+import { InfoButton } from "../shell/InfoButton.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -211,7 +212,10 @@ export function Room({
 
   return (
     <div className="flex h-full flex-col">
-      <h1 className="type-heading sr-only">{roomName}</h1>
+      <header className="flex items-center gap-3 border-b border-[var(--edge)] px-4 py-2" data-testid="room-header">
+        <h1 className="min-w-0 truncate type-heading">{roomName}</h1>
+        <InfoButton />
+      </header>
       <div className="flex-1 overflow-y-auto p-6">
         <a
           className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
@@ -253,11 +257,11 @@ export function Room({
             ))
           )}
         </section>
+        {/* #68, #183: the owner's drafts for this conversation, at the end of
+            the owner's own view of it — unsent, visible only here, never
+            part of what its members read until Send. */}
+        {drafts}
       </div>
-      {/* #68: outside the transcript's scroll, above the composer — the
-          owner's drafts for this conversation, never part of what its
-          members read. */}
-      {drafts}
       {at === undefined ? (
         <RoomComposer connection={connection} roomId={roomId} roomName={roomName} members={room?.members ?? []} />
       ) : (

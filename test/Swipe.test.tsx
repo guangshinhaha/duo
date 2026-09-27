@@ -328,7 +328,11 @@ describe("#153 — the phone's waiting list", () => {
 
 describe("#153 — the back gesture closes the sheet first", () => {
   const api = { baseUrl: "http://test", token: "tok" };
-  beforeEach(() => vi.stubGlobal("fetch", vi.fn(async () => json([]))));
+  beforeEach(() => {
+    // Why? is a bottom sheet on a phone; on a desktop it is a popover (#185).
+    stubPhone();
+    vi.stubGlobal("fetch", vi.fn(async () => json([])));
+  });
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();

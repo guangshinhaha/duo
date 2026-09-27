@@ -4,6 +4,7 @@ import { connect } from "../src/workspace/matrix.js";
 import type { RoomMessage, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
 import { conversationOf } from "../src/workspace/drafts.js";
 import type { DraftProvenance, DraftRecord } from "../src/api/types.js";
+import { stubDesktop } from "./desktop.js";
 
 /*
  * #68: your duo drafts replies to the messages you get here. The drafting is
@@ -463,7 +464,10 @@ describe("#68 AC3 — the owner is never pre-empted", () => {
     expect(within(card).getByTestId("draft-tray-attribution")).toHaveTextContent("only you can see this");
     expect(within(card).getByTestId("draft-tray-line")).toHaveTextContent(DRAFT_TEXT);
     expect(within(card).getByTestId("draft-tray-line")).toHaveAttribute("data-duo-line", "confident");
-    expect(within(drafts).getByTestId("room-drafts-notice")).toHaveTextContent("Only you can see your duo’s drafts");
+    // #183: inline, at the end of the owner's own view, visibly unsent.
+    expect(within(card).getByTestId("draft-tray-attribution")).toHaveTextContent("not sent");
+    expect(card).toHaveAttribute("data-unsent", "true");
+    expect(within(screen.getByTestId("room-timeline")).queryByTestId("draft-tray")).toBeNull();
   });
 
   it("only the owner has drafts to see: a member with no paired duo gets no draft surface, and asks the daemon nothing", async () => {
@@ -588,7 +592,10 @@ describe("#68 AC4 — dispositioning from the conversation, with Waiting on you 
     navigate(ROOM_HASH);
     const drafts = await screen.findByTestId("room-drafts");
 
-    expect(await within(drafts).findByTestId("escalation-reason")).toHaveTextContent("No rule covers refunds over 90 days.");
+    // Plain words first; the daemon's own reasoning is one tap away, behind Why? (#185).
+    expect(await within(drafts).findByTestId("draft-tray-words")).toHaveTextContent("passing it to you");
+    fireEvent.click(within(drafts).getByTestId("tray-why"));
+    expect(await screen.findByTestId("escalation-reason")).toHaveTextContent("No rule covers refunds over 90 days.");
   });
 });
 
@@ -616,7 +623,7 @@ describe("#142 — an old draft address opens the chat the draft belongs to", ()
     await renderApp();
     navigate("#draft/d1");
 
-    expect(await within(await screen.findByTestId("duo-drafts")).findByTestId("draft-tray")).toHaveTextContent(DRAFT_TEXT);
+    expect(await within(await screen.findByTestId("duo-thread")).findByTestId("draft-tray")).toHaveTextContent(DRAFT_TEXT);
     expect(window.location.hash).toBe("#duo");
   });
 
@@ -633,5 +640,38 @@ describe("#142 — an old draft address opens the chat the draft belongs to", ()
 
     expect(await screen.findByTestId("bridged-chat")).toBeInTheDocument();
     expect(window.location.hash).toBe(`#chat/${encodeURIComponent("bridge:slack:U1")}`);
+  });
+});
+
+describe("#183, #184 — a person's chat, Telegram-style", () => {
+  it("the draft sits after the last message, in the same scroll as the transcript, and nothing is posted", async () => {
+    stubDesktop();
+    seed();
+    vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" })]).fetchMock);
+    const fake = fakeConnection({ [PROJECT]: [BOSE_MESSAGE] });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate(ROOM_HASH);
+    const card = await within(await screen.findByTestId("room-drafts")).findByTestId("draft-tray");
+    const timeline = screen.getByTestId("room-timeline");
+    // One scroll: the draft and the transcript share a scrolling parent, and the draft follows the last message.
+    expect(card.closest(".overflow-y-auto")).toBe(timeline.closest(".overflow-y-auto"));
+    expect(timeline.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+
+  it("the header's info button opens who is in the conversation", async () => {
+    stubDesktop();
+    seed();
+    vi.stubGlobal("fetch", fakeDaemon([]).fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate(ROOM_HASH);
+    expect(await within(await screen.findByTestId("room-header")).findByRole("heading", { name: "project-x" })).toBeInTheDocument();
+    expect(screen.queryByTestId("inspector")).toBeNull();
+    fireEvent.click(await screen.findByTestId("info-toggle"));
+    expect(await within(await screen.findByTestId("inspector")).findByTestId("room-info")).toHaveTextContent("project-x");
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import type { DraftRecord } from "../api/types.js";
 import { toDraftPipelineResult } from "./DraftCard.js";
@@ -9,10 +9,7 @@ import { MutationError } from "./MutationError.js";
 import { StructuredText } from "./StructuredText.js";
 import { Timestamp } from "./Timestamp.js";
 import { useDraftDecision } from "./useDraftDecision.js";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./primitives/Dialog.js";
-import { WhyPanel } from "../shell/Inspector.js";
-import { useInspectorVisible } from "../shell/InspectorContext.js";
-import { useBackClosesSheet } from "../shell/sheetHistory.js";
+import { WhyButton } from "./WhyButton.js";
 
 /** What the attribution line says the draft is doing, in the vocabulary's words. */
 function stateWords(state: HairlineState): string {
@@ -34,22 +31,24 @@ function isInteractive(target: EventTarget | null): boolean {
 }
 
 /**
- * The draft tray (docs/design-language.md §4.2, epic #138): your duo's draft
- * for the conversation it answers, docked above the composer of that chat
- * and never in the transcript. It is the Review card made compact and
- * moved next to its context — same decision logic (`useDraftDecision`), so
- * Send, Edit and Dismiss behave exactly as they did in Review: Send waits
- * for the daemon rather than queueing (AR-15), an edit that changes nothing
- * is a plain Send, Dismiss is held for the undo window, and answering a
- * passed-on question is a standing-order candidate.
+ * Your duo's draft, in the chat it answers (#182, #183; docs/design-language.md,
+ * the unsent-draft decision #181). It sits at the end of the owner's own view
+ * of the transcript, on the owner's side, visibly unsent: behind the duo's
+ * line (AR-13), dashed while it is a reply nobody has received, saying only
+ * you can see it — and nothing reaches the conversation until Send, when the
+ * daemon delivers it and the owner's real message arrives in its place.
+ * Same decision logic as ever (`useDraftDecision`): Send waits for the daemon
+ * rather than queueing (AR-15), an edit that changes nothing is a plain
+ * Send, Dismiss is held for the undo window, and answering a passed-on
+ * question is a standing-order candidate. In Your duo (a question you asked
+ * yourself) it is an answer, not an outgoing message: no dashes, and Keep.
  *
- * Only the draft's words are the duo's, so only they sit behind the duo's
- * line (`DuoLine`); the why (rule and sources) and the actions are the
- * owner's controls beside it. A refusal has no actions: the system worked.
+ * Why? opens beside it, only when asked (#185). A passed-on question or a
+ * refusal says what happened in plain words; the daemon's own reasoning is
+ * behind Why?.
  *
- * `keyboard` makes it answer to ⏎ (send), E (edit, or answer a passed-on
- * question) and X (dismiss) when nothing editable has focus — one tray at a
- * time, so it is only ever the first one in a stack.
+ * `keyboard` makes it answer to ⏎ (send), E (edit) and X (dismiss) when
+ * nothing editable has focus — only ever the oldest draft in a chat.
  */
 export function DraftTray({
   api,
@@ -61,11 +60,6 @@ export function DraftTray({
   keyboard?: boolean;
 }) {
   const d = useDraftDecision(api, draft);
-  // With the inspector beside the chat the why is already on screen; without it (a phone, a narrow window) it is one tap.
-  const inspectorVisible = useInspectorVisible();
-  const [whyOpen, setWhyOpen] = useState(false);
-  // On a phone the back gesture closes the sheet before it leaves the chat (#153).
-  useBackClosesSheet(whyOpen, () => setWhyOpen(false));
   const state = hairlineState(toDraftPipelineResult(draft));
   const passedOn = draft.escalated && !draft.refused;
   const rules = draft.sources.filter((source) => source.kind === "rule");
@@ -103,15 +97,22 @@ export function DraftTray({
   });
 
   const words = draft.refused
-    ? "Your duo refused this one."
+    ? "This is something you told me not to answer for you."
     : passedOn
-      ? "Your duo escalated a question to you."
+      ? "I don't have enough on this to answer it well, so I'm passing it to you."
       : null;
+  const unsent = !d.selfAsked && !draft.refused && !passedOn;
 
   return (
-    <section aria-label="Your duo's draft" className="flex flex-col gap-2 border-t border-[var(--edge)] px-4 py-3" data-testid="draft-tray">
+    <section
+      aria-label="Your duo's draft"
+      className={`flex w-full max-w-[90%] flex-col gap-2 ${d.selfAsked ? "self-start" : "self-end"}`}
+      data-testid="draft-tray"
+      data-unsent={unsent ? "true" : undefined}
+    >
+      <div className={unsent ? "rounded-[var(--r-md)] border border-dashed border-[var(--edge)] p-1" : ""}>
       <DuoLine
-        aside="only you can see this"
+        aside={unsent ? "only you can see this · not sent" : "only you can see this"}
         attributionTestId="draft-tray-attribution"
         label="Your duo"
         meta={
@@ -123,12 +124,9 @@ export function DraftTray({
         testId="draft-tray-line"
       >
         {words !== null ? (
-          <div className="flex flex-col gap-1">
-            <p className="type-body">{words}</p>
-            <p className="type-body text-[var(--muted)]" data-testid="escalation-reason">
-              {draft.escalationReason}
-            </p>
-          </div>
+          <p className="type-body" data-testid="draft-tray-words">
+            {words}
+          </p>
         ) : d.editing ? (
           <div className="flex w-full flex-col gap-2">
             {/* #23: the change itself, live — the duo's original with the owner's removals struck and additions marked. */}
@@ -155,31 +153,18 @@ export function DraftTray({
           <StructuredText text={draft.draftText ?? ""} />
         )}
       </DuoLine>
+      </div>
 
-      {(rules.length > 0 || others > 0 || !inspectorVisible) && (
-        <p className="flex flex-wrap items-center gap-x-2 type-provenance text-[var(--muted)]" data-testid="draft-tray-why">
+      <p className="flex flex-wrap items-center gap-x-2 type-provenance text-[var(--muted)]" data-testid="draft-tray-why">
+        {(rules.length > 0 || others > 0) && (
           <span>
             {rules.length > 0 && <>Standing order: {rules.map((rule) => rule.label).join(" · ")}</>}
             {rules.length > 0 && others > 0 && " · "}
             {others > 0 && <>Drew on {others} source{others === 1 ? "" : "s"}</>}
           </span>
-          {!inspectorVisible && (
-            <button className="inline-flex min-h-11 items-center underline" data-testid="tray-why" onClick={() => setWhyOpen(true)} type="button">
-              Why?
-            </button>
-          )}
-        </p>
-      )}
-      <Dialog onOpenChange={setWhyOpen} open={whyOpen}>
-        <DialogContent className="top-auto! bottom-0 max-h-[85dvh] overflow-y-auto" data-testid="why-sheet">
-          <DialogTitle className="sr-only">Why your duo drafted this</DialogTitle>
-          <DialogDescription className="sr-only">How sure your duo is, the standing order and sources it used, and who asked.</DialogDescription>
-          <WhyPanel draft={draft} />
-          <DialogClose className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body" data-testid="why-close">
-            Close
-          </DialogClose>
-        </DialogContent>
-      </Dialog>
+        )}
+        <WhyButton draft={draft} />
+      </p>
 
       {!draft.refused && !d.reachable && (
         <p className="type-provenance text-[var(--escalate)]" data-testid="draft-tray-offline" role="status">
