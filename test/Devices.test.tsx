@@ -301,7 +301,7 @@ describe("Revoking this device is deliberate (#48 AC4)", () => {
     localStorage.clear();
     localStorage.setItem("duo.api-config", JSON.stringify({ ...base, deviceId: "d-mac" }));
     stubDaemon([device("d-mac", "Mac")]);
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/devices";
     render(<App />);
 
     await waitFor(() => expect(screen.getAllByTestId("device-row")).toHaveLength(1));

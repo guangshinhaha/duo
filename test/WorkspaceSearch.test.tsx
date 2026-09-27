@@ -293,7 +293,7 @@ describe("#70 AC1 — messages are searchable", () => {
       await searchFor("refund");
       const [hit] = await screen.findAllByTestId("message-search-hit");
       const open = within(hit!).getByTestId("message-search-hit-open");
-      expect(open).toHaveAttribute("href", `#room/${encodeURIComponent(PROJECT)}/${encodeURIComponent("$q")}`);
+      expect(open).toHaveAttribute("href", `#chat/${encodeURIComponent(PROJECT)}/${encodeURIComponent("$q")}`);
 
       navigate(open.getAttribute("href")!);
 
@@ -310,7 +310,7 @@ describe("#70 AC1 — messages are searchable", () => {
       // The window is not the room's latest: nothing pretends the member read up to here (#63's receipt is for reading the latest).
       expect(fake.connection.markRead).not.toHaveBeenCalled();
       // The way back to the live conversation is one link away.
-      expect(screen.getByTestId("room-back-to-latest")).toHaveAttribute("href", `#room/${encodeURIComponent(PROJECT)}`);
+      expect(screen.getByTestId("room-back-to-latest")).toHaveAttribute("href", `#chat/${encodeURIComponent(PROJECT)}`);
     } finally {
       delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
     }
@@ -320,7 +320,7 @@ describe("#70 AC1 — messages are searchable", () => {
     const fake = searchConnection({ rooms: roomsFixture(), live: { [PROJECT]: LIVE_PROJECT }, around: {}, index: [] });
     await openConversations(fake);
 
-    navigate(`#room/${encodeURIComponent(PROJECT)}/${encodeURIComponent("$gone")}`);
+    navigate(`#chat/${encodeURIComponent(PROJECT)}/${encodeURIComponent("$gone")}`);
 
     expect(await screen.findByTestId("room-at-missing")).toHaveTextContent("isn't in what the workspace returned");
     expect(screen.queryByTestId("room-empty")).toBeNull();
@@ -358,7 +358,7 @@ describe("#70 AC1 — messages are searchable", () => {
     const open = within(hit!).getByTestId("message-search-hit-open");
     expect(open).toHaveAttribute(
       "href",
-      `#thread/${encodeURIComponent(PROJECT)}/${encodeURIComponent("$q")}/${encodeURIComponent("$r1")}`,
+      `#chat/${encodeURIComponent(PROJECT)}/thread/${encodeURIComponent("$q")}/${encodeURIComponent("$r1")}`,
     );
 
     navigate(open.getAttribute("href")!);

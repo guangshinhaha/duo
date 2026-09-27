@@ -2,6 +2,7 @@ import { PairDuoForm } from "../components/PairDuoForm.js";
 import { WorkspaceSignInForm } from "../components/WorkspaceSignInForm.js";
 import type { DuoApiConfig } from "../api/client.js";
 import type { WorkspaceSession } from "../workspace/matrix.js";
+import { isHostedBuild } from "../workspace/access.js";
 
 /**
  * Normalizes and validates a daemon address. A pasted tailnet address
@@ -32,7 +33,11 @@ export function normalizeBaseUrl(raw: string): string | null {
     if (!parsed.hostname) {
       return null;
     }
-    return parsed.origin;
+    // A hosted duo lives under a path on a shared daemon (`/t/<id>`, the
+    // invite-only hosted mode), so the path is part of the address and is
+    // kept — only its trailing slashes go, since every API path is
+    // appended as `${baseUrl}/route`. A bare origin stays a bare origin.
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
   } catch {
     return null;
   }
@@ -58,6 +63,10 @@ export function Setup({
   onWorkspaceSession: (session: WorkspaceSession) => void;
   notice?: string;
 }) {
+  // #127: a hosted build never asks for a homeserver, even on this screen
+  // (the "Advanced" door of the hosted front door) — and nobody is signed in
+  // here yet, so the workspace section is left out and pairing leads.
+  const hosted = isHostedBuild();
   return (
     // #38: dvh, not vh — this is the FIRST screen a phone reaches over
     // Tailscale (G4), and mobile Safari's collapsing URL bar would push the
@@ -73,18 +82,26 @@ export function Setup({
             {notice}
           </p>
         )}
+        {!hosted && (
+          <>
+            <section className="flex flex-col gap-3">
+              <h1 className="type-heading">Sign in to your workspace</h1>
+              <p className="type-body text-[var(--muted)]">Who you are, in your org — separate from your duo, which only you reach.</p>
+              <WorkspaceSignInForm onSession={onWorkspaceSession} />
+            </section>
+            <div className="border-t border-[var(--edge)]" />
+          </>
+        )}
         <section className="flex flex-col gap-3">
-          <h1 className="type-heading">Sign in to your workspace</h1>
-          <p className="type-body text-[var(--muted)]">Who you are, in your org — separate from your duo, which only you reach.</p>
-          <WorkspaceSignInForm onSession={onWorkspaceSession} />
-        </section>
-        <div className="border-t border-[var(--edge)]" />
-        <section className="flex flex-col gap-3">
-          <h2 className="type-heading">Pair a duo instead</h2>
+          {/* The page's only heading when the workspace section is left out. */}
+          {hosted ? <h1 className="type-heading">Pair a duo instead</h1> : <h2 className="type-heading">Pair a duo instead</h2>}
           <p className="type-body text-[var(--muted)]">
             Run <code>duo pair new &quot;this device&apos;s name&quot;</code> on your Mac, then paste its address and token here.
           </p>
           <PairDuoForm onConnect={onConnect} />
+          <p className="type-provenance text-[var(--muted)]" data-testid="setup-invite-hint">
+            Have an invite link? Open it directly — it sets up a duo of your own and pairs this browser.
+          </p>
         </section>
       </div>
     </div>

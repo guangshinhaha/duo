@@ -2,7 +2,7 @@
  * #62: what a signed-in member with no paired duo sees wherever a duo
  * surface would be — the explanation and the offer, never a demand
  * (AC2: messaging works fully; pairing is offered rather than required).
- * Rendered full where a route lives (`#review` and friends reached by URL),
+ * Rendered full where a route lives (`#waiting` and friends reached by URL),
  * condensed in the sidebar beside the surfaces the member does have.
  */
 export function NoDuoPanel({ onPairDuo, condensed = false }: { onPairDuo: () => void; condensed?: boolean }) {

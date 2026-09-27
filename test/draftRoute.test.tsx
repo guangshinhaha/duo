@@ -7,7 +7,7 @@ import type { DraftRecord } from "../src/api/types.js";
  * #25: a draft has its own address. `#draft/:id` renders one draft alone
  * (GET /drafts/:id — the daemon route §1.4 lists and nothing called), a
  * draft-ready notification opens the draft it is about, and an id that
- * matches nothing says so and offers the way back to Review.
+ * matches nothing says so and offers the way back to what is waiting on you.
  *
  * Each test uses its own draft id: the App's query client is module-level
  * and shared across the file, so reusing an id would hand a later test the
@@ -82,23 +82,23 @@ describe("#25 — open a single draft", () => {
     expect(screen.getByTestId("duo-message")).toHaveTextContent("Five days per quarter.");
     expect(screen.getByText("Send", { selector: "button" })).toBeInTheDocument();
     expect(screen.getByText("Edit", { selector: "button" })).toBeInTheDocument();
-    expect(screen.getByText("Ignore", { selector: "button" })).toBeInTheDocument();
+    expect(screen.getByText("Dismiss", { selector: "button" })).toBeInTheDocument();
     expect(screen.getByText("standing order: five days")).toBeInTheDocument();
 
     // The page's content came from the single-draft route.
     expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith("/drafts/d1"))).toBe(true);
   });
 
-  it("an unknown id says the draft is not on this duo and offers the way back to Review", async () => {
+  it("an unknown id says the draft is not on this duo and offers the way back to what is waiting on you", async () => {
     mountApp(undefined, "#draft/gone");
 
     await waitFor(() => expect(screen.getByTestId("draft-not-found")).toBeInTheDocument());
     expect(screen.getByTestId("draft-not-found")).toHaveTextContent("This draft is not on this duo.");
-    const back = screen.getByText("Back to Review");
-    expect(back.getAttribute("href")).toBe("#review");
+    const back = screen.getByText("Back to Waiting on you");
+    expect(back.getAttribute("href")).toBe("#waiting");
 
     fireEvent.click(back);
-    await waitFor(() => expect(window.location.hash).toBe("#review"));
+    await waitFor(() => expect(window.location.hash).toBe("#waiting"));
     // happy-dom moves the hash on an anchor click but does not fire the
     // hashchange event a real browser would — the rig's established
     // pattern is to deliver it by hand.
@@ -120,13 +120,13 @@ describe("#25 — open a single draft", () => {
     expect(window.location.hash).toBe("#draft/d9");
   });
 
-  it("deciding on the page returns to the queue — the draft was dealt with, Review is next", async () => {
+  it("deciding on the page returns to the queue — the draft was dealt with, the waiting queue is next", async () => {
     mountApp({ ...baseDraft, id: "d2" }, "#draft/d2");
 
     await waitFor(() => expect(screen.getByTestId("draft-card")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Send", { selector: "button" }));
 
-    await waitFor(() => expect(window.location.hash).toBe("#review"));
+    await waitFor(() => expect(window.location.hash).toBe("#waiting"));
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
   });

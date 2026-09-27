@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { DraftProvenance } from "../api/types.js";
+import type { DraftProvenance, DraftRecord } from "../api/types.js";
 import type { WorkspaceConnection } from "./matrix.js";
 
 /**
@@ -57,7 +57,7 @@ export function conversationOf(provenance: DraftProvenance | undefined): DraftCo
 
 /** A conversation's own address — the route Conversations' entries link to. */
 export function roomHref(roomId: string): string {
-  return `#room/${encodeURIComponent(roomId)}`;
+  return `#chat/${encodeURIComponent(roomId)}`;
 }
 
 /**
@@ -85,4 +85,15 @@ export function useConversationLink(
     }
     return roomHref(conversation.roomId);
   };
+}
+
+/**
+ * Whether a draft is a turn of the owner's own conversation with their duo:
+ * a question they asked it. A question somebody else asked belongs to the
+ * chat it arrived in, and a row that predates provenance (`unknown`) is not
+ * known to be either — it stays where it always was, on its own page and in
+ * Waiting on you, rather than being guessed into Your duo.
+ */
+export function isOwnTurn(draft: DraftRecord): boolean {
+  return draft.provenance?.origin === "owner";
 }

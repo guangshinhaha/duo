@@ -104,7 +104,7 @@ domain types.
 |---|---|---|---|
 | `GET` | `/health` | `{ ok: true }` | inline |
 | `GET` | `/duos` | `DuoSummary[]` *(new, 1.6)* | `duo/registry` |
-| `GET` | `/channels` | `ChannelSummary[]` — one row per registered adapter, display strings supplied by the adapter (#171); the Channels screen (`#channels`, #47) renders it without recognising a kind or a label | `drafting/delivery` |
+| `GET` | `/channels` | `ChannelSummary[]` — one row per registered adapter, display strings supplied by the adapter (#171); the channel list on the profile's Knows tab (`#duo/profile/knows`, #47) renders it without recognising a kind or a label | `drafting/delivery` |
 | `GET` | `/channels/policy` | `ChannelPolicy` — which channels, and which threads in them, produce no proactive offers (#172) | `drafting/channel-mutes` |
 | `POST` | `/channels/policy/mute` | `ChannelPolicy` — the updated policy (channel or thread scope); the Channels screen mutes at channel scope by `kind` and re-reads `GET /channels` (#47) | `drafting/channel-mutes` |
 | `POST` | `/channels/policy/unmute` | `ChannelPolicy` — the updated policy | `drafting/channel-mutes` |
@@ -134,9 +134,30 @@ domain types.
 | `POST` | `/corpus/import-paste` | `PasteImportSummary` — the transcript text in the body, down `duo import paste`'s own path (#176) | `ingest/paste-import` |
 | `POST` | `/corpus/embed` | `EmbedJobStatus` — 202 (starts the one job); 409 `embed_already_running` (#176) | `serve/embed-job` |
 | `GET` | `/corpus/embed` | `EmbedJobStatus` — the running job's progress (#176) | `serve/embed-job` |
+| `POST` | `/corpus/import-claude` | `ClaudeImportSummary` — a Claude export's `conversations.json` text in the body (`{ export }`), down `duo import claude`'s own path (hosted mode) | `ingest/claude` |
+| `POST` | `/corpus/derive` | `DeriveJobStatus` — 202 (starts the one derive job: pairs → topics → rules → voice); 409 `derive_already_running` (hosted mode) | `serve/derive-job` |
+| `GET` | `/corpus/derive` | `DeriveJobStatus` — the running job's stage, or its error verbatim (hosted mode) | `serve/derive-job` |
+| `GET` | `/ask-links` | `AskLinkRow[]` — never a token (hosted mode) | `serve/tokens` |
+| `POST` | `/ask-links` | `MintedAskLink` — 201, the token shown once (`{ name, expiresInHours? }`) | `serve/tokens` |
+| `POST` | `/ask-links/:id/revoke` | 204 — the link stops on its next use | `serve/tokens` |
+| `POST` | `/devices` | `MintedDevice` — 201, pairs another device from a paired one; the token shown once | `serve/tokens` |
+| `GET` | `/connector` | `ConnectorStatus` — whether a claude.ai connector exists (its URL is never recoverable), plus the prompt the owner pastes into claude.ai to feed past chats (digital-duo #227) | `serve/mcp`, `serve/tokens` |
+| `POST` | `/connector` | `MintedConnector` — 201, mints the connector URL path shown once and revokes any earlier one (digital-duo #227) | `serve/tokens` |
+| `GET` | `/trust/promotions` | `PromotionOffer[]` — the batched digest (#54) | `trust/promotion` |
+| `POST` | `/trust/promotions/:topicId/:tier` | the moved `TrustCell` — `{ decision: "accept" \| "decline" }`; nothing promotes without it | `trust/promotion` |
+| `POST` | `/trust/grant` | `GrantOutcome` — `{ scopeText, tier, topicId? }`; "ambiguous" returns candidates for a picker, never a guess; T4 absent (trust-surface.md) | `trust/grants` |
+| `POST` | `/hosted/signup` | `HostedSignupResult` — at the daemon ORIGIN, not a duo's base URL; no bearer, the invite is the credential (`{ invite, credential }` with Google sign-in configured, `{ invite, name }` without); 403 `invite_invalid` / `invite_wrong_account`, 409 `already_has_duo` | `hosted` |
+| `GET` | `/hosted/config` | `HostedConfig` — at the daemon ORIGIN, public: `{ googleClientId }`, null when sign-in isn't configured | `hosted` |
+| `POST` | `/hosted/login` | `HostedSignupResult` — at the daemon ORIGIN: `{ credential }` (a Google ID token) in, this account's duo (`basePath` "" for the root duo) and a fresh device token out; 404 `no_duo` | `hosted` |
+| `GET` | `/hosted/invites` | `HostedInviteRow[]` — at the daemon ORIGIN, admin only (Bearer: the admin's own device token); never a code | `hosted` |
+| `POST` | `/hosted/invites` | `MintedHostedInvite` — 201, admin only (`{ name, orgId?, email?, expiresInHours? }`; no `orgId` means the default org); the code and link shown once | `hosted` |
+| `GET` | `/hosted/orgs` | `HostedOrg[]` (`{ id, name, createdAt, memberCount }`) — at the daemon ORIGIN, super admin only (401 no credential, 403 anyone else); the Admin screen (#128) | `hosted` |
+| `POST` | `/hosted/orgs` | `HostedOrg` — 201, super admin only (`{ name }`); 400 bad name, 409 name taken | `hosted` |
+| `POST` | `/hosted/orgs/:orgId/rename` | `HostedOrg` — super admin only (`{ name }`; POST because the daemon's CORS allows only GET and POST); 404 unknown org, 409 name taken | `hosted` |
+| `GET` | `/hosted/orgs/:orgId/members` | `HostedOrgMember[]` (`{ duoId, name, email, isRoot, joinedAt, isAdmin }`) — super admin only; 404 unknown org | `hosted` |
 | `GET` | `/search?q=&limit=&cursor=` | `HybridSearchOutcome` — `duo search`'s own hybrid read (#174) | `ingest/embeddings` |
-| `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178); the Escalations screen (#54) never calls it — opening a screen must not send | `escalation/digest` |
-| `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; the Escalations screen walks every page at `limit=100` before it counts | `escalation/digest` |
+| `POST` | `/escalations/digest` | `AssembleDigestResult` — assembling *is* the send: the append-only row plus its marked items (#178); the Activity tab's "Where it runs out" (#54) never calls it — opening a screen must not send | `escalation/digest` |
+| `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; that section walks every page at `limit=100` before it counts | `escalation/digest` |
 | `GET` | `/escalations/rate` | `EscalationUrgencyRate` (#178) — `{ total, urgent, rate }` over every classified escalation, urgent ones included; drawn as counts plus a bar, never a percentage | `escalation/digest` |
 | `GET` | `/audit` | `AuditEntry[]` | `permissions/audit` |
 | `GET` | `/ws` | the one push channel — `draft-ready`; auth by first message (#162) | `serve/ws` |
@@ -459,8 +480,8 @@ Setup is untouched. Embedding is a job the app starts and watches (polled only w
 says "running", the daemon's own counts rendered, its error rendered verbatim). **Derivation has no
 route** — `duo derive` is a terminal stage — so the app cannot start it and does not pretend to: the
 derive step says where it runs and watches `GET /knowledge` for its effect, and the flow ends when
-the first rules appear *while the owner is watching* (navigating to `#mirror`, approve and reject in
-reach; opened on a duo that already has rules it points at the Mirror instead of whisking there).
+the first rules appear *while the owner is watching* (navigating to `#duo/profile/rules`, approve and reject in
+reach; opened on a duo that already has rules it points at the Rules tab instead of whisking there).
 Whether core should expose a derive job, as it did for embedding, is core's question; until it
 does, that step stays a terminal step the app observes.
 

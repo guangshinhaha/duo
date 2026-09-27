@@ -11,7 +11,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MeterBar } from "../src/components/MeterBar.js";
-import { Review } from "../src/routes/Review.js";
+import { DraftCard } from "../src/components/DraftCard.js";
+import { DraftTray } from "../src/components/DraftTray.js";
 import { Setup } from "../src/routes/Setup.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { DraftRecord } from "../src/api/types.js";
@@ -121,8 +122,7 @@ describe("#33 — hierarchy is visible by form", () => {
   });
 
   it("container, entry and control are distinguishable on one screen", async () => {
-    stubDrafts([draftFor("d1")]);
-    renderReview();
+    renderQueue([draftFor("d1")]);
     await waitFor(() => expect(screen.getAllByTestId("draft-card")).toHaveLength(1));
 
     const container = screen.getByTestId("review-list");
@@ -163,7 +163,20 @@ describe("#33 — the type scale is set once", () => {
     });
     expect(roleBlock("type-body")).toEqual({ "font-size": "14px", "line-height": "22px", "font-weight": "400" });
     expect(roleBlock("type-provenance")).toEqual({ "font-size": "12px", "line-height": "18px", "font-weight": "400" });
-    expect(roleBlock("type-identifier")).toEqual({ "font-size": "12px", "line-height": "18px", "font-weight": "560" });
+    // Hairline (#140): identifiers are the Record role — JetBrains Mono.
+    expect(roleBlock("type-identifier")).toEqual({
+      "font-family": "var(--font-record)",
+      "font-size": "12px",
+      "line-height": "18px",
+      "font-weight": "560",
+    });
+    // …and the Reflection role (the portrait's serif) is set once, here.
+    expect(roleBlock("type-reflection")).toMatchObject({
+      "font-family": "var(--font-reflection)",
+      "font-size": "20px",
+      "line-height": "28px",
+      "font-weight": "400",
+    });
   });
 
   it("no size or weight utility escapes the roles", () => {
@@ -213,21 +226,25 @@ describe("#33 — colour carries meaning only", () => {
     // interactive things) — and nothing else, which is what the census
     // asserts: any other coloured pixel fails with nowhere to belong.
     const CONFIDENCE_RULE = new Set(["confidence-hairline"]);
-    const SEMANTIC_STATES = new Set(["escalation-reason", "mutation-error", "delivery-state", "answer-confirmation"]);
+    // The duo's line is a confidence rule too: `DuoLine` colours its leading edge by state (Hairline).
+    const SEMANTIC_STATES = new Set(["escalation-reason", "mutation-error", "delivery-state", "answer-confirmation", "draft-tray-line"]);
     const stateBearers = new Set([...CONFIDENCE_RULE, ...SEMANTIC_STATES]);
 
     // The populated queue exercises every coloured thing Review can show:
     // a hedged draft, a failed-delivery channel draft, and a refusal.
-    stubDrafts([
-      draftFor("plain", { confidenceScore: 0.5 }),
-      draftFor("channel", {
-        provenance: { origin: "channel", channelKind: "slack", askerRef: "U1", threadId: "C1", permalink: null },
-        delivery: { state: "failed", reason: "workspace left" },
-      }),
-      draftFor("refusal", { escalated: true, refused: true, draftText: null, escalationReason: "Not something I answer." }),
-    ]);
-    renderReview();
+    renderQueue(
+      [
+        draftFor("plain", { confidenceScore: 0.5 }),
+        draftFor("channel", {
+          provenance: { origin: "channel", channelKind: "slack", askerRef: "U1", threadId: "C1", permalink: null },
+          delivery: { state: "failed", reason: "workspace left" },
+        }),
+        draftFor("refusal", { escalated: true, refused: true, draftText: null, escalationReason: "Not something I answer." }),
+      ],
+      { trays: true },
+    );
     await waitFor(() => expect(screen.getAllByTestId("draft-card")).toHaveLength(3));
+    expect(screen.getAllByTestId("draft-tray")).toHaveLength(3);
 
     const offenders: string[] = [];
     for (const el of document.querySelectorAll("*")) {
@@ -267,10 +284,22 @@ function roleBlock(name: string): Record<string, string> {
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
 
-function renderReview() {
+/**
+ * The draft surfaces on one screen: the Review-shaped card on its container (the page a
+ * draft without a chat opens), and the chat's tray. The container is this test's own — the
+ * queue page that once supplied it is retired — and it carries the same shape law.
+ */
+function renderQueue(drafts: DraftRecord[], { trays = false }: { trays?: boolean } = {}) {
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <Review api={api} />
+      <div className="shape-container flex flex-col gap-4 p-4" data-testid="review-list">
+        {drafts.map((draft) => (
+          <div key={draft.id}>
+            <DraftCard api={api} draft={draft} />
+            {trays && <DraftTray api={api} draft={draft} />}
+          </div>
+        ))}
+      </div>
     </QueryClientProvider>,
   );
 }

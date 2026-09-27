@@ -4,7 +4,8 @@ import { useDraft } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
 import { DraftCard } from "../components/DraftCard.js";
 import { MutationError } from "../components/MutationError.js";
-import { useConversationLink } from "../workspace/drafts.js";
+import { bridgedHref, bridgedIdOf } from "../shell/bridged.js";
+import { isOwnTurn, useConversationLink } from "../workspace/drafts.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 
 /**
@@ -45,9 +46,30 @@ export function Draft({
     seenData.current = true;
     prevOutcome.current = draft.data.outcome;
     if (!firstRead && before === null && draft.data.outcome != null) {
-      window.location.hash = "#review";
+      window.location.hash = "#waiting";
     }
   }, [draft.data]);
+
+  // Chat-first (#142, #144): a draft for a message that arrived in a
+  // conversation the member holds belongs in that chat's tray, and a question
+  // you asked your own duo in Your duo's — so its old address opens the chat.
+  // A question bridged from another platform (#150) is a chat of its own. A
+  // draft with none of these keeps this page.
+  const bridgedId = draft.data ? bridgedIdOf(draft.data) : null;
+  const chatHref = draft.data
+    ? isOwnTurn(draft.data)
+      ? "#duo"
+      : bridgedId !== null
+        ? bridgedHref(bridgedId)
+        : conversationLink(draft.data.provenance)
+    : undefined;
+  useEffect(() => {
+    if (chatHref !== undefined && draft.data?.outcome == null) {
+      // In place, no history entry: the old address never becomes a back-button trap.
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${chatHref}`);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
+  }, [chatHref, draft.data?.outcome]);
 
   if (draft.isPending) {
     return <div className="p-6 text-[var(--muted)]">Opening the draft…</div>;
@@ -67,8 +89,8 @@ export function Draft({
         ) : (
           <MutationError error={draft.error} />
         )}
-        <a className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-body" href="#review">
-          Back to Review
+        <a className="rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-1 type-body" href="#waiting">
+          Back to Waiting on you
         </a>
       </div>
     );

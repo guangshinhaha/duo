@@ -44,15 +44,50 @@ says "Your duo" and "{owner}'s duo". These three are the whole set.
 
 ### draft
 
-An answer the duo composed, waiting on the owner. Drafts live in Review
-("Waiting on you in Review."); their verbs are send, edit, and keep. A draft
+An answer the duo composed, waiting on the owner. A draft lives in the **draft
+tray**, docked above the composer of the chat it answers ("Only you can see
+your duo’s drafts — nothing is posted until you send one."), and it is
+counted in **Waiting on you**. Its verbs are send, edit, and dismiss. A draft
 is never "a response", "a reply", or "a message from your duo" — it is a
-draft until the owner sends it. When a message arrives in a conversation
-here, the duo drafts for it, and the draft is also shown in that
-conversation, beside the composer and never in the transcript: "Only you can
-see your duo’s drafts — nothing is posted until you send one." It is the same
-draft in both places — deciding it in one clears it from the other — and
-left alone it stays in Review.
+draft until the owner sends it. It is never in the transcript: a draft the
+owner sends appears there as *the owner's own message*, footnoted "from your
+duo's draft" for the owner alone. Deciding a draft in the tray clears it
+everywhere, and left alone it stays in the tray and in Waiting on you.
+
+### draft tray
+
+The region above a chat's composer that holds your duo's draft for that chat:
+the attribution line, the hairline state, the draft, a one-line why, and the
+actions. It is outside the transcript by construction (AR-14, kept), and it
+says who may see it ("only you can see this"). Never "the reply box", "the
+suggestion", or "the preview".
+
+### waiting on you
+
+The filter on the chat list, and the count behind it: chats holding a draft
+you have not decided, a question your duo passed to you, or a confirmation.
+The count is one number, the same in the list, the dock or tray icon, and the
+window title. It replaces "Review" as the name of the queue. Empty state:
+"Nothing waiting on you." **Review** is retired as a surface name; the word
+survives only as an ordinary verb ("Review and confirm…" on a T4 card).
+
+### profile
+
+What you open by tapping your duo's name: five tabs, **Portrait** (who it
+thinks you are), **Knows** (what it has read, and what feeds it), **May do**
+(what it handles on its own), **Rules** (your standing orders and what they
+came from) and **Activity** (what it answered, passed on, or refused, and
+where it runs out). It is where you understand the duo, never where you must
+go to use it. A colleague's duo has no profile on your side: its trust reading
+travels with each answer.
+
+### dismiss
+
+The owner declines a draft: nothing is sent, and the draft is recorded as
+dismissed (undoable for a few seconds, because nothing has left the machine).
+The verb replaces **ignore**, which read as "did nothing" when it is in fact a
+judgement the duo learns from. Never "delete", "discard" or "reject" for a
+draft. ("Reject" stays the verb for a rule or a correction candidate.)
 
 ### escalation
 
@@ -60,7 +95,7 @@ A question the pipeline raised for the owner's judgement (`escalated`
 without `refused`). Escalations appear in Review with their reason; the
 owner answers one like a question, not like an error.
 
-The Escalations screen (`#escalations`, #54) shows the pattern across them:
+The profile's Activity tab (`#duo/profile/activity`, "Where it runs out", #54) shows the pattern across them:
 each question the duo keeps having to ask, how many times, most first —
 "where its knowledge runs out". Two questions are the same only when they
 read the same (case and spacing aside); nothing is grouped by resemblance,
@@ -102,10 +137,23 @@ handles well will show up here."
 
 ### autonomy level
 
-Per topic, what the duo may do without asking — shown beside its tier, never
-as a control in this cut: the surface stays read-only until the core exposes
-the shared module path (that writes are exposeable in principle is the
-ratified decision, recorded in the core repo's `trust-surface.md`, #179).
+Per topic, what the duo may do without asking — shown beside its tier. The
+grid itself stays a read; the owner changes a level only through the two
+deliberate acts the core exposes over its one shared module path (the
+ratified decision, recorded in the core repo's `trust-surface.md`, #179):
+accepting an offered promotion, and a plain-words grant that refuses an
+ambiguous match rather than guessing. T4 is never offered.
+
+### the three levels, in plain words
+
+On daily surfaces an autonomy level is written as a sentence about what the duo
+does, never as a code: **Answers on its own** (it may answer without asking),
+**Drafts for you** (it writes a draft and waits), and **Always asks you** (it
+passes the question on). T0–T4, "earned", "granted" and "stale" stay in detail
+views and the audit record; they do not appear in the default views. The
+fourth state is not a level: anything external or irreversible reads **"Never
+on its own. You confirm each one."** — a hatched row with no control, never a
+disabled switch (AR-17).
 
 ### workspace
 
@@ -395,7 +443,24 @@ never paraphrased, never "improved":
 ## Canonical phrasings already in the product
 
 These earned their place — reuse them rather than minting synonyms: "Ask
-your duo…", "Waiting on you in Review.", "Queued as a standing-order
+your duo…", "Waiting on you.", "Queued as a standing-order
 candidate.", "Drew on N sources", "Nothing earned yet.", "Your duo refused
 this one.", "the owner's duo", "Your duo escalated a question to you.",
 "Your duo answered on your behalf in …".
+
+## Changed with the chat-first redesign (epic #138, 2026-09-26)
+
+| Retired | Now | Where |
+|---|---|---|
+| Review (the surface) | **Waiting on you** (filter and count) and the **draft tray** | chat list, each chat |
+| Ignore (a draft) | **Dismiss** | draft tray |
+| Conversations, Duo (ask) | **Chats**; **Your duo** (a chat) | home |
+| Mirror | **Portrait** (in the profile) | profile |
+| Trust, "T1 approve earned" | **May do**, "Answers on its own" | profile |
+| Knowledge, Channels | **Knows** | profile |
+| Audit, Escalations (patterns) | **Activity** | profile |
+| Corrections | **Rules** (waiting ones arrive as a card in Your duo) | profile, chat |
+
+Wording that moves with it: "Waiting on you in Review." becomes "Waiting on you." in a chat, and
+"Your duo refused this one." stays as it is. The daemon-owned strings and every rule above that
+this section does not name are unchanged.

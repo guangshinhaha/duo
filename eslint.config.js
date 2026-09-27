@@ -75,6 +75,23 @@ const externalChannelProduct =
   "slack|discord|telegram|whatsapp|imessage|skype|teams|msteams|email|gmail|outlook|wechat";
 const channelsBelongToTheCore =
   "names a messaging product — channels belong to the core, not this client (#43): the daemon sends the kind and the adapter's label; render them verbatim, add nothing keyed on either.";
+/**
+ * The same rule for hosted mode's account layer, minus "email": there the
+ * word is a Google account's address (sign-in identity, invite locking),
+ * which the daemon's own contract names `email` — not a messaging channel.
+ * Every other product name stays forbidden, and only these files get
+ * the carve-out.
+ */
+const accountLayerFiles = ["src/api/hosted.ts", "src/components/InvitePeople.tsx", "src/routes/Admin.tsx"];
+const channelProductExceptAccountAddress = externalChannelProduct.replace("|email|", "|");
+const noExternalChannelNamesInAccountLayer = [
+  { selector: `Literal[value=/\\b(${channelProductExceptAccountAddress})\\b/i]`, message: `This string ${channelsBelongToTheCore}` },
+  { selector: `JSXText[value=/\\b(${channelProductExceptAccountAddress})\\b/i]`, message: `This text ${channelsBelongToTheCore}` },
+  { selector: `TemplateElement[value.cooked=/\\b(${channelProductExceptAccountAddress})\\b/i]`, message: `This template ${channelsBelongToTheCore}` },
+  { selector: `Identifier[name=/${channelProductExceptAccountAddress}/i]`, message: `This name ${channelsBelongToTheCore}` },
+  { selector: `JSXOpeningElement[name.name=/${channelProductExceptAccountAddress}/i]`, message: `This element ${channelsBelongToTheCore}` },
+  { selector: `JSXAttribute[name.name=/${channelProductExceptAccountAddress}/i]`, message: `This attribute ${channelsBelongToTheCore}` },
+];
 const noExternalChannelNames = [
   { selector: `Literal[value=/\\b(${externalChannelProduct})\\b/i]`, message: `This string ${channelsBelongToTheCore}` },
   { selector: `JSXText[value=/\\b(${externalChannelProduct})\\b/i]`, message: `This text ${channelsBelongToTheCore}` },
@@ -103,6 +120,12 @@ export default tseslint.config(
     files: ["src/**/*.ts", "src/**/*.tsx"],
     rules: {
       "no-restricted-syntax": ["error", ...duoNeverPosesAsAPerson, ...noExternalChannelNames],
+    },
+  },
+  {
+    files: accountLayerFiles,
+    rules: {
+      "no-restricted-syntax": ["error", ...duoNeverPosesAsAPerson, ...noExternalChannelNamesInAccountLayer],
     },
   },
 );

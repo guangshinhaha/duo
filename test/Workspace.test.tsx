@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
+import { workspaceSessionUrl } from "../src/api/hosted.js";
 import type { LiveArrival, NotificationMode, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
+import { WorkspaceSignInDialog } from "../src/components/WorkspaceSignInDialog.js";
 import type { StagedShare } from "../src/workspace/sharing.js";
 
 /*
@@ -460,8 +462,8 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     // browser would.
     // #63's entry markup puts the title in its own element inside the link;
     // the destination is the link's, resolved by role.
-    expect(screen.getByRole("link", { name: /project-x/ })).toHaveAttribute("href", "#room/!project-x%3Aworkspace.example");
-    window.location.hash = "#room/!project-x%3Aworkspace.example";
+    expect(screen.getByRole("link", { name: /project-x/ })).toHaveAttribute("href", "#chat/!project-x%3Aworkspace.example");
+    window.location.hash = "#chat/!project-x%3Aworkspace.example";
     window.dispatchEvent(new Event("hashchange"));
 
     expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
@@ -479,7 +481,7 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#room/!project-x%3Aworkspace.example";
+    window.location.hash = "#chat/!project-x%3Aworkspace.example";
     window.dispatchEvent(new Event("hashchange"));
     await screen.findByTestId("room-timeline");
 
@@ -524,8 +526,7 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#review";
-    window.dispatchEvent(new Event("hashchange"));
+    // The list itself offers the duo — pairing is offered, never demanded.
     fireEvent.click(await screen.findByTestId("no-duo-pair"));
 
     fireEvent.change(await screen.findByLabelText("Daemon address"), { target: { value: "100.64.1.5:7717" } });
@@ -535,7 +536,7 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem("duo.api-config") ?? "null")).toEqual({ baseUrl: "http://100.64.1.5:7717", token: "tok" }));
     // The dialog closes behind the pairing, and the duo's own surface takes over.
     await waitFor(() => expect(screen.queryByTestId("pair-duo-dialog")).toBeNull());
-    await waitFor(() => expect(screen.getByRole("link", { name: /Review/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("duo-link")).toBeInTheDocument());
     expect(screen.queryByTestId("no-duo")).toBeNull();
   });
 });
@@ -550,7 +551,7 @@ describe("#62 AC3 — both credentials are managed", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
     window.dispatchEvent(new Event("hashchange"));
 
     const workspace = await screen.findByTestId("settings-workspace");
@@ -565,7 +566,7 @@ describe("#62 AC3 — both credentials are managed", () => {
     // The pairing survives: the two connections end independently.
     await waitFor(() => expect(JSON.parse(localStorage.getItem("duo.api-config") ?? "null")).toEqual({ baseUrl: "http://100.64.1.5:7717", token: "tok" }));
     // Still the owner's shell — the duo surfaces stand without the workspace.
-    await waitFor(() => expect(screen.getByRole("link", { name: /Review/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("duo-link")).toBeInTheDocument());
   });
 
   it("forgetting the duo keeps the workspace session, and the member shell stands", async () => {
@@ -577,7 +578,7 @@ describe("#62 AC3 — both credentials are managed", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
     window.dispatchEvent(new Event("hashchange"));
     fireEvent.click((await screen.findAllByTestId("settings-unpair"))[0]);
     fireEvent.click(screen.getByTestId("settings-unpair-confirm"));
@@ -606,7 +607,7 @@ describe("#62 AC4 — signing out leaves nothing behind", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    window.location.hash = "#settings";
+    window.location.hash = "#settings/advanced";
     window.dispatchEvent(new Event("hashchange"));
     fireEvent.click(await screen.findByTestId("settings-sign-out"));
 
@@ -619,7 +620,7 @@ describe("#62 AC4 — signing out leaves nothing behind", () => {
 });
 
 describe("#62 — the both-credentials shell and the failing-connection edge", () => {
-  it("a paired member signed in opens on Conversations, with Review still above it", async () => {
+  it("a paired member signed in opens on the chat list, with the duo pinned above the conversations", async () => {
     seedSession();
     seedPairing();
     stubDaemonFetch();
@@ -628,12 +629,13 @@ describe("#62 — the both-credentials shell and the failing-connection edge", (
 
     await renderApp();
 
-    // Conversations is the default space; Review — the thing the app exists
-    // to open — keeps its place above it in the sidebar.
-    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
-    const entries = [...screen.getByRole("navigation", { name: "Surfaces" }).querySelectorAll("a")].map((a) => a.textContent);
-    expect(entries.indexOf("Conversations")).toBeGreaterThan(-1);
-    expect(entries.indexOf("Review")).toBeLessThan(entries.indexOf("Conversations"));
+    // The chat list is the default space, and your duo is always its first row:
+    // pinned above the people, never a section of its own.
+    const list = await screen.findByTestId("conversations-list");
+    const duo = screen.getByTestId("duo-link");
+    expect(duo).toHaveAttribute("href", "#duo");
+    expect(duo.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(duo).getByTestId("chat-avatar")).toHaveAttribute("data-kind", "duo");
   });
 
   it("a connection that cannot be established says so and offers the way out", async () => {
@@ -671,7 +673,7 @@ describe("#63 AC1 — the list triages without opening anything", () => {
     const group = entryFor("project-x");
     expect(within(group).getByTestId("room-preview")).toHaveTextContent("ship it");
     expect(within(group).getByTestId("timestamp")).toBeInTheDocument();
-    expect(within(group).getByTestId("room-unread")).toHaveTextContent("3 unread");
+    expect(within(group).getByTestId("room-unread")).toHaveAttribute("aria-label", "3 unread");
 
     // A channel reads by its name too — one list, three kinds, no opening.
     const channel = entryFor("announce");
@@ -696,11 +698,11 @@ describe("#63 AC2 — mentions outrank unread", () => {
 
     const mentioned = entryFor("project-x");
     expect(within(mentioned).getByTestId("room-mentions")).toHaveTextContent("2");
-    expect(within(mentioned).getByTestId("room-unread")).toHaveTextContent("5 unread");
+    expect(within(mentioned).getByTestId("room-unread")).toHaveAttribute("aria-label", "5 unread");
 
     const merelyUnread = entryFor("Bose");
     expect(within(merelyUnread).queryByTestId("room-mentions")).toBeNull();
-    expect(within(merelyUnread).getByTestId("room-unread")).toHaveTextContent("3 unread");
+    expect(within(merelyUnread).getByTestId("room-unread")).toHaveAttribute("aria-label", "3 unread");
   });
 });
 
@@ -736,8 +738,12 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    const beforeKeys = JSON.stringify(Object.keys(localStorage).sort());
+    // The query cache persists itself on its own throttle (`duo-cache`), which is not a store of this setting — only a store the setting would live in counts.
+    const settingStores = () => JSON.stringify(Object.keys(localStorage).filter((key) => key !== "duo-cache").sort());
+    const beforeKeys = settingStores();
 
+    // A conversation's own verbs sit behind its "more" control.
+    fireEvent.click(within(entryFor("project-x")).getByTestId("room-more"));
     const setting = within(entryFor("project-x")).getByTestId("room-notifications");
     expect(setting).toHaveValue("all");
 
@@ -755,7 +761,7 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
     await waitFor(() => expect(within(entryFor("project-x")).queryByTestId("room-muted")).toBeNull());
     await waitFor(() => expect(within(entryFor("project-x")).getByTestId("room-notifications")).toHaveValue("mentions"));
     // Cross-device is server-side by construction: no local store appeared.
-    expect(JSON.stringify(Object.keys(localStorage).sort())).toBe(beforeKeys);
+    expect(settingStores()).toBe(beforeKeys);
   });
 
   it("leaving a conversation asks first, then removes it from the list", async () => {
@@ -766,6 +772,7 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
     await renderApp();
     await screen.findByTestId("conversations-list");
 
+    fireEvent.click(screen.getByRole("button", { name: "More for announce" }));
     fireEvent.click(screen.getByRole("button", { name: "Leave announce" }));
     fireEvent.click(await screen.findByTestId("leave-conversation-confirm"));
 
@@ -801,9 +808,9 @@ describe("#63 — read state is durable, not local", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    expect(within(entryFor("project-x")).getByTestId("room-unread")).toHaveTextContent("3 unread");
+    expect(within(entryFor("project-x")).getByTestId("room-unread")).toHaveAttribute("aria-label", "3 unread");
 
-    window.location.hash = "#room/!project-x%3Aworkspace.example";
+    window.location.hash = "#chat/!project-x%3Aworkspace.example";
     window.dispatchEvent(new Event("hashchange"));
     await screen.findByTestId("room-timeline");
 
@@ -824,7 +831,7 @@ describe("#64 AC1 — messages send and arrive", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
@@ -855,7 +862,7 @@ describe("#64 AC2 — editing and deleting are honest", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("the policy doc says 30 days")).getByRole("button", { name: "Edit" }));
@@ -881,7 +888,7 @@ describe("#64 AC2 — editing and deleting are honest", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     // Bose amends their own message: the same event id comes back with new
@@ -905,7 +912,7 @@ describe("#64 AC3 — threads and reactions work", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "React" }));
@@ -915,12 +922,12 @@ describe("#64 AC3 — threads and reactions work", () => {
     await waitFor(() => expect(within(messageRow("what's our refund policy?")).getByTestId("room-reaction")).toHaveTextContent("👍 1"));
 
     // The reaction follows the message into its thread view.
-    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
     expect(within(messageRow("what's our refund policy?")).getByTestId("room-reaction")).toHaveTextContent("👍 1");
 
     // Back in the conversation, the chip takes the reaction back.
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
     fireEvent.click(within(messageRow("what's our refund policy?")).getByTestId("room-reaction"));
     await waitFor(() => expect(fake.connection.unreact).toHaveBeenCalledWith("!project-x:workspace.example", "$1", "👍"));
@@ -933,7 +940,7 @@ describe("#64 AC3 — threads and reactions work", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     // In the conversation: the thread's existence, its count, and its
@@ -942,11 +949,11 @@ describe("#64 AC3 — threads and reactions work", () => {
     expect(preview).toHaveTextContent("carol's duo");
     expect(preview).toHaveTextContent("np, 30 days");
     expect(preview).toHaveTextContent("1 reply");
-    expect(screen.getByTestId("open-thread")).toHaveAttribute("href", "#thread/!project-x%3Aworkspace.example/%241");
+    expect(screen.getByTestId("open-thread")).toHaveAttribute("href", "#chat/!project-x%3Aworkspace.example/thread/%241");
     // The reply itself is not a row of the main flow — it lives behind the preview.
     expect(screen.queryByText("np, 30 days")).toBeNull();
 
-    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
     // The thread view: the root, and the reply — a duo's, labelled structurally (#60's rule).
     expect(screen.getByTestId("room-duo-message-attribution")).toHaveTextContent("carol's duo");
@@ -959,7 +966,7 @@ describe("#64 AC3 — threads and reactions work", () => {
     await waitFor(() => expect(screen.getByText("thanks!")).toBeInTheDocument());
 
     // Back in the conversation, the preview carries the new latest word and count.
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
     const updated = within(messageRow("what's our refund policy?")).getByTestId("room-thread-preview");
     await waitFor(() => expect(updated).toHaveTextContent("2 replies"));
@@ -979,7 +986,7 @@ describe("#64 AC4 — read state is maintained", () => {
     await screen.findByTestId("conversations-list");
     expect(fake.connection.markRead).not.toHaveBeenCalled();
 
-    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     expect(await screen.findByTestId("thread-timeline")).toBeInTheDocument();
     await waitFor(() => expect(fake.connection.markRead).toHaveBeenCalledWith("!project-x:workspace.example"));
   });
@@ -1007,7 +1014,7 @@ describe("#65 AC1 — people and duos are both mentionable", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     const composer = screen.getByLabelText("Message project-x");
@@ -1038,7 +1045,7 @@ describe("#65 AC1 — people and duos are both mentionable", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     const composer = screen.getByLabelText("Message project-x");
@@ -1064,7 +1071,7 @@ describe("#65 AC2 — mentioning a duo asks it", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     const composer = screen.getByLabelText("Message project-x");
@@ -1116,7 +1123,7 @@ describe("#65 AC3 — a duo that may not answer says so", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     // The daemon's own composed outcomes (digital-duo public-answer.ts:
@@ -1197,7 +1204,7 @@ describe("#65 — a delivered mention renders as the mention it is", () => {
 
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     const pills = await screen.findAllByTestId("room-mention");
@@ -1234,7 +1241,7 @@ describe("#65 — a mention of you marks the conversation in the list", () => {
     await screen.findByTestId("conversations-list");
 
     // project-x starts at 3 unread, no mentions — the badge isn't there.
-    expect(within(entryFor("project-x")).getByTestId("room-unread").textContent).toBe("3 unread");
+    expect(within(entryFor("project-x")).getByTestId("room-unread").getAttribute("aria-label")).toBe("3 unread");
     expect(within(entryFor("project-x")).queryByTestId("room-mentions")).toBeNull();
 
     // Bose mentions ana; the arrival moves the server's counts — a mention
@@ -1255,7 +1262,7 @@ describe("#65 — a mention of you marks the conversation in the list", () => {
     );
 
     await waitFor(() => expect(within(entryFor("project-x")).getByTestId("room-mentions").textContent).toBe("@ 1"));
-    expect(within(entryFor("project-x")).getByTestId("room-unread").textContent).toBe("4 unread");
+    expect(within(entryFor("project-x")).getByTestId("room-unread").getAttribute("aria-label")).toBe("4 unread");
   });
 });
 
@@ -1267,7 +1274,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.send).mockRejectedValueOnce(new Error("offline"));
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
@@ -1292,7 +1299,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.edit).mockRejectedValueOnce(new Error("refused"));
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("the policy doc says 30 days")).getByRole("button", { name: "Edit" }));
@@ -1314,7 +1321,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.delete).mockRejectedValueOnce(new Error("refused"));
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("the policy doc says 30 days")).getByRole("button", { name: "Delete" }));
@@ -1335,7 +1342,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.react).mockRejectedValueOnce(new Error("refused"));
 
     await renderApp();
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "React" }));
@@ -1352,7 +1359,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     vi.mocked(fake.connection.replyInThread).mockRejectedValueOnce(new Error("refused"));
 
     await renderApp();
-    navigate("#thread/!project-x%3Aworkspace.example/%241");
+    navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     await screen.findByTestId("thread-timeline");
 
     fireEvent.change(screen.getByLabelText("Reply in thread"), { target: { value: "thanks!" } });
@@ -1442,7 +1449,7 @@ describe("#69 AC1 — an arrival interrupts by the conversation's setting", () =
 
     // The room the member is looking at does not interrupt about itself —
     // a notification for what the open window already shows is noise.
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
     await act(async () => {
       fake.deliver(messageFor({ eventId: "$n5", senderId: "@bose:workspace.example", senderName: "Bose", body: "while you watch" }), true);
@@ -1470,14 +1477,14 @@ describe("#69 AC2 — do not disturb holds everything back, visibly", () => {
     expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
 
     // What was missed is visible afterwards, in the place the member set the rule.
-    navigate("#settings");
+    navigate("#settings/notifications");
     const missed = await screen.findByTestId("missed-list");
     const entry = within(missed).getByTestId("missed-entry");
     expect(entry).toHaveTextContent("Bose in project-x: held words");
     // The record points back at where it happened — the entry itself is the
     // link. ("!" is one of encodeURIComponent's unreserved characters; ":" is
     // not — the same address the conversations list links with.)
-    expect(entry.getAttribute("href")).toBe("#room/!project-x%3Aworkspace.example");
+    expect(entry.getAttribute("href")).toBe("#chat/!project-x%3Aworkspace.example");
 
     fireEvent.click(screen.getByTestId("missed-clear"));
     await waitFor(() => expect(screen.queryByTestId("missed-entry")).toBeNull());
@@ -1490,7 +1497,7 @@ describe("#69 AC2 — do not disturb holds everything back, visibly", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#settings");
+    navigate("#settings/notifications");
 
     expect(await screen.findByTestId("dnd-toggle")).toHaveTextContent("Turn on do not disturb");
     fireEvent.click(screen.getByTestId("dnd-toggle"));
@@ -1670,10 +1677,10 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     });
     expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
 
-    navigate("#settings");
+    navigate("#settings/notifications");
     const entry = within(await screen.findByTestId("missed-list")).getByTestId("missed-entry");
     expect(entry).toHaveTextContent("Your duo answered on your behalf in project-x.");
-    expect(entry.getAttribute("href")).toBe("#room/!project-x%3Aworkspace.example");
+    expect(entry.getAttribute("href")).toBe("#chat/!project-x%3Aworkspace.example");
   });
 
   it("an escalation is held by do not disturb the same way, and waits in the record", async () => {
@@ -1703,7 +1710,7 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem("duo.missed") ?? "[]")).toHaveLength(1));
     expect(notificationPlugin.sendNotification).not.toHaveBeenCalled();
 
-    navigate("#settings");
+    navigate("#settings/notifications");
     const entry = within(await screen.findByTestId("missed-list")).getByTestId("missed-entry");
     expect(entry).toHaveTextContent("Your duo refused to answer for you.");
     expect(entry.getAttribute("href")).toBe("#draft/d2");
@@ -1715,7 +1722,7 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
-    navigate("#settings");
+    navigate("#settings/notifications");
     const section = await screen.findByTestId("settings-notifications");
 
     // The only switches are this device's do-not-disturb and its window; the
@@ -1758,7 +1765,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
     return fake;
   }
@@ -1820,7 +1827,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!project-x%3Aworkspace.example");
+    navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-file");
 
     await waitFor(() => expect(fake.connection.loadMedia).toHaveBeenCalled());
@@ -1896,7 +1903,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     const note = screen.getByTestId("attachment-note");
     expect(note).toHaveTextContent("carol's duo");
     expect(note).toHaveTextContent("32 KiB");
-    expect(note).toHaveTextContent("can't read images yet — an open provider decision");
+    expect(note).toHaveTextContent("can't read images yet");
     expect(note).toHaveTextContent("never imports");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "what do these say?" } });
@@ -1955,7 +1962,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     vi.mocked(connect).mockResolvedValue(fake.connection);
     await renderApp();
     await screen.findByTestId("conversations-list");
-    navigate("#room/!announce%3Aworkspace.example");
+    navigate("#chat/!announce%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     await pick([new File([new Uint8Array([1])], "announce.txt", { type: "text/plain" })]);
@@ -2009,5 +2016,583 @@ describe("#66 — sharing files and images in a conversation", () => {
     expect(screen.getByLabelText("Message project-x")).toHaveValue("what does this say?");
     expect(fake.connection.sendFile).not.toHaveBeenCalled();
     expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * #127 (hide-the-form half): a hosted build (VITE_DUO_DAEMON_URL set) never
+ * shows the homeserver form — its workspace is the operator's, not something
+ * the person types an address for. Where the daemon has no workspace to hand
+ * out (or this device is not paired to the account's server), Conversations
+ * and Settings say the workspace isn't set up instead. A personal daemon
+ * (no env var) keeps the manual form, exactly as #62 built it. The
+ * auto-connect half follows in "#127 — a hosted device connects by itself".
+ */
+describe("#127 — hosted builds never show the homeserver form", () => {
+  const HOSTED_ORIGIN = "https://duo-daemon.example.org";
+
+  async function goTo(hash: string) {
+    window.location.hash = hash;
+    window.dispatchEvent(new Event("hashchange"));
+  }
+
+  /** A hosted sign-in leaves this record beside the pairing; `connectManually` (Advanced) clears it. */
+  function seedHostedAccount() {
+    localStorage.setItem("duo.hosted-account", JSON.stringify({ origin: HOSTED_ORIGIN, ownerName: "Ada", isAdmin: false }));
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("Conversations says the workspace isn't set up, with no sign-in button", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    seedPairing();
+    seedHostedAccount();
+    stubDaemonFetch();
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("workspace-not-set-up")).toHaveTextContent("Workspace isn't set up yet");
+    expect(screen.queryByTestId("conversations-signin")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in to a workspace" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+  });
+
+  it("Settings says the same, and never opens the sign-in dialog", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    seedPairing();
+    seedHostedAccount();
+    stubDaemonFetch();
+    window.location.hash = "#settings/advanced";
+
+    await renderApp();
+
+    const workspace = await screen.findByTestId("settings-workspace");
+    expect(within(workspace).getByTestId("workspace-not-set-up")).toHaveTextContent("Workspace isn't set up yet");
+    expect(screen.queryByTestId("settings-workspace-signin")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-signin-dialog")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+  });
+
+  it("the front door's Advanced (address) screen offers pairing, not a homeserver form", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    // Arrive at the front door itself (#signin), not the bare root, which
+    // redirects a signed-out visitor to the landing page.
+    window.location.hash = "#signin";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ googleClientId: "abc" }), { status: 200 })));
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("landing-advanced"));
+
+    expect(await screen.findByRole("heading", { name: "Pair a duo instead" })).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+  });
+
+  it("a hosted server without Google sign-in leads with pairing, with no workspace note above it", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    // Arrive at the front door itself (#signin), not the bare root, which
+    // redirects a signed-out visitor to the landing page.
+    window.location.hash = "#signin";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ googleClientId: null }), { status: 200 })));
+
+    await renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Pair a duo instead" })).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+  });
+
+  it("a hosted build paired to a personal daemon via Advanced keeps the manual form (AC 4)", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    window.location.hash = "#signin";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        return new Response(JSON.stringify(url.endsWith("/hosted/config") ? { googleClientId: "abc" } : []), { status: 200 });
+      }),
+    );
+    await renderApp();
+
+    // The front door's Advanced door: pair by address, no hosted sign-in.
+    fireEvent.click(await screen.findByTestId("landing-advanced"));
+    fireEvent.change(await screen.findByLabelText("Daemon address"), { target: { value: "http://100.64.1.5:7717" } });
+    fireEvent.change(screen.getByLabelText("Token"), { target: { value: "tok" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    window.location.hash = "#settings/advanced";
+    window.dispatchEvent(new Event("hashchange"));
+    expect(await screen.findByTestId("settings-workspace-signin")).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+    expect(localStorage.getItem("duo.hosted-account")).toBeNull();
+  });
+
+  it("a hosted device never connects with a stored manual sign-in: its session comes from the daemon", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    seedPairing();
+    seedHostedAccount();
+    seedSession();
+    stubDaemonFetch();
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("workspace-not-set-up")).toBeInTheDocument();
+    expect(vi.mocked(connect)).not.toHaveBeenCalled();
+  });
+
+  it("the sign-in dialog renders nothing for a hosted device, even when asked to open", () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    seedHostedAccount();
+
+    render(<WorkspaceSignInDialog open onOpenChange={() => {}} onSession={() => {}} />);
+
+    expect(screen.queryByTestId("workspace-signin-dialog")).not.toBeInTheDocument();
+  });
+
+  it("a personal daemon keeps the manual form: Conversations and Settings both offer the sign-in", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", "");
+    seedPairing();
+    stubDaemonFetch();
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    fireEvent.click(await screen.findByTestId("conversations-signin"));
+    expect(await screen.findByTestId("workspace-signin-dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("Homeserver")).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-not-set-up")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByTestId("workspace-signin-dialog"), { key: "Escape" });
+    await goTo("#settings/advanced");
+    expect(await screen.findByTestId("settings-workspace-signin")).toHaveTextContent("Sign in to a workspace");
+  });
+});
+
+/*
+ * #127 (auto-connect half): after Google sign-in the app asks the paired
+ * daemon for the person's own workspace session and connects with it — no
+ * form, no typing. The credential is held in memory only, is renewed under
+ * the open connection, is answered afresh when the workspace refuses it, and
+ * is ended at the workspace on sign-out. (The hook's timing and error table
+ * is pinned in test/HostedWorkspace.test.tsx; this is the wiring.)
+ */
+describe("#127 — a hosted device connects by itself", () => {
+  const HOSTED_ORIGIN = "https://duo-daemon.example.org";
+  const HOMESERVER = "https://matrix.example.org";
+  const DEVICE_TOKEN = "device-token-ada";
+  const PAIRING = { baseUrl: `${HOSTED_ORIGIN}/t/ada`, token: DEVICE_TOKEN };
+
+  interface Answer {
+    status: number;
+    body: unknown;
+    headers?: Record<string, string>;
+  }
+
+  let minted = 0;
+  function granted(ttlMs = 24 * 3_600_000): Answer {
+    minted += 1;
+    return {
+      status: 200,
+      body: {
+        homeserverUrl: HOMESERVER,
+        userId: "@acme.ada:matrix.example.org",
+        accessToken: `syt_hosted_${minted}`,
+        deviceId: null,
+        expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+      },
+    };
+  }
+
+  function seedHostedDevice(origin: string = HOSTED_ORIGIN) {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", HOSTED_ORIGIN);
+    localStorage.setItem("duo.api-config", JSON.stringify(PAIRING));
+    localStorage.setItem("duo.hosted-account", JSON.stringify({ origin, ownerName: "Ada", isAdmin: false }));
+  }
+
+  /** The daemon: session `POST` answers in order (the last repeats) and a `DELETE` is a 204; the workspace's logout is recorded; everything else is empty and fine. */
+  function stubHostedNetwork(answers: Answer[]) {
+    let asked = 0;
+    const calls: Array<{ url: string; method: string; authorization: string | null }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, method: init?.method ?? "GET", authorization: new Headers(init?.headers).get("Authorization") });
+        if (url === workspaceSessionUrl(PAIRING) && init?.method === "DELETE") {
+          return new Response(null, { status: 204 });
+        }
+        if (url === workspaceSessionUrl(PAIRING)) {
+          const answer = answers[Math.min(asked, answers.length - 1)]!;
+          asked += 1;
+          return new Response(JSON.stringify(answer.body), { status: answer.status, headers: answer.headers });
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }),
+    );
+    return {
+      sessionCalls: () => calls.filter((call) => call.url === workspaceSessionUrl(PAIRING) && call.method === "POST"),
+      dropCalls: () => calls.filter((call) => call.url === workspaceSessionUrl(PAIRING) && call.method === "DELETE"),
+      logoutCalls: () => calls.filter((call) => call.url.endsWith("/_matrix/client/v3/logout")),
+    };
+  }
+
+  beforeEach(() => {
+    minted = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it("Conversations loads with no further input, connecting with the daemon's session — no device, no form", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([granted()]);
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
+    expect(net.sessionCalls()).toHaveLength(1);
+    expect(net.sessionCalls()[0]!.authorization).toBe(`Bearer ${DEVICE_TOKEN}`);
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(connect).mock.calls[0]![0]).toEqual({
+      homeserverUrl: HOMESERVER,
+      userId: "@acme.ada:matrix.example.org",
+      accessToken: "syt_hosted_1",
+      deviceId: null,
+    });
+    expect(screen.queryByLabelText("Homeserver")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("conversations-signin")).not.toBeInTheDocument();
+  });
+
+  it("holds the credential in memory only: it is in no browser store", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    expect(localStorage.getItem("duo.workspace-session")).toBeNull();
+    const everything = JSON.stringify({ ...localStorage, ...sessionStorage });
+    expect(everything).not.toContain("syt_hosted_1");
+    expect(everything).not.toContain("matrix.example.org");
+  });
+
+  it("Settings names no address and no account id, and offers no sign-in or separate sign-out", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#settings/advanced";
+
+    await renderApp();
+
+    const workspace = await screen.findByTestId("settings-workspace");
+    await waitFor(() => expect(within(workspace).getByTestId("workspace-status")).toHaveAttribute("data-state", "connected"));
+    expect(workspace).not.toHaveTextContent("matrix.example.org");
+    expect(workspace).not.toHaveTextContent("@acme.ada");
+    expect(within(workspace).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("the daemon has no workspace to give (404): the note stays, nothing connects", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([{ status: 404, body: { error: { code: "workspace_not_configured", message: "no" } } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("workspace-not-set-up")).toHaveTextContent("Workspace isn't set up yet");
+    expect(net.sessionCalls()).toHaveLength(1);
+    expect(vi.mocked(connect)).not.toHaveBeenCalled();
+  });
+
+  it("the person's account is still being made (503 pending): says it is setting things up, in plain words", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([{ status: 503, body: { error: { code: "workspace_pending", message: "wait" } }, headers: { "Retry-After": "60" } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    const status = await screen.findByTestId("workspace-status");
+    expect(status).toHaveTextContent("Setting things up…");
+    expect(status).not.toHaveTextContent(/matrix|homeserver|token|server/i);
+    expect(screen.queryByTestId("conversations-signin")).not.toBeInTheDocument();
+  });
+
+  it("the workspace is down (503 unavailable): says it could not reach the conversations and is trying again", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([{ status: 503, body: { error: { code: "workspace_unavailable", message: "down" } }, headers: { "Retry-After": "60" } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    const status = await screen.findByTestId("workspace-status");
+    expect(status).toHaveTextContent("Couldn't reach your conversations — trying again");
+    expect(status).not.toHaveTextContent(/matrix|homeserver|token|server/i);
+  });
+
+  it("the daemon no longer knows this device (401): signed out, back to the sign-in front door with the reason", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([{ status: 401, body: { error: { code: "unauthorized", message: "no" } } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    // The device is unpaired exactly as for any revoked device, and the front door says why.
+    await waitFor(() => expect(localStorage.getItem("duo.api-config")).toBeNull());
+    expect(await screen.findByText(/its device was revoked/i)).toBeInTheDocument();
+    expect(vi.mocked(connect)).not.toHaveBeenCalled();
+  });
+
+  it("a stored account for another server never gets the device token", async () => {
+    seedHostedDevice("https://elsewhere.example.org");
+    const net = stubHostedNetwork([granted()]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("workspace-not-set-up")).toBeInTheDocument();
+    expect(net.sessionCalls()).toEqual([]);
+    expect(vi.mocked(connect)).not.toHaveBeenCalled();
+  });
+
+  it("when the workspace stops accepting the credential, asks for a new session and connects again", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([granted(), granted()]);
+    const first = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    const second = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValueOnce(first.connection).mockResolvedValueOnce(second.connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    const options = vi.mocked(connect).mock.calls[0]![1] as { onSessionRejected: () => void };
+
+    act(() => options.onSessionRejected());
+
+    await waitFor(() => expect(vi.mocked(connect)).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(connect).mock.calls[1]![0].accessToken).toBe("syt_hosted_2");
+    expect(net.sessionCalls()).toHaveLength(2);
+    // The daemon's copy of the refused credential was dropped before the new ask.
+    expect(net.dropCalls()).toHaveLength(1);
+    expect(first.connection.stop).toHaveBeenCalled();
+    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
+  });
+
+  it("a first sync the workspace refuses (M_UNKNOWN_TOKEN) is answered the same way", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([granted(), granted()]);
+    const refused = Object.assign(new Error("no longer accepted"), { errcode: "M_UNKNOWN_TOKEN" });
+    vi.mocked(connect).mockRejectedValueOnce(refused);
+    vi.mocked(connect).mockResolvedValueOnce(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
+    expect(net.sessionCalls()).toHaveLength(2);
+    expect(net.dropCalls()).toHaveLength(1);
+    expect(vi.mocked(connect).mock.calls[1]![0].accessToken).toBe("syt_hosted_2");
+    // The person is never handed a sign-out button for something they did not cause.
+    expect(screen.queryByTestId("workspace-error")).not.toBeInTheDocument();
+  });
+
+  it("renews the credential about an hour before it expires, under the open connection", async () => {
+    seedHostedDevice();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const net = stubHostedNetwork([granted(), granted()]);
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    const renewToken = vi.fn();
+    fake.connection.renewToken = renewToken;
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(23 * 3_600_000);
+    });
+
+    expect(net.sessionCalls()).toHaveLength(2);
+    expect(renewToken).toHaveBeenCalledWith("syt_hosted_2");
+    // Renewed in place: no second connection, the first never stopped.
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(1);
+    expect(fake.connection.stop).not.toHaveBeenCalled();
+  });
+
+  it("signing out ends the session at the workspace with its own credential, then forgets it and disconnects", async () => {
+    seedHostedDevice();
+    const net = stubHostedNetwork([granted()]);
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(net.logoutCalls()).toHaveLength(1));
+    expect(net.logoutCalls()[0]).toEqual({
+      url: `${HOMESERVER}/_matrix/client/v3/logout`,
+      method: "POST",
+      authorization: "Bearer syt_hosted_1",
+    });
+    // The daemon is told to forget its copy too, with the device token, at this duo's own route.
+    await waitFor(() => expect(net.dropCalls()).toHaveLength(1));
+    expect(net.dropCalls()[0]).toEqual({ url: workspaceSessionUrl(PAIRING), method: "DELETE", authorization: `Bearer ${DEVICE_TOKEN}` });
+    await waitFor(() => expect(fake.connection.stop).toHaveBeenCalled());
+    expect(localStorage.getItem("duo.api-config")).toBeNull();
+    expect(screen.queryByTestId("conversations-list")).not.toBeInTheDocument();
+    expect(JSON.stringify({ ...localStorage })).not.toContain("syt_hosted_1");
+  });
+
+  it("a connect that fails on its own (not a refused credential) is retried after 5s, 10s, 20s — the daemon answering in between does not reset the wait", async () => {
+    seedHostedDevice();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const net = stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockRejectedValue(new Error("Failed to fetch"));
+    window.location.hash = "#conversations";
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    await renderApp();
+    await advance(50);
+    expect(net.sessionCalls()).toHaveLength(1);
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(1);
+    // The person is told, plainly, and is not handed a sign-out for something they did not cause.
+    expect(screen.getByTestId("workspace-status")).toHaveAttribute("data-state", "unreachable");
+    expect(screen.queryByTestId("workspace-error")).not.toBeInTheDocument();
+    // A plain failure is not a refused credential: nothing is dropped at the daemon.
+    expect(net.dropCalls()).toHaveLength(0);
+
+    await advance(4_900);
+    expect(net.sessionCalls()).toHaveLength(1);
+    await advance(1_100); // ~6s: the second ask, and a second failed connect
+    expect(net.sessionCalls()).toHaveLength(2);
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(2);
+
+    await advance(9_000); // 5s again would have asked by now; the wait is 10s
+    expect(net.sessionCalls()).toHaveLength(2);
+    await advance(2_000);
+    expect(net.sessionCalls()).toHaveLength(3);
+    expect(vi.mocked(connect)).toHaveBeenCalledTimes(3);
+
+    await advance(19_000); // and now 20s
+    expect(net.sessionCalls()).toHaveLength(3);
+    await advance(2_000);
+    expect(net.sessionCalls()).toHaveLength(4);
+    expect(net.dropCalls()).toHaveLength(0);
+  });
+
+  it("signing out also clears a manual sign-in left in storage, which a hosted device ignores and Settings cannot clear", async () => {
+    seedHostedDevice();
+    seedSession();
+    stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    expect(localStorage.getItem("duo.workspace-session")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(localStorage.getItem("duo.api-config")).toBeNull());
+    await waitFor(() => expect(localStorage.getItem("duo.workspace-session")).toBeNull());
+  });
+
+  it("a personal daemon's manual sign-in is not touched by forgetting the pairing", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", "");
+    seedPairing();
+    seedSession();
+    stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    fireEvent.click(screen.getByRole("button", { name: "Forget this device" }));
+
+    await waitFor(() => expect(localStorage.getItem("duo.api-config")).toBeNull());
+    // The pairing and the workspace sign-in are separate credentials: one ending leaves the other.
+    expect(localStorage.getItem("duo.workspace-session")).not.toBeNull();
+  });
+
+  it("Conversations while connecting is one live region that changes text in place, with no talk of a daemon", async () => {
+    seedHostedDevice();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let answer: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input) === workspaceSessionUrl(PAIRING) ? new Promise<Response>((resolve) => (answer = resolve)) : new Response("[]", { status: 200 }),
+      ),
+    );
+    window.location.hash = "#conversations";
+
+    await renderApp();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+
+    const region = screen.getByTestId("workspace-status");
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveTextContent("Connecting…");
+    // A slow connect used to read "Still waiting on the daemon…": nothing a hosted person knows.
+    expect(screen.queryByTestId("route-loading-slow")).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/daemon/i);
+
+    await act(async () => {
+      answer(new Response(JSON.stringify({ error: { code: "workspace_unavailable", message: "down" } }), { status: 503, headers: { "Retry-After": "60" } }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The same element, new words: that is what a screen reader announces.
+    expect(screen.getByTestId("workspace-status")).toBe(region);
+    expect(region).toHaveTextContent("Couldn't reach your conversations");
+    expect(screen.queryByTestId("route-loading")).not.toBeInTheDocument();
+  });
+
+  it("the not-set-up note is announced too: it lives inside the status region", async () => {
+    seedHostedDevice();
+    stubHostedNetwork([{ status: 404, body: { error: { code: "workspace_not_configured", message: "no" } } }]);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    const note = await screen.findByTestId("workspace-not-set-up");
+    expect(note.closest('[role="status"]')).not.toBeNull();
+  });
+
+  it("a personal daemon is unchanged: the stored sign-in connects as before, and the daemon is never asked for a session", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", "");
+    seedPairing();
+    seedSession();
+    const net = stubHostedNetwork([granted()]);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+    window.location.hash = "#conversations";
+
+    await renderApp();
+
+    expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
+    // Exactly the stored session and nothing more — no hosted options ride along.
+    expect(vi.mocked(connect)).toHaveBeenCalledWith(SESSION);
+    expect(net.sessionCalls()).toEqual([]);
+    expect(net.logoutCalls()).toEqual([]);
   });
 });

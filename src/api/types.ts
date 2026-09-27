@@ -11,8 +11,6 @@
  * authoritative shapes this file must never drift from silently.
  */
 
-export type DuoSummary = { kind: "personal" } | { kind: "shared"; ownerId: string; ownerName: string };
-
 export interface DraftSource {
   // "attachment" (digital-duo #190/#183): a file shared in the conversation
   // the question rode with; `id` is the workspace's own file reference and
@@ -504,3 +502,114 @@ export interface EndDuoResult {
   /** Files derived from it — rules, voice, refusals, lifecycle records. */
   readonly duoDirPaths: readonly string[];
 }
+
+// Invite-only hosted mode (digital-duo's hosted daemon): `POST
+// {origin}/hosted/signup` answers the new duo's address suffix and the first
+// device token, shown exactly once. `basePath` is appended to the daemon
+// origin to make this device's `baseUrl` (the duo's own path on the daemon).
+export interface HostedSignupResult {
+  /** null for the server's original (root) duo, which lives at the bare origin. */
+  readonly tenantId: string | null;
+  /** The duo's path under the daemon origin (/t/ then the tenant id), or "" for the root duo. */
+  readonly basePath: string;
+  readonly token: string;
+  readonly ownerName: string;
+  /** May mint invites from Settings. Absent from a daemon that predates sign-in — read as false. */
+  readonly isAdmin?: boolean;
+  /** The org this duo belongs to (null for the root duo of a server with no org for it). Absent from a daemon that predates orgs. */
+  readonly orgId?: string | null;
+}
+
+/** `GET {origin}/hosted/config` — what the sign-in page needs. A null client id means sign-in isn't configured on that server. */
+export interface HostedConfig {
+  readonly googleClientId: string | null;
+}
+
+
+// `POST /corpus/import-claude`: a Claude data export's conversations.json,
+// imported exactly as `duo import claude` does — the daemon's own counts.
+export interface ClaudeImportSummary {
+  readonly conversationCount: number;
+  readonly workRelevantConversationCount: number;
+  readonly written: number;
+  readonly skipped: number;
+  readonly discardedAboveCeiling: number;
+}
+
+export type DeriveStage = "pairs" | "topics" | "rules" | "voice";
+
+// `GET`/`POST /corpus/derive`: the daemon's one derive job — pairs, topics,
+// rules, voice, in that order. `stage` names the step running (or the one
+// that failed); `error` is the failing step's own message, verbatim.
+export interface DeriveJobStatus {
+  readonly state: "idle" | "running" | "done" | "error";
+  readonly stage: DeriveStage | null;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+  readonly error: string | null;
+}
+
+// `GET /ask-links`: every ask link this duo has minted — never its token,
+// which is shown once at minting (`MintedAskLink`) and never again.
+export interface AskLinkRow {
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly revokedAt: string | null;
+  readonly valid: boolean;
+}
+
+export interface MintedAskLink {
+  readonly id: string;
+  readonly name: string;
+  readonly expiresAt: string;
+  readonly token: string;
+}
+
+// `POST /devices`: pairing another device from an already-paired one.
+export interface MintedDevice {
+  readonly id: string;
+  readonly name: string;
+  readonly token: string;
+}
+
+// `GET /connector` and `POST /connector` (digital-duo#227): the claude.ai connector.
+// GET says whether one exists (its URL is never recoverable) and carries the prompt
+// the owner pastes into claude.ai to feed their past chats; POST answers the URL
+// path exactly once, to be joined to the daemon address.
+export interface ConnectorStatus {
+  readonly connector: { readonly id: string; readonly createdAt: string } | null;
+  readonly historyPrompt: string;
+}
+
+export interface MintedConnector {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly path: string;
+}
+
+// `GET /trust/promotions` — the core's `PromotionOffer`, verbatim.
+export interface PromotionOffer {
+  readonly topicId: string;
+  readonly topicLabel: string | undefined;
+  readonly tier: TrustTier;
+  readonly currentLevel: AutonomyLevel;
+  readonly offeredLevel: AutonomyLevel;
+  readonly cleanStreak: number;
+}
+
+export interface GrantCandidate {
+  readonly topicId: string;
+  readonly label: string;
+  readonly score: number;
+}
+
+// `POST /trust/grant` — the core's `GrantOutcome`, verbatim. "ambiguous"
+// is the owner's turn: pick a candidate and re-post with its topicId.
+export type GrantOutcome =
+  | { readonly status: "applied"; readonly topicId: string; readonly topicLabel: string; readonly tier: TrustTier }
+  | { readonly status: "ambiguous"; readonly candidates: readonly GrantCandidate[] }
+  | { readonly status: "no_match" }
+  | { readonly status: "topic_not_found"; readonly topicId: string }
+  | { readonly status: "refused"; readonly refusal: { readonly heading: string; readonly reason: string } };

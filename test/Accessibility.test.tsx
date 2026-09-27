@@ -15,16 +15,12 @@ import { App } from "../src/App.js";
 import { OfflineBar } from "../src/components/OfflineBar.js";
 import { MutationError } from "../src/components/MutationError.js";
 import { SyncStatusProvider, type SyncTarget } from "../src/sync.js";
-import { Review } from "../src/routes/Review.js";
-import { Corrections } from "../src/routes/Corrections.js";
+import { WaitingHome } from "../src/shell/WaitingHome.js";
+import { DraftTray } from "../src/components/DraftTray.js";
 import { Duo } from "../src/routes/Duo.js";
 import { Draft } from "../src/routes/Draft.js";
-import { Trust } from "../src/routes/Trust.js";
-import { Audit } from "../src/routes/Audit.js";
-import { Knowledge } from "../src/routes/Knowledge.js";
-import { Escalations } from "../src/routes/Escalations.js";
-import { Mirror } from "../src/routes/Mirror.js";
 import { Settings } from "../src/routes/Settings.js";
+import { ProfilePane } from "../src/shell/ProfilePane.js";
 import { Confirmations } from "../src/routes/Confirmations.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { AuditEntry, CorrectionCandidate, DraftRecord, GridRow, PendingT4RequestForJudgement, Rule } from "../src/api/types.js";
@@ -185,10 +181,11 @@ function assertHeadingOrder(container: HTMLElement) {
 afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
+  window.location.hash = "";
 });
 
 describe("#39 AC1 — the page has structure", () => {
-  it("the shell is landmarks: a labelled nav and one main", async () => {
+  it("the shell is landmarks: a labelled nav and one main (the list itself, on a phone's home screen)", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     const fetchMock = stubFetch({ "/drafts?outcome=pending": [] });
     vi.stubGlobal("fetch", fetchMock);
@@ -207,31 +204,32 @@ describe("#39 AC1 — the page has structure", () => {
 
     const nav = container.querySelector("nav");
     expect(nav).not.toBeNull();
-    expect(nav).toHaveAttribute("aria-label", "Surfaces");
+    expect(nav).toHaveAttribute("aria-label", "Chats");
     expect(container.querySelectorAll("main")).toHaveLength(1);
     assertHeadingOrder(main());
   });
 
   it("every route starts at its own h1 and never skips a level", async () => {
     const cases: Array<{ name: string; ui: ReactElement; routes: Record<string, unknown> }> = [
-      { name: "Review — queue", ui: <Review api={api} />, routes: { "/drafts?outcome=pending": [draftFor("d1"), escalatedDraft] } },
-      { name: "Review — empty", ui: <Review api={api} />, routes: { "/drafts?outcome=pending": [], "/knowledge": knowledgeFor() } },
-      { name: "Corrections — list", ui: <Corrections api={api} />, routes: { "/review?status=pending": [candidate] } },
-      { name: "Corrections — empty", ui: <Corrections api={api} />, routes: { "/review?status=pending": [] } },
+      { name: "Waiting on you — queue", ui: <WaitingHome api={api} />, routes: { "/drafts?outcome=pending": [draftFor("d1"), escalatedDraft] } },
+      { name: "Waiting on you — empty", ui: <WaitingHome api={api} />, routes: { "/drafts?outcome=pending": [], "/knowledge": knowledgeFor() } },
+      { name: "Profile › Rules — edits waiting", ui: <ProfilePane api={api} tab="rules" />, routes: { "/review?status=pending": [candidate], "/mirror/rules": { awaitingApproval: [rule], weakSignals: [], inconsistent: [], approved: [], rejected: [] }, "/mirror/refusals": { decided: true, refusals: [{ heading: "Pay", reason: "Never on pay." }] } } },
+      { name: "Profile › Rules — empty", ui: <ProfilePane api={api} tab="rules" />, routes: { "/review?status=pending": [], "/mirror/rules": { awaitingApproval: [], weakSignals: [], inconsistent: [], approved: [], rejected: [] } } },
       { name: "Duo", ui: <Duo api={api} />, routes: { "/drafts?limit=50": [] } },
       // The one parameterized route (#25) is a page like the named ones.
       { name: "Draft", ui: <Draft api={api} draftId="d1" />, routes: { "/drafts/d1": draftFor("d1") } },
-      { name: "Trust — grid", ui: <Trust api={api} />, routes: { "/trust/grid": [gridRow] } },
-      { name: "Trust — empty", ui: <Trust api={api} />, routes: { "/trust/grid": [] } },
-      { name: "Audit — log", ui: <Audit api={api} />, routes: { "/audit": [auditEntry] } },
-      { name: "Audit — empty", ui: <Audit api={api} />, routes: { "/audit": [] } },
-      { name: "Knowledge", ui: <Knowledge api={api} />, routes: { "/knowledge": knowledgeFor() } },
+      { name: "Profile › May do — grid", ui: <ProfilePane api={api} tab="may" />, routes: { "/trust/grid": [gridRow] } },
+      { name: "Profile › May do — empty", ui: <ProfilePane api={api} tab="may" />, routes: { "/trust/grid": [] } },
+      { name: "Profile › Activity — log", ui: <ProfilePane api={api} tab="activity" />, routes: { "/audit": [auditEntry] } },
+      { name: "Profile › Activity — empty", ui: <ProfilePane api={api} tab="activity" />, routes: { "/audit": [] } },
+      { name: "Profile › Knows", ui: <ProfilePane api={api} tab="knows" />, routes: { "/knowledge": knowledgeFor() } },
       { name: "Confirmations — waiting", ui: <Confirmations api={api} />, routes: { "/actions/t4/pending": [pendingConfirmation] } },
       { name: "Confirmations — empty", ui: <Confirmations api={api} />, routes: { "/actions/t4/pending": [] } },
       {
-        name: "Escalations",
-        ui: <Escalations api={api} />,
+        name: "Profile › Activity — where it runs out",
+        ui: <ProfilePane api={api} tab="activity" />,
         routes: {
+          "/audit": [],
           "/escalations/history": [
             { id: "g1", createdAt: "2026-01-01T00:00:00.000Z", itemCount: 1, items: [{ draftId: "e1", question: "q", threadContext: null, escalationReason: "why", createdAt: "2026-01-01T00:00:00.000Z" }] },
           ],
@@ -239,8 +237,8 @@ describe("#39 AC1 — the page has structure", () => {
         },
       },
       {
-        name: "Mirror",
-        ui: <Mirror api={api} />,
+        name: "Profile › Portrait",
+        ui: <ProfilePane api={api} tab="portrait" />,
         routes: {
           "/mirror/portrait": { totalQuestions: 0, periodStart: null, periodEnd: null, topicBreakdown: [], topFiveShare: 0, busiestThreads: [], tooThin: true, minimumQuestionsToCharacterize: 10 },
           "/mirror/rules": { awaitingApproval: [rule], weakSignals: [], inconsistent: [], approved: [], rejected: [] },
@@ -263,7 +261,7 @@ describe("#39 AC1 — the page has structure", () => {
     }
   });
 
-  it("Mirror's buckets sit at h2 under the page's h1, not at h3", async () => {
+  it("Rules' buckets sit at h2 under the page's h1, not at h3", async () => {
     vi.stubGlobal(
       "fetch",
       stubFetch({
@@ -271,13 +269,13 @@ describe("#39 AC1 — the page has structure", () => {
         "/mirror/rules": { awaitingApproval: [rule], weakSignals: [], inconsistent: [], approved: [], rejected: [] },
       }),
     );
-    const { container } = renderWithClient(<Mirror api={api} />);
+    const { container } = renderWithClient(<ProfilePane api={api} tab="rules" />);
     await waitFor(() => expect(container.querySelector("[data-testid^='bucket-']")).not.toBeNull());
     const bucketHeading = container.querySelector("[data-testid^='bucket-'] h2, [data-testid^='bucket-'] h3");
     expect(bucketHeading?.tagName).toBe("H2");
   });
 
-  it("Mirror's refusals sit at h2 with each refusal at h3 beneath it — no level skipped (#53)", async () => {
+  it("Rules' refusals sit at h2 with each refusal at h3 beneath it — no level skipped (#53)", async () => {
     vi.stubGlobal(
       "fetch",
       stubFetch({
@@ -286,7 +284,7 @@ describe("#39 AC1 — the page has structure", () => {
         "/mirror/refusals": { decided: true, refusals: [{ heading: "Pay", reason: "Never on pay." }] },
       }),
     );
-    const { container } = renderWithClient(<Mirror api={api} />);
+    const { container } = renderWithClient(<ProfilePane api={api} tab="rules" />);
     await waitFor(() => expect(container.querySelector("[data-testid='refusal']")).not.toBeNull());
     expect(container.querySelector("[data-testid='refusals'] > h2")).not.toBeNull();
     expect(container.querySelector("[data-testid='refusal'] h3")).not.toBeNull();
@@ -350,6 +348,7 @@ describe("#39 AC2 — state changes announce politely, once, without stealing fo
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     vi.stubGlobal("fetch", stubFetch({ "/drafts?outcome=pending": [] }));
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    window.location.hash = "#waiting";
 
     render(<App />);
     await screen.findByText("Nothing waiting on you.");
@@ -362,7 +361,7 @@ describe("#39 AC2 — state changes announce politely, once, without stealing fo
       FakeWebSocket.instances[0].message({ type: "draft-ready", draftId: "d-new" });
     });
 
-    const notice = await screen.findByText("A draft is waiting in the Review queue.");
+    const notice = await screen.findByText("A draft is waiting on you.");
     expect(notice.closest("[role='status']")).not.toBeNull();
     expect(notice.closest("[aria-live='assertive']")).toBeNull();
     // Never steals focus.
@@ -396,8 +395,13 @@ describe("#39 AC3 — controls are named", () => {
 
   it("every control on the reading surfaces says what it does — including the icon-quiet ones", async () => {
     vi.stubGlobal("fetch", stubFetch({ "/drafts?outcome=pending": [draftFor("d1"), escalatedDraft], "/knowledge": knowledgeFor() }));
-    const { container } = renderWithClient(<Review api={api} />);
-    await screen.findAllByTestId("draft-card");
+    const { container } = renderWithClient(
+      <>
+        <DraftTray api={api} draft={draftFor("d1")} />
+        <DraftTray api={api} draft={escalatedDraft} />
+      </>,
+    );
+    await screen.findAllByTestId("draft-tray");
 
     vi.stubGlobal("fetch", stubFetch({}));
     const settings = renderWithClient(<Settings api={api} session={null} onConfigChange={() => {}} onSignOut={() => {}} onPairDuo={() => {}} onWorkspaceSignIn={() => {}} />);

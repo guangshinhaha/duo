@@ -1,3 +1,19 @@
+/** The age of a moment in the words the app uses everywhere: "just now", "5m ago", "3h ago", then the date. */
+export function ageLabel(iso: string, now: number = Date.now()): string {
+  const when = new Date(iso);
+  const ageMs = now - when.getTime();
+  if (ageMs < 60_000) {
+    return "just now";
+  }
+  if (ageMs < 60 * 60_000) {
+    return `${Math.floor(ageMs / 60_000)}m ago`;
+  }
+  if (ageMs < 24 * 60 * 60_000) {
+    return `${Math.floor(ageMs / 3_600_000)}h ago`;
+  }
+  return when.toLocaleDateString();
+}
+
 /**
  * #26: one time format everywhere a draft-side message renders (Review's
  * DraftCard, the Duo thread). Recent times read relative — the age is the
@@ -9,17 +25,7 @@
  */
 export function Timestamp({ iso }: { iso: string }) {
   const when = new Date(iso);
-  const ageMs = Date.now() - when.getTime();
-  let label: string;
-  if (ageMs < 60_000) {
-    label = "just now";
-  } else if (ageMs < 60 * 60_000) {
-    label = `${Math.floor(ageMs / 60_000)}m ago`;
-  } else if (ageMs < 24 * 60 * 60_000) {
-    label = `${Math.floor(ageMs / 3_600_000)}h ago`;
-  } else {
-    label = when.toLocaleDateString();
-  }
+  const label = ageLabel(iso);
   return (
     <time dateTime={iso} title={when.toISOString()} data-testid="timestamp" className="shrink-0">
       {label}

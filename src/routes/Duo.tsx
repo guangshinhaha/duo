@@ -1,45 +1,45 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import { useDraftsFeed } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
-import { ConfidenceHairline } from "../components/ConfidenceHairline.js";
 import { Composer } from "../components/Composer.js";
-import { DeliveryStateLine } from "../components/DeliveryStateLine.js";
+import { DraftTray } from "../components/DraftTray.js";
+import { DuoLine } from "../components/DuoLine.js";
+import { hairlineState } from "../components/ConfidenceHairline.js";
 import { toDraftPipelineResult } from "../components/DraftCard.js";
-import { DuoMessage } from "../components/DuoMessage.js";
+import { Mark } from "../components/Mark.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
-import { ProvenanceLine } from "../components/ProvenanceLine.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SourceList } from "../components/SourceList.js";
 import { StructuredText } from "../components/StructuredText.js";
 import { Timestamp } from "../components/Timestamp.js";
+import { TrainingCards } from "../components/TrainingCards.js";
+import { isOwnTurn } from "../workspace/drafts.js";
 
-/** §3.1's `threadContext: null` home — one group, so unthreaded questions are never scattered singles. */
-const DEFAULT_THREAD_LABEL = "General";
+// Where "your own turn" is decided lives with the provenance readers; re-exported for the surfaces that name it here.
+export { isOwnTurn };
 
-/** What the conversation reads for each outcome — the honest record of what actually happened, never a paraphrase. */
+/** What the conversation says for each outcome — the honest record of what actually happened, never a paraphrase. */
 function outcomeLabel(draft: DraftRecord): string {
   if (draft.outcome === null && draft.escalated && draft.refused) {
-    // Review shows the refusal's reason but offers no action on it —
-    // "waiting on you" would promise a decision that isn't there to make.
     return "Your duo refused this one.";
   }
   switch (draft.outcome) {
     case null:
-      return "Waiting on you in Review.";
+      return "Waiting on you.";
     case "sent":
-      return "Sent";
+      return "Kept";
     case "edited":
-      return "Sent (edited)";
+      return "Kept (edited)";
     case "discarded":
-      return "Ignored";
+      return "Dismissed";
     case "escalation_answered":
       return "You answered it — queued as a standing-order candidate.";
   }
 }
 
-/** What the duo's side of the conversation says: the text that was actually sent when something was, the draft otherwise. */
+/** What the duo's side says: the text that was actually kept when something was, the draft otherwise. */
 function responseText(draft: DraftRecord): string {
   if ((draft.outcome === "sent" || draft.outcome === "edited") && draft.sentText !== null) {
     return draft.sentText;
@@ -47,180 +47,131 @@ function responseText(draft: DraftRecord): string {
   return draft.draftText ?? "";
 }
 
+function dayLabel(iso: string): string {
+  const when = new Date(iso);
+  const today = new Date();
+  const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  return same(when, today) ? "Today" : same(when, yesterday) ? "Yesterday" : when.toLocaleDateString();
+}
+
 /**
- * One question-and-answer turn. The same pieces as a DraftCard, minus the
- * disposition controls (Review owns those) — this is the read-back of the
- * loop, not a second place to run it.
+ * One turn: what you asked, on your side of the chat, and — once it has been
+ * decided — what your duo said, behind its line with what it drew on
+ * beneath. A turn still waiting on you has only your side here; its answer
+ * is in the tray above the box you type in, because a draft is never part of
+ * the transcript until it is decided (AR-14).
  */
-function ThreadEntry({ draft }: { draft: DraftRecord }) {
+function Turn({ draft }: { draft: DraftRecord }) {
+  const pending = draft.outcome === null && !(draft.escalated && draft.refused);
   return (
-    // flex-row so the hairline leads the entry (#32) — a gutter rule you
-    // scan a column by, not a strip across the top.
-    <div className="flex flex-row gap-2" data-testid="thread-entry">
-      <ConfidenceHairline result={toDraftPipelineResult(draft)} />
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <OwnerMessage>{draft.question}</OwnerMessage>
-        {/* #20: who asked, when the asker was a channel rather than you —
-            placed before the response so the context reads first, and one
-            click from the original when a permalink rode along. */}
-        <ProvenanceLine provenance={draft.provenance} />
-        {draft.escalated ? (
-          <div className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] px-4 py-3 type-body text-[var(--muted)]" data-testid="escalation-reason">
-            {draft.escalationReason}
+    <div className="flex flex-col gap-2" data-testid="thread-entry">
+      <OwnerMessage bubble>{draft.question}</OwnerMessage>
+      {!pending && (
+        <>
+          <div className="max-w-[90%]">
+            <DuoLine
+              attributionTestId="duo-line-attribution"
+              label="Your duo"
+              meta={<Timestamp iso={draft.createdAt} />}
+              state={hairlineState(toDraftPipelineResult(draft))}
+              testId="duo-answer"
+            >
+              {draft.escalated ? (
+                <p className="type-body text-[var(--muted)]" data-testid="escalation-reason">
+                  {draft.escalationReason}
+                </p>
+              ) : (
+                <StructuredText text={responseText(draft)} />
+              )}
+            </DuoLine>
           </div>
-        ) : (
-          <DuoMessage>
-            <StructuredText text={responseText(draft)} />
-          </DuoMessage>
-        )}
-        <p className="flex items-center gap-2 type-provenance text-[var(--faint)]" data-testid="entry-outcome">
-          {outcomeLabel(draft)}
-          <Timestamp iso={draft.createdAt} />
-        </p>
-        {/* #21: whether the sent answer arrived — after the outcome, because
-            the outcome stands whatever the transport did. */}
-        <DeliveryStateLine delivery={draft.delivery} />
-        <SourceList sources={draft.sources} />
-      </div>
+          <SourceList sources={draft.sources} />
+          <p className="type-provenance text-[var(--faint)]" data-testid="entry-outcome">
+            {outcomeLabel(draft)}
+            {draft.threadContext ? ` · about ${draft.threadContext}` : ""}
+          </p>
+        </>
+      )}
     </div>
   );
 }
 
-interface ThreadGroup {
-  key: string | null;
-  drafts: DraftRecord[];
-}
-
 /**
- * Groups drafts by `threadContext` (null → the General group). Consumes
- * ascending order — the feed reverses each newest-first page before this
- * (see `Duo` below) — so each group is already in conversation order and
- * only the groups themselves need ordering: most recently active first,
- * the way a conversations list reads.
- */
-function groupByThread(drafts: DraftRecord[]): ThreadGroup[] {
-  const byKey = new Map<string | null, DraftRecord[]>();
-  for (const draft of drafts) {
-    const key = draft.threadContext ?? null;
-    const list = byKey.get(key);
-    if (list) {
-      list.push(draft);
-    } else {
-      byKey.set(key, [draft]);
-    }
-  }
-  const lastActivity = (group: ThreadGroup) => group.drafts[group.drafts.length - 1]?.createdAt ?? "";
-  return [...byKey.entries()].map(([key, list]) => ({ key, drafts: list })).sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
-}
-
-/**
- * §3.1's "thread view + composer" — the conversational read of the drafting
- * loop. v1 renders the personal duo's single thread space at a fixed
- * `#duo` segment: the personal duo carries no id and `POST /drafts` never
- * took one, so there is nothing to put in `:id` until a second
- * conversational duo exists. #28 makes it navigable: the route opens on
- * the conversation list (most recently active first) and picking one
- * opens it alone, with the composer targeting whatever is open.
- * #29 pages the history underneath: the feed loads the newest window and
- * older entries arrive on demand, so the route stays fast as the draft
- * log grows.
+ * Your duo, as a chat (docs/design-language.md §6.2, epic #138): one
+ * continuous conversation, pinned first in your chats and always there,
+ * with or without a workspace. Ask it anything below; what you asked reads
+ * on your side, and its answers on its side — always behind its line, with
+ * the sources it drew on underneath. An answer waiting on you (Keep, Edit,
+ * Dismiss) is the tray above the box you type in, exactly as in any chat.
+ *
+ * This is the read-back of the loop and where its asking lives; the thread
+ * context a question may carry (`threadContext`) is metadata on its answer,
+ * no longer a place you navigate to. History pages in underneath (#29): the
+ * newest window first, older turns on demand. Tapping the name opens the
+ * duo's profile.
  */
 export function Duo({ api }: { api: DuoApiConfig }) {
   const feed = useDraftsFeed(api);
-  // What is open: `null` is the conversation list, `{ key }` is one open
-  // conversation (`key: null` = General). Not a bare string, because
-  // "General is open" and "nothing is open" must not collapse into the
-  // same state — the list is the route's landing view.
-  const [open, setOpen] = useState<{ key: string | null } | null>(null);
 
-  // Each page arrives newest-first (the daemon's limit shape); the view
-  // reads oldest-first, and so does groupByThread. Reversing the page
-  // order (page one is the newest window) and each page's entries makes
-  // the concatenation ascending again — the same order the un-paged feed
-  // that #29 replaced used to deliver directly.
-  const drafts = useMemo(() => {
+  // Each page arrives newest-first (the daemon's limit shape); a chat reads
+  // oldest-first. Reversing the page order (page one is the newest window)
+  // and each page's entries makes the concatenation ascending again.
+  const turns = useMemo(() => {
     const pages = feed.data?.pages ?? [];
-    return [...pages].reverse().flatMap((page) => [...page].reverse());
+    return [...pages].reverse().flatMap((page) => [...page].reverse()).filter(isOwnTurn);
   }, [feed.data]);
+  const waiting = turns.filter((draft) => draft.outcome === null && !(draft.escalated && draft.refused));
 
-  const groups = useMemo(() => groupByThread(drafts), [drafts]);
-  // The open conversation can vanish from a refetch that no longer carries
-  // it. The view and the composer's target fall back together — never a
-  // caption saying General while posting into a stale context, and never
-  // an open view whose drafts are gone: General when it exists, the list
-  // otherwise (General has no home to show when nothing unthreaded ever
-  // happened).
-  const openGroup =
-    open === null ? undefined : groups.find((group) => group.key === open.key) ?? groups.find((group) => group.key === null);
-  const thread = openGroup?.key ?? null;
-  const threadLabel = openGroup?.key ?? DEFAULT_THREAD_LABEL;
+  // A chat opens at its end, and stays there as turns arrive.
+  const scroller = useRef<HTMLDivElement | null>(null);
+  const lastId = turns[turns.length - 1]?.id;
+  useEffect(() => {
+    const el = scroller.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [lastId]);
 
-  // isLoading covers the FIRST page only — the feed renders as soon as the
+  // isLoading covers the FIRST page only — the chat renders as soon as the
   // newest window arrives, never waiting on history behind it (#29).
   if (feed.isLoading) {
     return <RouteLoading />;
   }
   // Only a first-page failure blanks the route. A failed REFRESH (pages
-  // already on screen) must not: swapping the feed for an error screen
-  // would throw away exactly what #29's "without losing the owner's scroll
-  // position" promises — the loaded pages stay rendered and the next
+  // already on screen) must not: swapping the chat for an error screen would
+  // throw away what #29 promises — the loaded pages stay and the next
   // invalidation retries them.
   if (feed.error && feed.data === undefined) {
     return <RouteError api={api} error={feed.error} onRetry={() => void feed.refetch()} />;
   }
 
+  let previousDay = "";
   return (
     <div className="flex h-full flex-col" data-testid="duo-thread">
-      {/* #39: the page's h1 — the thread's own headings are the group's,
-          below it. */}
-      <h1 className="type-heading sr-only">Duo</h1>
-      <div className="flex-1 overflow-y-auto p-6">
-        {groups.length === 0 ? (
-          <div className="p-6 text-[var(--muted)]" data-testid="duo-empty">
-            No conversation yet. Ask your duo something below — your questions, its drafts and escalations, and what you sent will all read here.
-          </div>
-        ) : openGroup ? (
-          <div className="flex flex-col gap-4">
-            <button
-              className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
-              data-testid="back-to-conversations"
-              onClick={() => setOpen(null)}
-            >
-              All conversations
-            </button>
-            {/* #33: gap-5 is Part 4's density — 20px between speakers, the
-                air that makes a handful of considered turns read as
-                considered (Slack's 8/8 serves hundreds of lines; this isn't that). */}
-            <section className="flex flex-col gap-5" data-testid="thread-group">
-              <h2 className="self-start type-heading" data-testid="thread-group-heading">
-                {openGroup.key ?? DEFAULT_THREAD_LABEL}
-              </h2>
-              {openGroup.drafts.map((draft) => (
-                <ThreadEntry key={draft.id} draft={draft} />
-              ))}
-            </section>
-          </div>
-        ) : (
-          <nav aria-label="Conversations" className="flex flex-col gap-2" data-testid="conversation-list">
-            {groups.map((group) => (
-              <button
-                className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2 text-left type-body text-[var(--text)]"
-                data-testid="conversation-entry"
-                key={group.key ?? "__general__"}
-                onClick={() => setOpen({ key: group.key })}
-              >
-                {group.key ?? DEFAULT_THREAD_LABEL}
-              </button>
-            ))}
-          </nav>
-        )}
-        {/* Older history arrives on demand (#29) — in the list view it can
-            surface whole conversations that live only in unloaded pages, in
-            an open conversation it extends the one being read. It disappears
-            at the end of history (a short page means nothing older exists). */}
+      <header className="flex items-center gap-3 border-b border-[var(--edge)] px-4 py-3">
+        <span
+          aria-hidden="true"
+          className="inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface-2)]"
+        >
+          <Mark />
+        </span>
+        <div className="flex min-w-0 flex-col">
+          {/* #39: the page's h1 is the duo's name — and the way into its profile. */}
+          <h1 className="type-heading">
+            <a className="rounded-[var(--r-sm)]" data-testid="duo-profile-link" href="#duo/profile">
+              Your duo
+            </a>
+          </h1>
+          <p className="type-provenance text-[var(--faint)]">Only you can see this chat</p>
+        </div>
+      </header>
+      <div className="flex-1 overflow-y-auto p-4" ref={scroller}>
+        {/* Older history arrives on demand (#29), at the top where older things are. */}
         {feed.hasNextPage ? (
           <button
-            className="mx-auto mt-4 inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-50"
+            className="mx-auto mb-4 flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-50"
             data-testid="load-older"
             disabled={feed.isFetchingNextPage}
             onClick={() => void feed.fetchNextPage()}
@@ -228,8 +179,40 @@ export function Duo({ api }: { api: DuoApiConfig }) {
             {feed.isFetchingNextPage ? "Loading older…" : "Load older"}
           </button>
         ) : null}
+        {turns.length === 0 ? (
+          <div className="p-6 text-[var(--muted)]" data-testid="duo-empty">
+            Ask your duo anything below. What you ask and what it answers read here, and only you can see this chat.
+          </div>
+        ) : (
+          // #33: gap-5 is Part 4's density — 20px between speakers, the air that makes a handful of considered turns read as considered.
+          <section className="flex flex-col gap-5" data-testid="thread-group">
+            {turns.map((draft) => {
+              const day = dayLabel(draft.createdAt);
+              const divider = day !== previousDay;
+              previousDay = day;
+              return (
+                <div className="flex flex-col gap-5" key={draft.id}>
+                  {divider && <p className="self-center type-identifier text-[var(--faint)]">{day}</p>}
+                  <Turn draft={draft} />
+                </div>
+              );
+            })}
+          </section>
+        )}
+        {/* What your duo has to say about training: a few cards, batched and paced, after the last turn — the way the newest thing in any chat is at the bottom. */}
+        <div className="mt-5">
+          <TrainingCards api={api} />
+        </div>
       </div>
-      <Composer api={api} thread={thread} threadLabel={threadLabel} />
+      {/* Answers waiting on you: above the composer, never in the transcript (AR-14). */}
+      {waiting.length > 0 && (
+        <div className="flex max-h-96 flex-col overflow-y-auto" data-testid="duo-drafts">
+          {waiting.map((draft, index) => (
+            <DraftTray api={api} draft={draft} key={draft.id} keyboard={index === 0} />
+          ))}
+        </div>
+      )}
+      <Composer api={api} thread={null} />
     </div>
   );
 }

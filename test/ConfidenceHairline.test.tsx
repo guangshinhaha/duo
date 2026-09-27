@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 // @ts-expect-error no node types by design
 import { fileURLToPath } from "node:url";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfidenceHairline, hairlineState } from "../src/components/ConfidenceHairline.js";
@@ -117,18 +117,19 @@ describe("#32 — the hairline sits in the gutter, on the leading edge", () => {
     expectGutterRule(screen.getByTestId("draft-card"));
   });
 
-  it("on a thread entry", async () => {
+  it("on a chat turn — the duo's answer behind its line, the Hairline form of the gutter rule (#144)", async () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([draft]), { status: 200 })));
+    const decided = { ...draft, provenance: { origin: "owner" as const }, outcome: "sent" as const, sentText: "as drafted" };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([decided]), { status: 200 })));
     window.location.hash = "#duo";
     render(<App />);
     try {
-      // #28: the route opens on the conversation list — pick the one
-      // conversation, then the entry (and its leading hairline) renders.
-      const conversation = await screen.findByTestId("conversation-entry");
-      fireEvent.click(conversation);
       const entry = await screen.findByTestId("thread-entry");
-      expectGutterRule(entry);
+      const answer = within(entry).getByTestId("duo-answer");
+      // The line leads the block, flush on its square leading edge, in the state's own colour.
+      expect(answer).toHaveAttribute("data-duo-line", "confident");
+      const block = answer.querySelector(".shape-duo-line") as HTMLElement;
+      expect(block.style.getPropertyValue("--duo-line")).toBe("var(--confident)");
     } finally {
       window.location.hash = "";
     }

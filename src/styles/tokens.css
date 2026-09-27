@@ -18,6 +18,10 @@
 }
 
 :root {
+  /* Hairline names (docs/design-language.md §3.2), values unchanged:
+     --bg Ink · --surface Graphite · --surface-2 Slate · --edge Edge ·
+     --text Paper · --muted Fog · --faint Dust · --accent Signal ·
+     --confident Moss · --escalate Amber · --refused Ash. */
   --bg: #0b0c0e;
   --surface: #141619;
   --surface-2: #1c1f24;
@@ -31,6 +35,10 @@
   --escalate: #d9a441;
   --confident: #4b9e6a;
   --refused: #6b7280;
+
+  --paper-warm: #edeae4; /* serif display on editorial surfaces only (the portrait) */
+  --font-reflection: "Newsreader Variable", "Iowan Old Style", Georgia, serif;
+  --font-record: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   --r-sm: 6px;
   --r-md: 10px;
@@ -53,6 +61,7 @@
   --escalate: #9a6b12;
   --confident: #23703f;
   --refused: #6b7280;
+  --paper-warm: #1d1c1a;
 
   color-scheme: light;
 }
@@ -70,6 +79,7 @@
     --escalate: #9a6b12;
     --confident: #23703f;
     --refused: #6b7280;
+    --paper-warm: #1d1c1a;
 
     color-scheme: light;
   }
@@ -125,9 +135,25 @@ h3 {
 }
 
 .type-identifier {
+  font-family: var(--font-record);
   font-size: 12px;
   line-height: 18px;
   font-weight: 560;
+}
+
+/*
+ * Hairline (docs/design-language.md §3.3): the Reflection role is the one
+ * place the product speaks *about the owner* — the duo's Portrait. Serif,
+ * never used for the duo's own words. Sizes 20/28/40/64 are the scale;
+ * only the portrait's 20 is used in the app today.
+ */
+.type-reflection {
+  font-family: var(--font-reflection);
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 400;
+  letter-spacing: -0.012em;
+  color: var(--paper-warm);
 }
 
 /*
@@ -163,6 +189,58 @@ h3 {
 .shape-entry-quiet {
   border-radius: var(--r-md);
   background: var(--surface-2);
+}
+
+/*
+ * Hairline: the duo's shape. Every duo-authored block renders through
+ * `DuoLine` and takes this — a flush 2px leading line in the block's
+ * state colour and a square leading edge, the one asymmetric shape in the
+ * product (docs/design-language.md §3.4, principle P1). Nothing that is
+ * not the duo's own words may use it, which is what makes it a label
+ * rather than a style: cover the words and you can still tell which blocks
+ * the duo wrote.
+ */
+.shape-duo-line {
+  position: relative;
+  border: 1px solid var(--edge);
+  border-left: 0;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--surface);
+}
+
+.shape-duo-line::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  background: var(--duo-line, var(--faint));
+  opacity: var(--duo-line-opacity, 1);
+}
+
+/* The mark: a solid bar for you, a hairline for your duo. */
+.duo-mark {
+  display: inline-flex;
+  gap: 2px;
+  height: 12px;
+  flex: none;
+  align-items: stretch;
+}
+
+.duo-mark i {
+  display: block;
+  border-radius: 1px;
+}
+
+.duo-mark i:first-child {
+  width: 3px;
+  background: var(--text);
+}
+
+.duo-mark i:last-child {
+  width: 1px;
+  background: var(--accent);
 }
 
 /*

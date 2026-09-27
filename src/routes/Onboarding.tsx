@@ -1,14 +1,22 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { useEmbedJob, useImportPaste, useKnowledge, useStartEmbed } from "../api/queries.js";
-import type { DuoKnowledge, EmbedJobStatus, PasteImportSummary } from "../api/types.js";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  queryKeys,
+  useDeriveJob,
+  useEmbedJob,
+  useImportClaude,
+  useImportPaste,
+  useKnowledge,
+  useStartDerive,
+  useStartEmbed,
+} from "../api/queries.js";
+import type { ClaudeImportSummary, DeriveJobStatus, DeriveStage, DuoKnowledge, EmbedJobStatus, PasteImportSummary } from "../api/types.js";
 import { MeterBar } from "../components/MeterBar.js";
 import { MutationError } from "../components/MutationError.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
-import type { WorkspaceConnection } from "../workspace/matrix.js";
-import { isDuoKnowledgeShape } from "./Knowledge.js";
-import { Review } from "./Review.js";
+import { isDuoKnowledgeShape } from "../profile/knowledgeWords.js";
 
 /**
  * How often the flow re-asks the daemon while something is in motion —
@@ -46,6 +54,19 @@ function importSentence(result: PasteImportSummary): string {
   return `Imported ${plural(result.written, "record")}. ${result.skipped} already present.${held}`;
 }
 
+/** A Claude export's outcome in the daemon's own counts — the conversations it read, the ones it judged work, what it wrote. */
+function claudeImportSentence(result: ClaudeImportSummary): string {
+  if (result.workRelevantConversationCount === 0) {
+    return `Read ${plural(result.conversationCount, "conversation")}; none were judged work-relevant, so nothing was imported.`;
+  }
+  const held =
+    result.discardedAboveCeiling > 0 ? ` ${result.discardedAboveCeiling} held back above the classification ceiling.` : "";
+  return `Read ${plural(result.conversationCount, "conversation")}, ${result.workRelevantConversationCount} work-relevant. Imported ${plural(
+    result.written,
+    "record",
+  )}. ${result.skipped} already present.${held}`;
+}
+
 function Step({
   id,
   state,
@@ -80,6 +101,8 @@ function ImportStep({ api, state }: { api: DuoApiConfig; state: StepState }) {
 
   return (
     <Step id="import" state={state} title="Import your history">
+      <ClaudeExportUpload api={api} />
+      <p className="type-provenance text-[var(--muted)]">Or paste a single conversation:</p>
       <form
         className="flex flex-col gap-3"
         onSubmit={(e) => {
@@ -126,6 +149,65 @@ function ImportStep({ api, state }: { api: DuoApiConfig; state: StepState }) {
   );
 }
 
+/**
+ * A Claude data export, uploaded whole: the file is read in the browser and
+ * its text sent to `POST /corpus/import-claude`, which parses it exactly as
+ * `duo import claude` does. Non-work conversations are dropped by the
+ * daemon's own work-relevance gate, not here.
+ */
+function ClaudeExportUpload({ api }: { api: DuoApiConfig }) {
+  const importClaude = useImportClaude(api);
+  const [readError, setReadError] = useState<string | null>(null);
+  const pending = importClaude.isPending;
+
+  return (
+    <div className="flex flex-col gap-2" data-testid="claude-export">
+      <label className="flex flex-col gap-1 type-body">
+        Claude export (conversations.json)
+        <input
+          accept=".json,application/json"
+          className="min-h-11 type-provenance"
+          data-testid="claude-export-file"
+          disabled={pending}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (!file) {
+              return;
+            }
+            setReadError(null);
+            file
+              .text()
+              .then((text) => importClaude.mutate(text))
+              .catch(() => setReadError("Couldn't read that file. Pick the conversations.json from your export."));
+          }}
+          type="file"
+        />
+      </label>
+      <p className="type-provenance text-[var(--muted)]">
+        Get it from claude.ai: Settings → Privacy → Export data. Unzip the download it sends you and pick <code>conversations.json</code>.
+        Only work conversations are kept.
+      </p>
+      {pending && (
+        <p aria-busy="true" className="type-provenance text-[var(--muted)]" data-testid="claude-import-progress" role="status">
+          Importing — your daemon is reading the export.
+        </p>
+      )}
+      {importClaude.data && (
+        <p className="type-body" data-testid="claude-import-summary">
+          {claudeImportSentence(importClaude.data)}
+        </p>
+      )}
+      {readError && (
+        <p className="type-provenance text-[var(--refused)]" role="status">
+          {readError}
+        </p>
+      )}
+      <MutationError error={importClaude.error} />
+    </div>
+  );
+}
+
 function EmbedStep({
   api,
   state,
@@ -142,7 +224,7 @@ function EmbedStep({
 
   let body: ReactNode;
   if (!imported) {
-    body = <p className="type-body text-[var(--muted)]">Waits for records to embed.</p>;
+    body = <p className="type-body text-[var(--muted)]">Waits for your messages and notes to be read.</p>;
   } else {
     const shown = status && status.state !== "idle" ? status : null;
     body = (
@@ -162,7 +244,7 @@ function EmbedStep({
               <MeterBar value={shown.total > 0 ? shown.embedded / shown.total : 0} />
             </div>
             <span className="type-provenance text-[var(--muted)]">
-              {running && shown.total === 0 ? "Starting…" : `${shown.embedded} of ${shown.total} records embedded`}
+              {running && shown.total === 0 ? "Starting…" : `${shown.embedded} of ${shown.total} messages and notes read`}
             </span>
           </div>
         )}
@@ -192,28 +274,98 @@ function EmbedStep({
   );
 }
 
-function DeriveStep({ knowledge, state }: { knowledge: DuoKnowledge; state: StepState }) {
+const STAGE_ORDER: readonly DeriveStage[] = ["pairs", "topics", "rules", "voice"];
+
+/** Each derive stage in words — what the daemon is doing, not a percentage. */
+const STAGE_WORDS: Record<DeriveStage, string> = {
+  pairs: "Finding the questions you were asked and how you answered",
+  topics: "Grouping them into topics",
+  rules: "Writing a rule per topic, citing your answers",
+  voice: "Describing how you write",
+};
+
+function DeriveStep({
+  api,
+  knowledge,
+  state,
+  status,
+}: {
+  api: DuoApiConfig;
+  knowledge: DuoKnowledge;
+  state: StepState;
+  status: DeriveJobStatus | undefined;
+}) {
+  const start = useStartDerive(api);
   const rules = ruleTotal(knowledge);
+  const running = status?.state === "running";
+  const currentIndex = status?.stage ? STAGE_ORDER.indexOf(status.stage) : -1;
+
   return (
-    <Step id="derive" state={state} title="Derive what it learned">
+    <Step id="derive" state={state} title="Build its rules and voice">
       {state === "waiting" ? (
         <p className="type-body text-[var(--muted)]">Waits for embedding.</p>
       ) : (
         <>
-          {state === "current" && (
+          {state === "current" && !running && (
             <p className="type-body text-[var(--muted)]">
-              Derivation runs on your Mac, not from here: run <code>duo derive pairs</code>, <code>duo derive topics</code>, then{" "}
-              <code>duo derive rules</code>. This page watches your daemon and carries on when your first rules appear.
+              Your duo reads what you imported and drafts its rules and voice from your own answers. It takes a few minutes.
             </p>
           )}
+          {status && status.state !== "idle" && (
+            <ol className="flex flex-col gap-1" data-testid="derive-stages" role="status">
+              {STAGE_ORDER.map((stage, index) => {
+                const stageState =
+                  status.state === "done" || index < currentIndex
+                    ? "done"
+                    : index === currentIndex
+                      ? status.state === "error"
+                        ? "failed"
+                        : "running"
+                      : "waiting";
+                return (
+                  <li
+                    className={`type-provenance ${stageState === "waiting" ? "text-[var(--faint)]" : "text-[var(--muted)]"}`}
+                    data-stage={stage}
+                    data-state={stageState}
+                    key={stage}
+                  >
+                    {STAGE_WORDS[stage]}
+                    {stageState === "done" ? " — done" : stageState === "running" ? "…" : stageState === "failed" ? " — failed" : ""}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+          {/* The daemon's own words for why the job died, verbatim. */}
+          {status?.state === "error" && status.error !== null && (
+            <p className="type-provenance text-[var(--refused)]" data-testid="derive-error" role="status">
+              {status.error}
+            </p>
+          )}
+          {state !== "done" && !running && (
+            <button
+              className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
+              data-testid="derive-start"
+              disabled={start.isPending}
+              onClick={() => start.mutate()}
+            >
+              {status?.state === "error" ? "Try again" : "Build my duo"}
+            </button>
+          )}
+          <MutationError error={start.error} />
           {/* The daemon's own counts, as `GET /knowledge` reports them — read, never recomputed. */}
-          <p className="type-provenance text-[var(--muted)]" data-testid="derive-progress" role="status">
+          <p className="type-provenance text-[var(--muted)]" data-testid="derive-progress">
             {plural(knowledge.corpus.totalQuestions, "question")} found · {plural(knowledge.corpus.topicBreakdown.length, "topic")} ·{" "}
-            {plural(rules, "rule")} derived
+            {plural(rules, "rule")} worked out
           </p>
+          {status?.state === "done" && rules === 0 && (
+            <p className="type-body text-[var(--muted)]" data-testid="derive-no-rules">
+              Finished, but no rules came out yet — usually too little history. Import more conversations, embed, and build again.
+            </p>
+          )}
           {state === "done" && (
-            <a className="inline-flex min-h-11 items-center self-start underline" href="#mirror">
-              Review your rules in the Mirror
+            <a className="inline-flex min-h-11 items-center self-start underline" href="#duo/profile/rules">
+              Review your rules
             </a>
           )}
         </>
@@ -235,14 +387,27 @@ function DeriveStep({ knowledge, state }: { knowledge: DuoKnowledge; state: Step
  * second device, or a terminal run alongside all agree, and the flow
  * resumes where the daemon actually is.
  *
- * The surface adds no behaviour: import and embed are #176's routes.
- * Derivation has none (`duo derive` is a terminal stage), so this page
- * says where it runs and watches `GET /knowledge` for its effect rather
- * than offering a button that pretends to start it.
+ * The surface adds no behaviour: import and embed are #176's routes, and
+ * derivation is the daemon's derive job (`POST`/`GET /corpus/derive` —
+ * pairs, topics, rules, voice, the same stages `duo derive` runs). Its
+ * effect is still read off `GET /knowledge`: the first rule is the finish.
  */
 export function Onboarding({ api, onFinish, pollMs = POLL_MS }: { api: DuoApiConfig; onFinish: () => void; pollMs?: number }) {
   const embed = useEmbedJob(api, pollMs);
-  const embedDone = embed.data?.state === "done";
+  const derive = useDeriveJob(api, pollMs);
+  const deriveStarted = derive.data?.state === "running" || derive.data?.state === "done" || derive.data?.state === "error";
+  // The embed job is process-bound, so a daemon restart forgets it ran; a
+  // derive job that has started at all proves embedding was already done.
+  const embedDone = embed.data?.state === "done" || deriveStarted;
+  // A finished derive job has moved what Knowledge counts — re-read it once
+  // so the first rules land (and onboarding finishes) without waiting on a poll.
+  const queryClient = useQueryClient();
+  const deriveState = derive.data?.state;
+  useEffect(() => {
+    if (deriveState === "done") {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.knowledge });
+    }
+  }, [deriveState, queryClient]);
   const knowledge = useKnowledge(api, {
     // Derivation is watched only once there is something to watch: after
     // embedding, until the first rule exists.
@@ -288,35 +453,35 @@ export function Onboarding({ api, onFinish, pollMs = POLL_MS }: { api: DuoApiCon
   const imported = data.records.total > 0;
   const importState: StepState = imported || deriveDone ? "done" : "current";
   const embedState: StepState = embedDone || deriveDone ? "done" : imported ? "current" : "waiting";
-  const deriveState: StepState = deriveDone ? "done" : embedDone ? "current" : "waiting";
+  const deriveStepState: StepState = deriveDone ? "done" : embedDone ? "current" : "waiting";
 
   return (
     <div className="flex flex-col gap-6 p-6" data-testid="onboarding">
       <header className="flex flex-col gap-1">
         <h1 className="type-heading">Build your duo</h1>
         <p className="type-provenance text-[var(--muted)]">
-          Import your history, let it be embedded and derived, then approve or reject what your duo learned. You never write it — you approve a draft of it.
+          Import your history, let your duo read it and work out rules, then approve or reject what your duo learned. You never write it — you approve a draft of it.
         </p>
       </header>
       <ol aria-label="Steps" className="flex max-w-xl flex-col gap-4">
         <ImportStep api={api} state={importState} />
         <EmbedStep api={api} imported={imported} state={embedState} status={embed.data} />
-        <DeriveStep knowledge={data} state={deriveState} />
+        <DeriveStep api={api} knowledge={data} state={deriveStepState} status={derive.data} />
       </ol>
     </div>
   );
 }
 
 /**
- * The default surface's door to onboarding (#49): Review, unless the
- * daemon says this duo is empty — then the address moves to `#onboarding`,
- * where the first run lives. A duo already built in a terminal is never
- * empty by the daemon's own facts, so it opens on Review exactly as
- * before. Review renders while the read is in flight and for any payload
- * that is not the daemon's documented shape: only a definite "empty" ever
- * redirects.
+ * The default surface's door to onboarding (#49): when the daemon says this
+ * duo is empty, the address moves to `#onboarding`, where the first run
+ * lives. A duo already built in a terminal is never empty by the daemon's own
+ * facts, so it opens on its chats exactly as before. The chat-first shell
+ * mounts this for the chat list and the waiting list, so a brand-new duo's
+ * first screen is its first run. It redirects only on a definite "empty": a
+ * payload that is not the daemon's documented shape is not an empty duo.
  */
-export function ReviewOrFirstRun({ api, connection = null }: { api: DuoApiConfig; connection?: WorkspaceConnection | null }) {
+export function useFirstRunRedirect(api: DuoApiConfig): void {
   const knowledge = useKnowledge(api);
   const empty = !!knowledge.data && isDuoKnowledgeShape(knowledge.data) && isEmptyDuo(knowledge.data);
   useEffect(() => {
@@ -324,5 +489,4 @@ export function ReviewOrFirstRun({ api, connection = null }: { api: DuoApiConfig
       window.location.hash = "#onboarding";
     }
   }, [empty]);
-  return <Review api={api} connection={connection} />;
 }

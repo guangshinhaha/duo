@@ -39,10 +39,15 @@ function revoked(): Response {
   return new Response(JSON.stringify(REVOKED_BODY), { status: 401 });
 }
 
+/** The waiting list shows the question inside a longer line ("Draft ready · …"), so it is matched as text within it. */
+const QUESTION = new RegExp(draft.question.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
 /** Renders the app with a stored pairing and a fetch mock whose failures the test flips mid-session. */
-function mountApp(fetchMock: ReturnType<typeof vi.fn>): ReturnType<typeof render> {
+function mountApp(fetchMock: ReturnType<typeof vi.fn>, hash = "#waiting"): ReturnType<typeof render> {
   localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "revoked-token" }));
   vi.stubGlobal("fetch", fetchMock);
+  // These tests are about the drafts queue: the waiting surface, not the chat list.
+  window.location.hash = hash;
   return render(<App />);
 }
 
@@ -69,7 +74,7 @@ describe("#41 — a revoked token returns to Setup; an unreachable daemon is not
 
     // One successful sync first, so there is a config and a cache to clear —
     // clearing them is the claim under test, not a side effect of never having had them.
-    await waitFor(() => expect(screen.getByText(draft.question)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(QUESTION)).toBeInTheDocument());
     await waitFor(() => expect(localStorage.getItem("duo-cache")).toContain("refund"), { timeout: 3000 });
 
     failWith401 = true;
@@ -86,13 +91,15 @@ describe("#41 — a revoked token returns to Setup; an unreachable daemon is not
 
   it("a 401 on a mutation returns to Setup the same way", async () => {
     let failWith401 = false;
-    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
       if (init?.method === "POST" && failWith401) {
         return revoked();
       }
-      return ok([draft]);
+      // The draft's own page reads the one draft; everything else reads the queue.
+      return ok(String(url).endsWith("/drafts/d1") ? draft : [draft]);
     });
-    mountApp(fetchMock);
+    // A draft with no chat of its own is decided on its own page.
+    mountApp(fetchMock, "#draft/d1");
     await waitFor(() => expect(screen.getByText(draft.question)).toBeInTheDocument());
 
     failWith401 = true;
@@ -115,7 +122,7 @@ describe("#41 — a revoked token returns to Setup; an unreachable daemon is not
       return ok([draft]);
     });
     mountApp(fetchMock);
-    await waitFor(() => expect(screen.getByText(draft.question)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(QUESTION)).toBeInTheDocument());
 
     failOffline = true;
     goHash("#duo");

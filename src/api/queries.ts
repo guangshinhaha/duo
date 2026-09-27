@@ -1,8 +1,27 @@
 import { useCallback, useRef } from "react";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
+import {
+  defaultShouldDehydrateQuery,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type Query,
+  type UseQueryOptions,
+} from "@tanstack/react-query";
 import { apiRequest, type DuoApiConfig } from "./client.js";
+import { createInvite, createOrg, listInvites, listOrgMembers, listOrgs, renameOrg, type CreateInviteInput } from "./hosted.js";
 import type {
+  AskLinkRow,
   AuditEntry,
+  ClaudeImportSummary,
+  DeriveJobStatus,
+  GrantOutcome,
+  MintedAskLink,
+  ConnectorStatus,
+  MintedConnector,
+  MintedDevice,
+  PromotionOffer,
+  TrustTier,
   ChannelPolicy,
   ChannelSummary,
   CorrectionCandidate,
@@ -10,7 +29,6 @@ import type {
   DraftPipelineResult,
   DraftRecord,
   DuoKnowledge,
-  DuoSummary,
   EscalationUrgencyRate,
   EmbedJobStatus,
   GridRow,
@@ -44,7 +62,6 @@ export const DRAFTS_PAGE_SIZE = 50;
  * is the easiest bug to ship here (§3.2's own warning).
  */
 export const queryKeys = {
-  duos: ["duos"] as const,
   drafts: (opts?: { outcome?: DraftOutcome | "pending" }) => ["drafts", opts ?? {}] as const,
   // The paged shape of GET /drafts (#29). Keyed by an object like the
   // outcome filter so it can never collide with `draft(id)`'s string
@@ -75,20 +92,28 @@ export const queryKeys = {
   devices: ["devices"] as const,
   // #49: the daemon's one embed job — runtime state (one job, process-bound), so its own key rather than a corpus read.
   embedJob: ["corpus", "embed"] as const,
+  // Hosted mode: the daemon's one derive job (pairs → topics → rules → voice), runtime state like the embed job.
+  deriveJob: ["corpus", "derive"] as const,
+  // The ask links this duo has minted — never their tokens.
+  askLinks: ["ask-links"] as const,
+  connector: ["connector"] as const,
+  hostedInvites: ["hosted-invites"] as const,
+  hostedOrgs: ["hosted-orgs"] as const,
+  hostedOrgMembers: (orgId: string) => ["hosted-orgs", orgId, "members"] as const,
+  // Under the ["trust"] root: accepting a promotion or granting autonomy moves the grid too.
+  trustPromotions: ["trust", "promotions"] as const,
   // #46: keyed by the submitted query — each distinct search is its own
   // cache entry, so revisiting a recent query is instant and a stale
   // search never blocks a new one.
   search: (q: string) => ["search", q] as const,
 };
 
-export function useDuos(api: DuoApiConfig, options?: Partial<UseQueryOptions<DuoSummary[]>>) {
-  return useQuery({ queryKey: queryKeys.duos, queryFn: () => apiRequest<DuoSummary[]>(api, "/duos"), ...options });
-}
-
-export function usePendingDrafts(api: DuoApiConfig) {
+/** `null` (a member with no duo paired) reads nothing: the query stays idle, and its data is `undefined`. */
+export function usePendingDrafts(api: DuoApiConfig | null) {
   return useQuery({
     queryKey: queryKeys.drafts({ outcome: "pending" }),
-    queryFn: () => apiRequest<DraftRecord[]>(api, "/drafts?outcome=pending"),
+    queryFn: () => apiRequest<DraftRecord[]>(api!, "/drafts?outcome=pending"),
+    enabled: api !== null,
   });
 }
 
@@ -119,12 +144,13 @@ export function useDraft(api: DuoApiConfig, id: string) {
  * so new drafts arriving above a loaded walk shift the windows without
  * leaving a gap at the seam.
  */
-export function useDraftsFeed(api: DuoApiConfig) {
+export function useDraftsFeed(api: DuoApiConfig | null) {
   return useInfiniteQuery({
     queryKey: queryKeys.draftsFeed,
+    enabled: api !== null,
     queryFn: ({ pageParam }) =>
       apiRequest<DraftRecord[]>(
-        api,
+        api!,
         pageParam === undefined
           ? `/drafts?limit=${DRAFTS_PAGE_SIZE}`
           : `/drafts?limit=${DRAFTS_PAGE_SIZE}&before=${encodeURIComponent(pageParam)}`,
@@ -475,12 +501,13 @@ export const T4_POLL_MS = 30_000;
  * background, because the notification this feeds is for the owner who is
  * not looking at the window.
  */
-export function usePendingT4(api: DuoApiConfig) {
+export function usePendingT4(api: DuoApiConfig | null) {
   return useQuery({
     queryKey: queryKeys.t4Pending,
-    queryFn: () => apiRequest<PendingT4RequestForJudgement[]>(api, "/actions/t4/pending"),
+    queryFn: () => apiRequest<PendingT4RequestForJudgement[]>(api!, "/actions/t4/pending"),
     refetchInterval: T4_POLL_MS,
     refetchIntervalInBackground: true,
+    enabled: api !== null,
   });
 }
 
@@ -525,5 +552,201 @@ export function useConfirmT4(api: DuoApiConfig) {
       apiRequest<PendingT4Request>(api, `/actions/t4/${encodeURIComponent(requestId)}/confirm`, { method: "POST" }),
     // Success or refusal, what is still waiting is the daemon's to say.
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.t4Pending }),
+  });
+}
+
+/**
+ * `POST /corpus/import-claude`: a Claude data export's conversations.json,
+ * sent as its raw text — the daemon parses it exactly as `duo import claude`
+ * does. Like the paste import, a success moves what Knowledge counts.
+ */
+export function useImportClaude(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (exportText: string) =>
+      apiRequest<ClaudeImportSummary>(api, "/corpus/import-claude", { method: "POST", body: JSON.stringify({ export: exportText }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.knowledge });
+    },
+  });
+}
+
+/** The derive job's status, polled only while the daemon says "running" — the embed job's shape. */
+export function useDeriveJob(api: DuoApiConfig, pollMs: number) {
+  return useQuery({
+    queryKey: queryKeys.deriveJob,
+    queryFn: () => apiRequest<DeriveJobStatus>(api, "/corpus/derive"),
+    refetchInterval: (query) => (query.state.data?.state === "running" ? pollMs : false),
+  });
+}
+
+/** `POST /corpus/derive` — starts the one derive job; a 409 (already running) re-reads the status rather than pretending to start a second. */
+export function useStartDerive(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiRequest<DeriveJobStatus>(api, "/corpus/derive", { method: "POST" }),
+    onSuccess: (status) => {
+      queryClient.setQueryData(queryKeys.deriveJob, status);
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.deriveJob });
+    },
+  });
+}
+
+export function useAskLinks(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.askLinks, queryFn: () => apiRequest<AskLinkRow[]>(api, "/ask-links") });
+}
+
+/** `POST /ask-links` — the answer carries the token, once; the caller shows it and the list is re-read (the list never carries it). */
+export function useCreateAskLink(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; expiresInHours?: number }) =>
+      apiRequest<MintedAskLink>(api, "/ask-links", { method: "POST", body: JSON.stringify(input) }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.askLinks });
+    },
+  });
+}
+
+export function useRevokeAskLink(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => apiRequest<void>(api, `/ask-links/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.askLinks });
+    },
+  });
+}
+
+/** `POST /devices` — pair another device from this one; the token comes back once. */
+export function usePairDevice(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name }: { name: string }) => apiRequest<MintedDevice>(api, "/devices", { method: "POST", body: JSON.stringify({ name }) }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.devices });
+    },
+  });
+}
+
+export function useConnector(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.connector, queryFn: () => apiRequest<ConnectorStatus>(api, "/connector") });
+}
+
+/** `POST /connector` — mints the claude.ai connector URL, revoking any earlier one; the path comes back once and the status is re-read. */
+export function useMintConnector(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiRequest<MintedConnector>(api, "/connector", { method: "POST" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.connector });
+    },
+  });
+}
+
+export function useTrustPromotions(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.trustPromotions, queryFn: () => apiRequest<PromotionOffer[]>(api, "/trust/promotions") });
+}
+
+/** Accept or decline one promotion offer — nothing promotes without this explicit call. Invalidates the whole ["trust"] root: offers and grid both move. */
+export function useDecidePromotion(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ topicId, tier, decision }: { topicId: string; tier: TrustTier; decision: "accept" | "decline" }) =>
+      apiRequest<unknown>(api, `/trust/promotions/${encodeURIComponent(topicId)}/${encodeURIComponent(tier)}`, {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["trust"] });
+    },
+  });
+}
+
+/** `POST /trust/grant` — answers the core's `GrantOutcome`; only "applied" moved anything, but the grid is re-read either way. */
+export function useGrantAutonomy(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { scopeText: string; tier: TrustTier; topicId?: string }) =>
+      apiRequest<GrantOutcome>(api, "/trust/grant", { method: "POST", body: JSON.stringify(input) }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["trust"] });
+    },
+  });
+}
+
+/**
+ * Hosted mode's admin surface (`GET/POST {origin}/hosted/invites`) — at the
+ * daemon's origin, not under this duo's base path, and authorised by this
+ * device's own token (the daemon checks it belongs to an admin's duo).
+ */
+export function useHostedInvites(origin: string, api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.hostedInvites, queryFn: () => listInvites(origin, api.token) });
+}
+
+/** The answer carries the invite code and link, once; the list is re-read and never carries either. */
+export function useCreateHostedInvite(origin: string, api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateInviteInput) => createInvite(origin, api.token, input),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.hostedInvites });
+    },
+  });
+}
+
+/**
+ * What the persisted `duo-cache` may hold (#70, #128). A message search is asked, answered and
+ * forgotten. The super admin's view of the server (the orgs, each org's people with their Google
+ * addresses, the invites) is fetched afresh per visit: it never rests in the browser after the
+ * screen closes, and a withdrawn admin never reloads to a cached roster.
+ */
+export function shouldPersistQuery(query: Query): boolean {
+  const [root, second] = query.queryKey;
+  return (
+    defaultShouldDehydrateQuery(query) &&
+    !(root === "workspace" && second === "search") &&
+    root !== "hosted-orgs" &&
+    root !== "hosted-invites"
+  );
+}
+
+/**
+ * The super admin's org screens (the `hosted/orgs` routes, same origin and same
+ * device token as the invites above). A 401 or 403 here is how the daemon
+ * says this account is not (or is no longer) a super admin, so it is not
+ * retried — the screen reads it and says so.
+ */
+export function useHostedOrgs(origin: string, api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.hostedOrgs, queryFn: () => listOrgs(origin, api.token), retry: false });
+}
+
+export function useHostedOrgMembers(origin: string, api: DuoApiConfig, orgId: string) {
+  return useQuery({
+    queryKey: queryKeys.hostedOrgMembers(orgId),
+    queryFn: () => listOrgMembers(origin, api.token, orgId),
+    retry: false,
+  });
+}
+
+export function useCreateHostedOrg(origin: string, api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => createOrg(origin, api.token, name),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.hostedOrgs });
+    },
+  });
+}
+
+export function useRenameHostedOrg(origin: string, api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { orgId: string; name: string }) => renameOrg(origin, api.token, input.orgId, input.name),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.hostedOrgs });
+    },
   });
 }

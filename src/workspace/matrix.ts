@@ -15,6 +15,7 @@ import {
   type Room as MatrixRoom,
 } from "matrix-js-sdk";
 import { localpartOf } from "./identity.js";
+import { normalizeHomeserverUrl } from "../homeserver.js";
 import {
   formattedBodyWithMentions,
   mentionAnchorsFrom,
@@ -53,7 +54,13 @@ export interface WorkspaceSession {
   /** The member's own Matrix user id, e.g. `@ana:workspace.example`. */
   readonly userId: string;
   readonly accessToken: string;
-  readonly deviceId: string;
+  /**
+   * The homeserver's device for this credential. Null for a hosted session
+   * (#127): an operator-minted credential has no device, and none is needed —
+   * the client is built with no device id and end-to-end encryption is never
+   * started, which is the only thing a device id is for here.
+   */
+  readonly deviceId: string | null;
 }
 
 /** What a room IS to the member reading the list — the shape drives how the entry reads, not just how it looks. */
@@ -225,8 +232,34 @@ export interface MessageSearchPage {
   readonly next: string | null;
 }
 
+/**
+ * The workspace refused this session's credential (`M_UNKNOWN_TOKEN`): it
+ * expired, or was signed out elsewhere. Carries the homeserver's own errcode so
+ * a caller that mocks this module can still recognise it by shape.
+ */
+export class SessionRejectedError extends Error {
+  readonly errcode = "M_UNKNOWN_TOKEN";
+
+  constructor() {
+    super("The workspace no longer accepts this sign-in.");
+    this.name = "SessionRejectedError";
+  }
+}
+
+/** What a caller may hear from a held connection besides its data. */
+export interface ConnectOptions {
+  /** The workspace answered `M_UNKNOWN_TOKEN` after the connection was up (the credential expired): the sync has stopped. Called once. */
+  readonly onSessionRejected?: () => void;
+}
+
 /** The held workspace connection: rooms, timelines, the message verbs, and live arrivals. */
 export interface WorkspaceConnection {
+  /**
+   * Swaps in a renewed credential without dropping the connection (#127: a
+   * hosted session is refreshed before it expires, and the conversation on
+   * screen must not blink). Absent on a stub.
+   */
+  renewToken?(accessToken: string): void;
   /** Whose connection this is — the member's own user id, the way the surface tells its own messages (editable, deletable) from everyone else's. */
   readonly userId: string;
   /** The member's conversations, ordered by latest activity — the server's answer, not this device's cache of it. */
@@ -336,22 +369,13 @@ export interface WorkspaceConnection {
   stop(): Promise<void>;
 }
 
+export { normalizeHomeserverUrl };
+
 /** The device name the homeserver shows beside this sign-in. */
 const DEVICE_DISPLAY_NAME = "Duo";
 
 /** How long `connect` waits for the first completed sync before giving up on the homeserver. */
 const FIRST_SYNC_TIMEOUT_MS = 20_000;
-
-function normalizeHomeserverUrl(raw: string): string {
-  const url = new URL(raw.trim());
-  if (url.protocol !== "https:") {
-    // The platform record's own rule for workspace URLs, mirrored from the
-    // core's settings validation: the token rides this URL, so plaintext is
-    // not a configuration, it's a leak.
-    throw new Error(`The workspace address must start with https — sign-in details travel it in the clear otherwise (got ${JSON.stringify(url.protocol)}).`);
-  }
-  return url.origin;
-}
 
 /**
  * Sign in with member credentials: one throwaway client that logs in,
@@ -412,7 +436,14 @@ function firstPreparedSync(client: MatrixClient): Promise<void> {
       cleanup();
       reject(new Error("The workspace didn't answer in time — check the address and try again."));
     }, FIRST_SYNC_TIMEOUT_MS);
-    const onSync = (state: SyncState): void => {
+    const onSync = (state: SyncState, _previous: SyncState | null, data?: { error?: unknown }): void => {
+      if (state === SyncState.Error && isTokenRejection(data?.error)) {
+        // The sync stops itself on this answer and would never reach Prepared:
+        // say so now instead of after the timeout.
+        cleanup();
+        reject(new SessionRejectedError());
+        return;
+      }
       if (state !== SyncState.Prepared) {
         return;
       }
@@ -426,6 +457,11 @@ function firstPreparedSync(client: MatrixClient): Promise<void> {
     client.on(ClientEvent.Sync, onSync);
     client.startClient({ lazyLoadMembers: true });
   });
+}
+
+/** The homeserver's "this credential is no longer valid" answer, however the SDK wrapped it. */
+function isTokenRejection(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { errcode?: unknown }).errcode === "M_UNKNOWN_TOKEN";
 }
 
 /**
@@ -770,14 +806,37 @@ function searchableText(event: SearchWireEvent): { body: string; threadRootEvent
 const LIVE_EVENT_TYPES = new Set<string>([EventType.RoomMessage, EventType.Reaction, EventType.RoomRedaction]);
 
 /** Hold the workspace connection for a stored session — resolves at the first completed sync, then serves rooms and timelines from it. */
-export async function connect(session: WorkspaceSession): Promise<WorkspaceConnection> {
+export async function connect(session: WorkspaceSession, options: ConnectOptions = {}): Promise<WorkspaceConnection> {
+  // No `deviceId` on purpose, for a stored and a hosted session alike: the SDK
+  // only needs one to start end-to-end encryption, which this client never
+  // does (no crypto, no store — see the header), and its sync and REST calls
+  // are authorised by the access token alone.
   const client = createClient({
     baseUrl: session.homeserverUrl,
     accessToken: session.accessToken,
     userId: session.userId,
   });
-  await firstPreparedSync(client);
+  try {
+    await firstPreparedSync(client);
+  } catch (error) {
+    // A connect that fails leaves no half-started client polling behind it.
+    client.stopClient();
+    throw error;
+  }
+  if (options.onSessionRejected) {
+    const onRejected = options.onSessionRejected;
+    const onSync = (state: SyncState, _previous: SyncState | null, data?: { error?: unknown }): void => {
+      if (state === SyncState.Error && isTokenRejection(data?.error)) {
+        client.off(ClientEvent.Sync, onSync);
+        onRejected();
+      }
+    };
+    client.on(ClientEvent.Sync, onSync);
+  }
   return {
+    renewToken: (accessToken) => {
+      client.setAccessToken(accessToken);
+    },
     userId: session.userId,
     rooms: async () => {
       // The mute half of the projection lives in the account's push rules —

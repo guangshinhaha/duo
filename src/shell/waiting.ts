@@ -1,0 +1,250 @@
+import { useQuery } from "@tanstack/react-query";
+import type { DuoApiConfig } from "../api/client.js";
+import { usePendingDrafts, usePendingT4 } from "../api/queries.js";
+import type { DraftRecord, PendingT4RequestForJudgement } from "../api/types.js";
+import { hairlineState, type HairlineState } from "../components/ConfidenceHairline.js";
+import { toDraftPipelineResult } from "../components/DraftCard.js";
+import { conversationOf, isOwnTurn } from "../workspace/drafts.js";
+import { bridgedHref, bridgedIdOf, isBridgedId, bridgedTitle, groupBridged, sourceLabel } from "./bridged.js";
+import { roomHref } from "../workspace/links.js";
+import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
+
+/**
+ * Where a piece of waiting work is decided (docs/design-language.md §6.2):
+ *
+ * - `chat`: a draft for a message that arrived in a conversation the member
+ *   holds — decided in that chat's tray.
+ * - `duo`: an answer to a question the owner asked their own duo — decided
+ *   in Your duo.
+ * - `bridged`: a question someone asked on another platform (Slack), read
+ *   as a chat with them (#150) — decided in that chat's tray.
+ * - `draft`: a draft with no chat of its own (a row that predates
+ *   provenance, or one addressed to a conversation this member does not
+ *   hold) — decided on its own page.
+ * - `confirmations`: an action staged for the owner's explicit yes.
+ */
+export type WaitingKind = "chat" | "duo" | "bridged" | "draft" | "confirmations";
+
+export interface WaitingItem {
+  /** Stable across refreshes: the room id, the draft id, or the kind. */
+  readonly key: string;
+  readonly kind: WaitingKind;
+  readonly href: string;
+  /** The room, for a chat. */
+  readonly roomId: string | null;
+  /** How many decisions wait behind this row. */
+  readonly count: number;
+  /** When the oldest of them arrived — rows sort by it, oldest first: the longest wait leads. */
+  readonly oldestAt: string;
+  /** The oldest one's state, in the hairline's own terms; `null` for a confirmation, which has no hairline. */
+  readonly state: HairlineState | null;
+  /** Whose question or what work, when there is no room to name it (a bridged asker, a channel). */
+  readonly label: string | null;
+  /** Where a bridged question came from, in the words a row shows ("Slack"). */
+  readonly source: string | null;
+  /** The question, for a draft row that has no chat above it to hold it. */
+  readonly question: string | null;
+  /** The drafts waiting behind this row, oldest first — empty for a confirmation. What a swipe on the row would decide. */
+  readonly drafts: readonly DraftRecord[];
+}
+
+/** The words a row's preview line uses for what waits. */
+export function waitingWords(item: Pick<WaitingItem, "kind" | "state" | "count">): string {
+  if (item.kind === "confirmations") {
+    return item.count === 1 ? "An action needs your yes" : `${item.count} actions need your yes`;
+  }
+  if (item.count > 1) {
+    return `${item.count} waiting on you`;
+  }
+  switch (item.state) {
+    case "escalated":
+      return "Passed to you";
+    case "refused":
+      return "Refused";
+    case "hedged":
+      return "Draft · hedging";
+    default:
+      return "Draft ready";
+  }
+}
+
+const byAge = (a: { oldestAt: string }, b: { oldestAt: string }): number => a.oldestAt.localeCompare(b.oldestAt);
+
+function askerOf(draft: DraftRecord): string | null {
+  const provenance = draft.provenance;
+  return provenance?.origin === "channel" ? `${provenance.channelKind} · ${provenance.askerRef}` : null;
+}
+
+/**
+ * Folds the two queues the daemon keeps — pending drafts and staged
+ * confirmations — into the rows of the "Waiting on you" filter. Pure: the
+ * caller says which rooms the member holds (a draft only belongs to a chat
+ * the member can open) and this decides where each piece of work lives.
+ */
+export function buildWaitingItems(
+  drafts: readonly DraftRecord[],
+  confirmations: readonly Pick<PendingT4RequestForJudgement, "createdAt">[],
+  rooms: readonly Pick<RoomSummary, "roomId">[],
+): WaitingItem[] {
+  const held = new Set(rooms.map((room) => room.roomId));
+  const groups = new Map<string, DraftRecord[]>();
+  const single: DraftRecord[] = [];
+  const add = (key: string, draft: DraftRecord): void => {
+    groups.set(key, [...(groups.get(key) ?? []), draft]);
+  };
+  for (const draft of drafts) {
+    const conversation = conversationOf(draft.provenance);
+    if (conversation !== null && held.has(conversation.roomId)) {
+      add(`chat:${conversation.roomId}`, draft);
+    } else if (isOwnTurn(draft)) {
+      add("duo", draft);
+    } else if (bridgedIdOf(draft) !== null) {
+      add(bridgedIdOf(draft)!, draft);
+    } else {
+      single.push(draft);
+    }
+  }
+  const oldest = (list: readonly DraftRecord[]): DraftRecord => [...list].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0]!;
+  const items: WaitingItem[] = [];
+  for (const [key, list] of groups) {
+    const first = oldest(list);
+    const chat = key.startsWith("chat:");
+    const bridged = isBridgedId(key);
+    const roomId = chat ? key.slice("chat:".length) : null;
+    const bridge = bridged ? groupBridged(list)[0]! : null;
+    items.push({
+      key: chat ? roomId! : bridged ? key : "duo",
+      kind: chat ? "chat" : bridged ? "bridged" : "duo",
+      href: chat ? roomHref(roomId!) : bridged ? bridgedHref(key) : "#duo",
+      roomId,
+      count: list.length,
+      oldestAt: first.createdAt,
+      state: hairlineState(toDraftPipelineResult(first)),
+      label: bridge ? bridgedTitle(bridge) : null,
+      source: bridge ? sourceLabel(bridge.channelKind) : null,
+      question: null,
+      drafts: [...list].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    });
+  }
+  for (const draft of single) {
+    items.push({
+      key: draft.id,
+      kind: "draft",
+      href: `#draft/${encodeURIComponent(draft.id)}`,
+      roomId: null,
+      count: 1,
+      oldestAt: draft.createdAt,
+      state: hairlineState(toDraftPipelineResult(draft)),
+      label: askerOf(draft),
+      source: null,
+      question: draft.question,
+      drafts: [draft],
+    });
+  }
+  if (confirmations.length > 0) {
+    items.push({
+      key: "confirmations",
+      kind: "confirmations",
+      href: "#confirmations",
+      roomId: null,
+      count: confirmations.length,
+      oldestAt: [...confirmations].map((c) => c.createdAt).sort()[0]!,
+      state: null,
+      label: null,
+      source: null,
+      question: null,
+      drafts: [],
+    });
+  }
+  return items.sort(byAge);
+}
+
+/** The workspace's rooms, read from the one cache entry every workspace surface shares. */
+export function useHeldRooms(connection: WorkspaceConnection | null): readonly RoomSummary[] {
+  const rooms = useQuery({
+    queryKey: ["workspace", "rooms"],
+    queryFn: () => connection!.rooms(),
+    enabled: connection !== null,
+    meta: { target: "workspace" },
+  });
+  return rooms.data ?? [];
+}
+
+/** What is waiting on the owner, as rows — and the loading state of the two queues behind it. */
+export function useWaitingItems(api: DuoApiConfig | null, connection: WorkspaceConnection | null) {
+  const drafts = usePendingDrafts(api);
+  const confirmations = usePendingT4(api);
+  const rooms = useHeldRooms(connection);
+  const items = buildWaitingItems(drafts.data ?? [], confirmations.data ?? [], rooms);
+  return {
+    items,
+    /** Decisions, not rows: what every count in the app says. */
+    count: items.reduce((total, item) => total + item.count, 0),
+    isLoading: drafts.isLoading,
+    error: drafts.error,
+    refetch: () => void drafts.refetch(),
+  };
+}
+
+/**
+ * The one number: drafts nobody has decided (a passed-on question is a draft
+ * too) plus actions staged for an explicit yes. The chip, the dock, the menu
+ * bar and the window title all read it from here, so they cannot disagree.
+ * `null` (no duo paired) is nothing waiting.
+ */
+export function useWaitingCount(api: DuoApiConfig | null): number {
+  const drafts = usePendingDrafts(api);
+  const confirmations = usePendingT4(api);
+  return (drafts.data?.length ?? 0) + (confirmations.data?.length ?? 0);
+}
+
+/**
+ * Whether a draft may be sent from outside the app — the menu-bar tray now,
+ * a notification or a swipe later (#151, #153, #154). Only a confident draft
+ * for a message somebody else sent: a hedged one wants your eyes on its
+ * reasoning, a passed-on question or a refusal has nothing to send, and a
+ * question you asked your own duo is answered in its chat, not sent. The
+ * decision is the same one the draft tray's Send makes; only where the
+ * button lives changes.
+ */
+export function canSendOutside(draft: DraftRecord): boolean {
+  return (
+    draft.outcome === null &&
+    !draft.escalated &&
+    !draft.refused &&
+    draft.draftText !== null &&
+    draft.draftText.trim() !== "" &&
+    !isOwnTurn(draft) &&
+    hairlineState(toDraftPipelineResult(draft)) === "confident"
+  );
+}
+
+/** Where a waiting draft is decided in the app — the chat it belongs to, Your duo, its bridged chat, or its own page. Pure, for surfaces with no workspace connection to look rooms up in. */
+export function draftHref(draft: DraftRecord): string {
+  const conversation = conversationOf(draft.provenance);
+  if (conversation !== null) {
+    return roomHref(conversation.roomId);
+  }
+  if (isOwnTurn(draft)) {
+    return "#duo";
+  }
+  const bridged = bridgedIdOf(draft);
+  return bridged !== null ? bridgedHref(bridged) : `#draft/${encodeURIComponent(draft.id)}`;
+}
+
+/**
+ * What a swipe on a row of the phone's waiting list may decide (#153). A
+ * swipe decides exactly one draft, so a row has swipe actions only when one
+ * draft waits behind it — and only chats and bridged chats, the places a
+ * draft is a reply to somebody. **Send** is `canSendOutside`'s rule and no
+ * looser: confident drafts only, never a hedged one or a passed-on question.
+ * **Dismiss** (held for an undo window, like every dismissal) is open to any
+ * draft the duo did not refuse, since a refusal has nothing to dismiss.
+ */
+export function swipeActionsOf(item: Pick<WaitingItem, "kind" | "drafts">): { send: DraftRecord | null; dismiss: DraftRecord | null } {
+  const only = item.drafts.length === 1 ? item.drafts[0]! : null;
+  if ((item.kind !== "chat" && item.kind !== "bridged") || only === null || only.outcome !== null) {
+    return { send: null, dismiss: null };
+  }
+  return { send: canSendOutside(only) ? only : null, dismiss: only.refused ? null : only };
+}

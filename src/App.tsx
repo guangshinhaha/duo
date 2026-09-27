@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Menu, X } from "lucide-react";
-import { defaultShouldDehydrateQuery, QueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { useApiConfig } from "./api/config.js";
@@ -9,40 +8,42 @@ import { useRevokedTokenGuard } from "./api/revocation.js";
 import { endedNoticeText, useEndedMarker } from "./api/lifecycle.js";
 import { useDraftReadySocket } from "./api/ws.js";
 import { SyncStatusProvider } from "./sync.js";
-import { OfflineBar } from "./components/OfflineBar.js";
 import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
 import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
-import { setDockBadgeCount } from "./dockBadge.js";
-import { setTrayPendingCount, wireTrayReview } from "./tray.js";
-import { usePendingDrafts, usePendingT4 } from "./api/queries.js";
+import { wireTrayReview } from "./tray.js";
+import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
+import { shouldPersistQuery } from "./api/queries.js";
 import type { DraftRecord } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
+import { Admin } from "./routes/Admin.js";
+import { Join } from "./routes/Join.js";
+import { Landing } from "./routes/Landing.js";
+import { configuredDaemonOrigin, pairedHostedAccount, readHostedAccount, writeHostedAccount } from "./api/hosted.js";
 import { Settings } from "./routes/Settings.js";
-import { Onboarding, ReviewOrFirstRun } from "./routes/Onboarding.js";
+import { Onboarding } from "./routes/Onboarding.js";
+import { WaitingHome } from "./shell/WaitingHome.js";
 import { Draft } from "./routes/Draft.js";
-import { Corrections } from "./routes/Corrections.js";
-import { Conversations, roomTitle } from "./routes/Conversations.js";
+import { BridgedChat } from "./shell/BridgedChat.js";
+import { isBridgedId } from "./shell/bridged.js";
+import { ChatShell } from "./shell/ChatShell.js";
+import { canonicalHash, isLegacyHash, roomOfRoute, routeFromHash, type Route, type SettingsSectionId } from "./shell/routes.js";
+import { roomTitle } from "./shell/roomTitle.js";
+import { roomHref } from "./workspace/links.js";
 import { Room } from "./routes/Room.js";
 import { RoomDrafts } from "./components/RoomDrafts.js";
 import { ThreadView } from "./routes/Thread.js";
 import { Duo } from "./routes/Duo.js";
-import { Trust } from "./routes/Trust.js";
-import { Audit } from "./routes/Audit.js";
 import { Confirmations } from "./routes/Confirmations.js";
-import { Mirror } from "./routes/Mirror.js";
-import { Knowledge } from "./routes/Knowledge.js";
-import { Channels } from "./routes/Channels.js";
-import { Escalations } from "./routes/Escalations.js";
 import { SearchOverlay } from "./components/SearchOverlay.js";
-import { DuoRoster } from "./components/DuoRoster.js";
 import { NoDuoPanel } from "./components/NoDuoPanel.js";
 import { PairDuoDialog } from "./components/PairDuoDialog.js";
 import { WorkspaceSignInDialog } from "./components/WorkspaceSignInDialog.js";
+import { isHostedAccess, useHostedWorkspace, WorkspaceAccessProvider } from "./workspace/access.js";
 import { useWorkspaceSession } from "./workspace/session.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "./workspace/identity.js";
 import type { LiveArrival, RoomSummary, WorkspaceConnection, WorkspaceSession } from "./workspace/matrix.js";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./components/primitives/Dialog.js";
+import { ProfilePane } from "./shell/ProfilePane.js";
 
 // §3.3: the cache persists to localStorage and rehydrates at launch. gcTime
 // is stretched to match maxAge — the 5-minute default would garbage-collect
@@ -81,119 +82,24 @@ const queryClient = new QueryClient({
 });
 const persister = createSyncStoragePersister({ storage: localStorage, key: "duo-cache" });
 
-/**
- * Route = the location hash, no router dependency (`client-tech-design.md`
- * §3.1's route tree is six entries; a library would be the only dependency
- * the client has that isn't load-bearing). `#review` — and the empty hash a
- * fresh launch opens with — stays the default surface for an owner-only
- * app: Review is the thing the app exists to open (client-design.md §1.5).
- * #62 adds the member's half: `#conversations` (the default once a
- * workspace session exists — the member's space) and `#room/:id`, one
- * conversation's own address. #64 adds `#thread/:room/:root`, a thread's
- * own address within it. The parameterized entries are objects so no
- * string compare can ever confuse them with a named route.
- */
-type Route =
-  | "review"
-  | "conversations"
-  | "corrections"
-  | "confirmations"
-  | "duo"
-  | "trust"
-  | "audit"
-  | "settings"
-  | "mirror"
-  | "knowledge"
-  | "channels"
-  | "escalations"
-  | "onboarding"
-  | { draft: string }
-  | { room: string; at?: string }
-  | { thread: { roomId: string; rootEventId: string; at?: string } };
+// Route = the location hash, no router dependency: the grammar, and where every
+// retired address lives now, is shell/routes.ts.
 
-function routeFromHash(hash: string, fallback: Route = "review"): Route {
-  if (hash.startsWith("#draft/")) {
-    let id = "";
-    try {
-      id = decodeURIComponent(hash.slice("#draft/".length));
-    } catch {
-      id = ""; // a malformed escape is no id at all — the fallback is the default
-    }
-    return id ? { draft: id } : fallback;
-  }
-  if (hash.startsWith("#thread/")) {
-    // Both halves are encoded whole, so the first `/` is the grammar's own
-    // separator — anything after it belongs to the root event's id.
-    const parts = hash.slice("#thread/".length).split("/");
-    let roomId = "";
-    let rootEventId = "";
-    let at = "";
-    try {
-      roomId = decodeURIComponent(parts[0] ?? "");
-      rootEventId = decodeURIComponent(parts[1] ?? "");
-      at = decodeURIComponent(parts[2] ?? ""); // #70: the reply a search hit landed at
-    } catch {
-      roomId = ""; // a malformed escape is no id at all
-    }
-    return roomId && rootEventId ? { thread: { roomId, rootEventId, ...(at ? { at } : {}) } } : "conversations";
-  }
-  if (hash.startsWith("#room/")) {
-    // #70: `#room/<room>/<event>` lands at an event in context — a search
-    // hit's address; encoded whole, so the first `/` is the grammar's own.
-    const parts = hash.slice("#room/".length).split("/");
-    let id = "";
-    let at = "";
-    try {
-      id = decodeURIComponent(parts[0] ?? "");
-      at = decodeURIComponent(parts[1] ?? "");
-    } catch {
-      id = ""; // a malformed escape is no id at all
-    }
-    return id ? { room: id, ...(at ? { at } : {}) } : "conversations";
-  }
-  if (hash === "#conversations") {
-    return "conversations";
-  }
-  // #68: Review is a named address too, not only the empty hash's default —
-  // with a workspace session the default is Conversations, and the link
-  // that says "#review" must still land on the queue.
-  if (hash === "#review") {
-    return "review";
-  }
-  if (hash === "#mirror") {
-    return "mirror";
-  }
-  if (hash === "#knowledge") {
-    return "knowledge";
-  }
-  if (hash === "#channels") {
-    return "channels";
-  }
-  if (hash === "#escalations") {
-    return "escalations";
-  }
-  if (hash === "#onboarding") {
-    return "onboarding";
-  }
-  if (hash === "#corrections") {
-    return "corrections";
-  }
-  if (hash === "#confirmations") {
-    return "confirmations";
-  }
-  if (hash === "#duo") {
-    return "duo";
-  }
-  if (hash === "#trust") {
-    return "trust";
-  }
-  if (hash === "#audit") {
-    return "audit";
-  }
-  if (hash === "#settings") {
-    return "settings";
-  }
-  return fallback;
+/**
+ * Invite-only hosted mode: `#join?host=…&invite=…` is an invite link, and it
+ * outranks every other surface — paired or not, a person who opened an
+ * invite sees the Join screen, never Setup or the shell. Tracked apart from
+ * `Route` because it is not a place in the app; it is the way in.
+ */
+function useJoinHash(): string | null {
+  const read = () => (window.location.hash.startsWith("#join") ? window.location.hash : null);
+  const [hash, setHash] = useState<string | null>(read);
+  useEffect(() => {
+    const onHashChange = () => setHash(read());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  return hash;
 }
 
 function useHashRoute(fallback: Route): Route {
@@ -205,13 +111,21 @@ function useHashRoute(fallback: Route): Route {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, [fallback]);
 
-  // The default surface follows the shell: signing in makes Conversations
-  // the empty-hash route, signing out gives the empty hash back to Review —
-  // so the fallback changing re-derives a still-empty hash. A non-empty
-  // hash is the member's own navigation and keeps standing.
+  // The default surface follows the shell: the fallback changing re-derives a
+  // still-empty hash. A non-empty hash is the member's own navigation and
+  // keeps standing.
   useEffect(() => {
     setRoute(routeFromHash(window.location.hash, fallback));
   }, [fallback]);
+
+  // A retired address (a bookmark, a notification's tag, an old link) already
+  // rendered its new home above; rewrite the bar to that home in place, with
+  // no history entry, so it never keeps teaching the old names.
+  useEffect(() => {
+    if (isLegacyHash(window.location.hash)) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${canonicalHash(route)}`);
+    }
+  }, [route]);
 
   return route;
 }
@@ -224,20 +138,7 @@ function useHashRoute(fallback: Route): Route {
  * its room in the first segment.
  */
 function openRoomIdFromHash(hash: string): string | null {
-  const decode = (encoded: string): string | null => {
-    try {
-      return decodeURIComponent(encoded);
-    } catch {
-      return null; // a malformed escape is no id at all
-    }
-  };
-  if (hash.startsWith("#room/")) {
-    return decode(hash.slice("#room/".length));
-  }
-  if (hash.startsWith("#thread/")) {
-    return decode(hash.slice("#thread/".length).split("/")[0] ?? "");
-  }
-  return null;
+  return roomOfRoute(routeFromHash(hash, "chats"));
 }
 
 /**
@@ -266,7 +167,7 @@ async function dispatchArrival(
     queryClient.getQueryData<readonly RoomSummary[]>(["workspace", "rooms"]) ?? (await connection.rooms());
   const room = rooms.find((candidate) => candidate.roomId === roomId);
   const title = room ? roomTitle(room) : roomId;
-  const hash = `#room/${encodeURIComponent(roomId)}`;
+  const hash = roomHref(roomId);
   // Whose duo it is comes from the id grammar, never a chosen name: the
   // member's own duo is the one acting on their behalf; a colleague's duo
   // is a participant like anyone else.
@@ -290,246 +191,22 @@ async function dispatchArrival(
   await postNotification(body, hash);
 }
 
-/** One sidebar entry: same shape either way, active vs muted — the whole difference between the routes' links. */
-function NavLink({
-  active,
-  href,
-  count,
-  badgeTestId = "review-badge",
-  onClick,
-  children,
-}: {
-  active: boolean;
-  href: string;
-  /** #22: a live count, shown only when non-zero — absent for entries that carry none. */
-  count?: number;
-  /** #52: which count this is — Review's by default; a second badge needs its own name for a test (and a reader) to tell them apart. */
-  badgeTestId?: string;
-  /** #38: the folded navigation passes this so following a link also
-   * dismisses it — an overlay must never outstay the route it chose. */
-  onClick?: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <a
-      className={`flex min-h-11 items-center gap-2 rounded-[var(--r-sm)] px-2 type-body ${
-        active ? "bg-[var(--surface)]" : "text-[var(--muted)]"
-      }`}
-      href={href}
-      onClick={onClick}
-    >
-      {children}
-      {count !== undefined && count > 0 && (
-        <span
-          data-testid={badgeTestId}
-          className="ml-auto rounded-full bg-[var(--accent)] px-2 type-identifier text-[var(--bg)]"
-        >
-          {count}
-        </span>
-      )}
-    </a>
-  );
-}
-
 /**
- * Review's sidebar entry with its count (#22 / §3.1: "badge = drafts where
- * outcome is null"). The count is the pending-drafts query itself, so it
- * already follows the one push channel: a `draft-ready` push invalidates
- * `["drafts"]`, the pending list refetches, and both badges move without a
- * manual refresh. The dock mirror lives here too — the one place the count
- * exists — and its cleanup clears the dock on unpair, so a stale count
- * never outlives its pairing.
+ * #128: the hosted account this browser is signed in as, when it is a super admin and it is the
+ * account of the server this app is paired with — what decides whether the Admin entry is drawn and
+ * what the Admin screen talks to. The sign-in answer's flag, read from this device: the daemon
+ * re-checks it on every admin call, so a stale "yes" only ever shows an entry whose screen then
+ * says it isn't for you. The bearer token is `api.token`, so the admin calls go to the origin of
+ * `api.baseUrl` and to no other: a stored account for a different server never receives it.
  */
-function ReviewLink({ api, active, onNavigate }: { api: DuoApiConfig; active: boolean; onNavigate?: () => void }) {
-  const { data } = usePendingDrafts(api);
-  const count = data?.length ?? 0;
-  useEffect(() => {
-    void setDockBadgeCount(count);
-    // #42: the menu-bar mirror — the same count, carried to the tray the
-    // same way. The cleanup clears it on unpair (and unmount) so a stale
-    // count never outlives its pairing, exactly like the dock's.
-    void setTrayPendingCount(count);
-    return () => {
-      void setDockBadgeCount(0);
-      void setTrayPendingCount(0);
-    };
-  }, [count]);
-  return (
-    <NavLink active={active} href="#review" count={count} onClick={onNavigate}>
-      Review
-    </NavLink>
-  );
+function adminAccount(api: DuoApiConfig | null) {
+  const account = pairedHostedAccount(api);
+  return account?.isAdmin ? account : null;
 }
 
-/**
- * #52: the Confirmations entry and its count — what is waiting on the
- * owner's explicit yes. The same polled read the watcher and the surface
- * hold (one query, deduped), so the badge and the notification can never
- * disagree about what is waiting.
- */
-function ConfirmationsLink({ api, active, onNavigate }: { api: DuoApiConfig; active: boolean; onNavigate?: () => void }) {
-  const { data } = usePendingT4(api);
-  return (
-    <NavLink active={active} href="#confirmations" count={data?.length ?? 0} badgeTestId="confirmations-badge" onClick={onNavigate}>
-      Confirmations
-    </NavLink>
-  );
-}
-
-/**
- * #38: the phone's notification surrogate (AR-15 — no push can reach a
- * browser tab over Tailscale), so Review's count is read without opening
- * anything. Same query the Review link observes; the badge is the point,
- * not a second source of truth.
- */
-function TopBarCount({ api }: { api: DuoApiConfig }) {
-  const { data } = usePendingDrafts(api);
-  const count = data?.length ?? 0;
-  if (count === 0) {
-    return null;
-  }
-  return (
-    <span data-testid="topbar-count" className="rounded-full bg-[var(--accent)] px-2 type-identifier text-[var(--bg)]">
-      {count}
-    </span>
-  );
-}
-
-/** #52: the phone's top-bar count for confirmations — beside Review's, its own number, because it is its own queue. */
-function TopBarConfirmations({ api }: { api: DuoApiConfig }) {
-  const { data } = usePendingT4(api);
-  const count = data?.length ?? 0;
-  if (count === 0) {
-    return null;
-  }
-  return (
-    <span aria-label={`${count} waiting for your confirmation`} data-testid="topbar-confirmations" className="rounded-full bg-[var(--refused)] px-2 type-identifier text-white">
-      {count}
-    </span>
-  );
-}
-
-/**
- * #38: the folded navigation — §1.5's "phone-width folds the same map, it
- * does not replace it". No tab bar, no second product: the same surfaces
- * nav, arranged for the width, with §3.1's one mobile-only rule applied —
- * Trust and Audit, the rare globals, share one "More" section instead of
- * two top-level entries. The dialog primitive (#34) supplies the focus
- * trap, Escape, and the scrim; every entry is still a real anchor, and
- * following one dismisses the overlay on the way through.
- *
- * #62: `api` is nullable now — a member signed in to the workspace with no
- * paired duo folds the member's map (Conversations, Settings, and the
- * pairing offer) instead of the owner's, the same conditional the sidebar
- * applies.
- */
-function MobileNav({
-  api,
-  session,
-  route,
-  open,
-  onOpenChange,
-  onDisconnect,
-  onPairDuo,
-}: {
-  api: DuoApiConfig | null;
-  session: WorkspaceSession | null;
-  route: Route;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onDisconnect: () => void;
-  onPairDuo: () => void;
-}) {
-  const close = () => onOpenChange(false);
-  // The same actives the sidebar computes — one map, folded differently.
-  const onReview = route === "review" || (typeof route === "object" && "draft" in route);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm" data-testid="mobile-nav">
-        <div className="flex items-center justify-between gap-2">
-          <DialogTitle className="type-heading">Duo</DialogTitle>
-          {/* The phone's dismissal: Escape is a keyboard's gesture, and a
-              scrim-tap is an invisible one — a labelled control is the
-              honest way out. */}
-          <button
-            aria-label="Close navigation"
-            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2"
-            onClick={close}
-          >
-            <X aria-label="Close navigation" size={20} />
-          </button>
-        </div>
-        <DialogDescription className="sr-only">The surfaces, folded for this width.</DialogDescription>
-        {/* #40: the same roster the sidebar carries — one map, folded. The
-            title stays "Duo" (the dialog's name); whose duos these are is
-            the roster's half to say. */}
-        {api ? <DuoRoster api={api} /> : <NoDuoPanel onPairDuo={onPairDuo} condensed />}
-        <nav aria-label="Surfaces" className="flex flex-col gap-1">
-          {api && <ReviewLink api={api} active={onReview} onNavigate={close} />}
-          {api && <ConfirmationsLink api={api} active={route === "confirmations"} onNavigate={close} />}
-          {session && (
-            <NavLink
-              active={route === "conversations" || (typeof route === "object" && ("room" in route || "thread" in route))}
-              href="#conversations"
-              onClick={close}
-            >
-              Conversations
-            </NavLink>
-          )}
-          {api && (
-            <>
-              <NavLink active={route === "corrections"} href="#corrections" onClick={close}>
-                Corrections
-              </NavLink>
-              <NavLink active={route === "duo"} href="#duo" onClick={close}>
-                Duo
-              </NavLink>
-              <NavLink active={route === "mirror"} href="#mirror" onClick={close}>
-                Mirror
-              </NavLink>
-              <NavLink active={route === "knowledge"} href="#knowledge" onClick={close}>
-                Knowledge
-              </NavLink>
-              <NavLink active={route === "channels"} href="#channels" onClick={close}>
-                Channels
-              </NavLink>
-              <NavLink active={route === "escalations"} href="#escalations" onClick={close}>
-                Escalations
-              </NavLink>
-              <section className="mt-2 flex flex-col gap-1">
-                <div className="px-2 type-provenance uppercase text-[var(--faint)]">More</div>
-                <NavLink active={route === "trust"} href="#trust" onClick={close}>
-                  Trust
-                </NavLink>
-                <NavLink active={route === "audit"} href="#audit" onClick={close}>
-                  Audit
-                </NavLink>
-              </section>
-            </>
-          )}
-          <NavLink active={route === "settings"} href="#settings" onClick={close}>
-            Settings
-          </NavLink>
-          {api && (
-            <button
-              className="mt-2 inline-flex min-h-11 items-center border-t border-[var(--edge)] px-2 pt-3 text-left type-provenance text-[var(--faint)]"
-              onClick={() => {
-                close();
-                onDisconnect();
-              }}
-            >
-              Forget this device
-            </button>
-          )}
-        </nav>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** #49: where onboarding lands — the Mirror, on the rules the daemon just derived. */
-function goToMirror(): void {
-  window.location.hash = "#mirror";
+/** #49: where onboarding lands — the duo's Rules, on the ones the daemon just derived, to approve or reject. */
+function goToRules(): void {
+  window.location.hash = "#duo/profile/rules";
 }
 
 /** What each route renders, and what it needs from the shell — one switch, each surface exactly once. */
@@ -545,16 +222,38 @@ interface SurfaceContext {
   onDuoEnded: () => void;
 }
 
-/** The §3.1 route tree as one switch — each route's surface, exactly once. Settings also mutates the connections, through App's single choke points. A duo surface reached without a pairing (a member's URL) explains and offers instead — #62's "offered rather than demanded". */
+/** Settings: the index of its sections, or one section alone (#148). */
+function settingsSurface(section: SettingsSectionId | "index", shell: SurfaceContext) {
+  return (
+    <Settings
+      api={shell.api}
+      onConfigChange={shell.setApi}
+      onDuoEnded={shell.onDuoEnded}
+      onPairDuo={shell.onPairDuo}
+      onSignOut={shell.signOutWorkspace}
+      onWorkspaceSignIn={shell.onWorkspaceSignIn}
+      section={section}
+      session={shell.session}
+    />
+  );
+}
+
+/** The route tree as one switch — each route's surface, exactly once. Settings also mutates the connections, through App's single choke points. A duo surface reached without a pairing (a member's URL) explains and offers instead — #62's "offered rather than demanded". The chat list itself (`chats`) is the shell's own, so it has no entry here. */
 function routeSurface(route: Route, shell: SurfaceContext) {
   if (typeof route === "object") {
-    if ("room" in route) {
+    if ("adminOrg" in route) {
+      return shell.api ? <Admin api={shell.api} origin={adminAccount(shell.api)?.origin ?? null} orgId={route.adminOrg} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
+    }
+    if ("chat" in route && isBridgedId(route.chat)) {
+      return shell.api ? <BridgedChat api={shell.api} chatId={route.chat} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
+    }
+    if ("chat" in route) {
       return (
         <Room
           at={route.at}
           connection={shell.connection}
-          roomId={route.room}
-          drafts={shell.api ? <RoomDrafts api={shell.api} roomId={route.room} /> : null}
+          roomId={route.chat}
+          drafts={shell.api ? <RoomDrafts api={shell.api} roomId={route.chat} /> : null}
         />
       );
     }
@@ -568,63 +267,55 @@ function routeSurface(route: Route, shell: SurfaceContext) {
         />
       );
     }
+    if ("profile" in route) {
+      return shell.api ? <ProfilePane api={shell.api} tab={route.profile} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
+    }
+    if ("settings" in route) {
+      return settingsSurface(route.settings, shell);
+    }
     return shell.api ? (
       <Draft api={shell.api} draftId={route.draft} connection={shell.connection} />
     ) : (
       <NoDuoPanel onPairDuo={shell.onPairDuo} />
     );
   }
-  // The routes below this line are the duo's own surfaces.
-  if (route !== "conversations" && route !== "settings" && !shell.api) {
+  // The routes below this line are the duo's own surfaces (Settings and the chat list are not).
+  if (route !== "chats" && route !== "settings" && !shell.api) {
     return <NoDuoPanel onPairDuo={shell.onPairDuo} />;
   }
   switch (route) {
-    case "conversations":
-      return (
-        <Conversations
-          connection={shell.connection}
-          error={shell.workspaceError}
-          onSignIn={shell.onWorkspaceSignIn}
-          onSignOut={shell.signOutWorkspace}
-        />
-      );
+    case "chats":
+      return null;
     case "settings":
-      return (
-        <Settings
-          api={shell.api}
-          session={shell.session}
-          onConfigChange={shell.setApi}
-          onSignOut={shell.signOutWorkspace}
-          onPairDuo={shell.onPairDuo}
-          onWorkspaceSignIn={shell.onWorkspaceSignIn}
-          onDuoEnded={shell.onDuoEnded}
-        />
-      );
-    case "mirror":
-      return <Mirror api={shell.api!} />;
-    case "knowledge":
-      return <Knowledge api={shell.api!} />;
-    case "channels":
-      return <Channels api={shell.api!} />;
-    case "escalations":
-      return <Escalations api={shell.api!} />;
-    case "corrections":
-      return <Corrections api={shell.api!} />;
+      return settingsSurface("index", shell);
+    case "admin":
+      return <Admin api={shell.api!} origin={adminAccount(shell.api)?.origin ?? null} orgId={null} />;
     case "confirmations":
       return <Confirmations api={shell.api!} />;
     case "duo":
       return <Duo api={shell.api!} />;
-    case "trust":
-      return <Trust api={shell.api!} />;
-    case "audit":
-      return <Audit api={shell.api!} />;
     case "onboarding":
       // #49: the first run, ending at the Mirror once the first rules exist.
-      return <Onboarding api={shell.api!} onFinish={goToMirror} />;
-    case "review":
-      // #49: Review, unless the daemon says this duo is empty — then its first run.
-      return <ReviewOrFirstRun api={shell.api!} connection={shell.connection} />;
+      return <Onboarding api={shell.api!} onFinish={goToRules} />;
+    case "waiting":
+      // What is waiting on the owner: the list filtered beside it, and this front door. (#49: an empty duo is taken to its first run by the shell.)
+      return <WaitingHome api={shell.api!} connection={shell.connection} />;
   }
+}
+
+/** The static landing page (`public/welcome.html`); its Sign in links come back to `/#signin`. */
+export const WELCOME_PATH = "/welcome.html";
+
+/** A visitor opened the bare root: no route, no invite, no query. Anything else is somewhere they meant to go. */
+export function opensOnWelcome(location: Pick<Location, "pathname" | "hash" | "search">): boolean {
+  return location.pathname === "/" && location.hash === "" && location.search === "";
+}
+
+function GoToWelcome() {
+  useEffect(() => {
+    window.location.replace(WELCOME_PATH);
+  }, []);
+  return null;
 }
 
 function AppShell() {
@@ -651,6 +342,28 @@ function AppShell() {
   // revocation — and this device's own memory is the one honest source for
   // saying "ended" instead. It outranks `revoked` wherever both could show.
   const [ended, setEnded] = useEndedMarker();
+  // #127: on a hosted build the workspace session is not typed in — the
+  // daemon hands the signed-in person their own, held in memory and never
+  // written to storage. From here on `activeSession` is whichever door this
+  // device uses: that one, or the stored manual sign-in of a personal daemon.
+  const hosted = useHostedWorkspace(api, () => {
+    // The daemon no longer knows this device: the same answer as any other 401.
+    if (!ended) {
+      setApi(null);
+      setRevoked(true);
+    }
+  });
+  const hostedActive = isHostedAccess(hosted.access);
+  const activeSession = hostedActive ? hosted.session : session;
+  // The public front door: a signed-out visitor who arrives at the bare
+  // root of a hosted build sees the landing page, not the sign-in card.
+  // Decided once, at arrival — signing out later returns to sign-in, never
+  // to marketing.
+  // A ref, not state: clearing it must never re-render the shell.
+  const arrivedAtFrontDoor = useRef(opensOnWelcome(window.location));
+  if (api || activeSession) {
+    arrivedAtFrontDoor.current = false;
+  }
   // #46: corpus search, openable from any route. ⌘K and Ctrl+K are the
   // same gesture on the two platforms this client ships to; the overlay
   // renders above whatever surface is on screen, so opening it costs
@@ -659,7 +372,6 @@ function AppShell() {
   // #38: the folded navigation's open state. Below the desktop width
   // there is no sidebar to be in — the surfaces live behind this one
   // control until called for.
-  const [navOpen, setNavOpen] = useState(false);
   // #39: the polite channel for draft arrivals — text set by the
   // draft-ready push below, self-cleared so each arrival announces.
   const [arrivalNotice, setArrivalNotice] = useState("");
@@ -729,7 +441,7 @@ function AppShell() {
     // a screen reader. The notice self-clears, because a live region
     // does not repeat identical content: the next arrival needs an empty
     // region to fill.
-    announce("A draft is waiting in the Review queue.");
+    announce("A draft is waiting on you.");
   });
 
   // #25/#69: one subscription for the app's life — a clicked notification
@@ -767,6 +479,32 @@ function AppShell() {
     return () => unwire?.();
   }, []);
 
+  // #151: the Mac shell's other doors into the app — what the menu-bar tray
+  // sends here ("open this chat"), the native menu's actions, and a decision
+  // made in the tray that this window's lists have not seen yet. All null
+  // outside the shell.
+  useEffect(() => {
+    const unwires: Array<() => void> = [];
+    let live = true;
+    const keep = (dispose: (() => void) | null): void => {
+      if (dispose === null) {
+        return;
+      }
+      if (live) {
+        unwires.push(dispose);
+      } else {
+        dispose();
+      }
+    };
+    void wireOpenHash().then(keep);
+    void wireMenu().then(keep);
+    void onDraftsChanged(() => void queryClient.invalidateQueries()).then(keep);
+    return () => {
+      live = false;
+      unwires.forEach((dispose) => dispose());
+    };
+  }, []);
+
   // Wraps the raw setter so the cache is cleared *before* the next
   // render, not reactively after it in a useEffect: React Query's
   // useQuery reads from cache synchronously during render, so an
@@ -779,6 +517,21 @@ function AppShell() {
   function setApi(next: DuoApiConfig | null): void {
     queryClient.clear();
     void persister.removeClient();
+    // Hosted mode: who this browser is signed in as goes with the pairing it
+    // describes — unpairing (forget, sign out, revocation, the duo's end)
+    // leaves no name or admin flag behind.
+    if (next === null) {
+      // The workspace session goes first: ended at the workspace with its own
+      // credential (the daemon cannot revoke it), then forgotten.
+      hosted.signOut();
+      writeHostedAccount(null);
+      if (hostedActive) {
+        // A hosted device ignores a stored manual sign-in and Settings offers no
+        // button to clear it, so it must not outlive the account here: signing
+        // out leaves no live workspace token behind in this browser.
+        setSessionRaw(null);
+      }
+    }
     setApiRaw(next);
   }
 
@@ -803,25 +556,53 @@ function AppShell() {
   // pays for it. A connect that fails sets `workspaceError` — surfaced by
   // Conversations with the way out — rather than silently staying empty.
   useEffect(() => {
-    if (!session) {
+    if (!activeSession) {
       return;
     }
+    const target = activeSession;
     let disposed = false;
+    let held: WorkspaceConnection | null = null;
     setWorkspaceError(null);
     void (async () => {
       const { connect } = await import("./workspace/matrix.js");
       try {
-        const handle = await connect(session);
+        const handle = hostedActive
+          ? await connect(target, {
+              // The credential expired while the conversations were open: the
+              // sync has stopped, so let go of it and ask for a fresh session.
+              onSessionRejected: () => {
+                if (disposed) {
+                  return;
+                }
+                connectionRef.current = null;
+                setConnection(null);
+                void held?.stop();
+                hosted.report("rejected");
+              },
+            })
+          : await connect(target);
         if (disposed) {
           void handle.stop();
           return;
         }
+        held = handle;
         connectionRef.current = handle;
         setConnection(handle);
-      } catch (reason) {
-        if (!disposed) {
-          setWorkspaceError(reason instanceof Error ? reason.message : "The workspace connection failed.");
+        if (hostedActive) {
+          hosted.report("up");
         }
+      } catch (reason) {
+        if (disposed) {
+          return;
+        }
+        if (hostedActive) {
+          // Nothing to sign out of here and nothing for the person to fix:
+          // the hook asks the daemon again (a fresh session if this one was
+          // refused, the same one after a pause if the workspace was slow).
+          hosted.report((reason as { errcode?: unknown } | null)?.errcode === "M_UNKNOWN_TOKEN" ? "rejected" : "failed");
+          return;
+        }
+        setWorkspaceError(reason instanceof Error ? reason.message : "The workspace connection failed.");
       }
     })();
     return () => {
@@ -834,8 +615,18 @@ function AppShell() {
       }
     };
     // The session object is stable per sign-in; its credential fields are
-    // its identity in practice.
-  }, [session?.homeserverUrl, session?.accessToken]);
+    // its identity in practice. A hosted session is renewed in place (below),
+    // so its identity is the hook's `reconnectKey`, which moves only when the
+    // connection has to be made again.
+  }, [activeSession?.homeserverUrl, hostedActive ? hosted.reconnectKey : activeSession?.accessToken]);
+
+  // #127: a renewed hosted credential replaces the old one under the open
+  // connection — the conversation on screen never blinks.
+  useEffect(() => {
+    if (hostedActive && hosted.session) {
+      connectionRef.current?.renewToken?.(hosted.session.accessToken);
+    }
+  }, [hostedActive, hosted.session?.accessToken]);
 
   // After the guard unpairs, Setup carries the explanation with it; a fresh
   // pairing is a first run again and must not keep saying "no longer paired".
@@ -857,205 +648,164 @@ function AppShell() {
     setApi(null);
   }
 
-  // #62: the default surface follows the shell — Conversations for a
-  // signed-in member (§1.5's default space), Review for the owner-only app.
-  const route = useHashRoute(session ? "conversations" : "review");
+  // The default surface is the chat list, whoever is signed in (docs/design-language.md §6.2).
+  const route = useHashRoute("chats");
+  const joinHash = useJoinHash();
 
-  if (!api && !session) {
+  if (joinHash) {
     return (
-      <Setup
-        notice={
-          ended
-            ? endedNoticeText(ended)
-            : revoked
-              ? "This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again."
-              : undefined
-        }
-        onConnect={(config) => {
+      <Join
+        alreadyPaired={!!api}
+        hash={joinHash}
+        onJoined={(config, account) => {
           setRevoked(false);
           setEnded(null);
           setApi(config);
+          writeHostedAccount(account);
+          // The invite is spent: its hash must not survive in history or a
+          // reload would offer the Join screen again for a used code.
+          window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#onboarding`);
+          window.dispatchEvent(new HashChangeEvent("hashchange"));
         }}
-        onWorkspaceSession={setSession}
       />
     );
+  }
+
+  if (!api && !activeSession) {
+    // A hosted build knows its server: the front door is sign-in, not an
+    // address form. Without VITE_DUO_DAEMON_URL the app is exactly the
+    // pair-with-your-Mac app it always was.
+    const hostedOrigin = configuredDaemonOrigin();
+    const connectManually = (config: DuoApiConfig) => {
+      setRevoked(false);
+      setEnded(null);
+      setApi(config);
+      writeHostedAccount(null);
+    };
+    const notice = ended
+      ? endedNoticeText(ended)
+      : revoked
+        ? hostedOrigin
+          ? "This browser was signed out — its device was revoked. Sign in again to continue."
+          : "This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again."
+        : undefined;
+    if (hostedOrigin && arrivedAtFrontDoor.current && !notice) {
+      return <GoToWelcome />;
+    }
+    if (hostedOrigin) {
+      return (
+        <Landing
+          notice={notice}
+          onConnect={connectManually}
+          onSignedIn={(config, account) => {
+            setRevoked(false);
+            setEnded(null);
+            setApi(config);
+            writeHostedAccount(account);
+          }}
+          onWorkspaceSession={setSession}
+          origin={hostedOrigin}
+        />
+      );
+    }
+    return <Setup notice={notice} onConnect={connectManually} onWorkspaceSession={setSession} />;
   }
 
   const openPairDuo = (): void => setPairOpen(true);
   const openWorkspaceSignIn = (): void => setSignInOpen(true);
 
+  const banners = (
+    <>
+      {/* #41 meets #62: a revoked pairing drops the member into the member
+          shell, and the reason must not vanish with Setup — the banner says
+          what happened until a fresh pairing clears it. */}
+      {/* #55: the same banner slot for an ended duo — and the true one: it
+          outranks "no longer paired", which the same 401 would say. */}
+      {ended && !api && (
+        <p
+          className="border-b border-[var(--edge)] bg-[var(--surface-2)] px-4 py-2 text-center type-provenance text-[var(--escalate)]"
+          data-testid="ended-notice"
+          role="status"
+        >
+          {endedNoticeText(ended)}
+        </p>
+      )}
+      {revoked && !ended && !api && (
+        <p
+          className="border-b border-[var(--edge)] bg-[var(--surface-2)] px-4 py-2 text-center type-provenance text-[var(--escalate)]"
+          data-testid="revoked-notice"
+          role="status"
+        >
+          This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again.
+        </p>
+      )}
+    </>
+  );
+  const overlays = (
+    <>
+      {/* #39: the app's polite live region — a draft arriving announces
+          here, once, never stealing focus. */}
+      <p className="sr-only" role="status">
+        {arrivalNotice}
+      </p>
+      {/* #52: the confirmation moment's ear — while paired, the pending
+          confirmations are read on an interval (the daemon has no push for
+          them); a new one notifies and announces here. It holds no way to
+          confirm anything. */}
+      {api && <ConfirmationWatcher api={api} onArrived={() => announce("An action is waiting for your confirmation.")} />}
+      {/* #46: over the screen, never instead of it — the main surface stays
+          mounted underneath while search is open. */}
+      {searchOpen && api && <SearchOverlay api={api} onClose={() => setSearchOpen(false)} />}
+    </>
+  );
+  const footer = (
+    <>
+      {adminAccount(api) && (
+        <a
+          aria-current={route === "admin" || (typeof route === "object" && "adminOrg" in route) ? "page" : undefined}
+          className="inline-flex min-h-11 items-center type-provenance text-[var(--muted)] aria-[current=page]:text-[var(--text)]"
+          href="#admin"
+        >
+          Admin
+        </a>
+      )}
+      {api && (
+        <button className="inline-flex min-h-11 items-center text-left type-provenance text-[var(--faint)]" onClick={() => setApi(null)}>
+          {/* Hosted mode says "Sign out" for the same local forget: the
+              browser holds a signed-in device, and signing in again is one tap. */}
+          {readHostedAccount() ? "Sign out" : "Forget this device"}
+        </button>
+      )}
+    </>
+  );
+
   return (
+    <WorkspaceAccessProvider access={hosted.access}>
     <SyncStatusProvider>
-      {/* #38: a column on a phone, a row from the desktop breakpoint up —
-          the same shell folding, not a second one. dvh, not vh: mobile
-          Safari's collapsing URL bar would otherwise bury the composer. */}
-      <div className="flex h-dvh flex-col bg-[var(--bg)] text-[var(--text)] md:flex-row">
-        {/* #38: the narrow-width top bar — the sidebar's replacement is a
-            bar and one control, not a shrunken column (§1.5: no tab bar,
-            no second product). Gone entirely at the desktop width. */}
-        <header className="flex items-center justify-between gap-2 border-b border-[var(--edge)] p-3 md:hidden" data-testid="mobile-topbar">
-          <span className="px-1 type-provenance uppercase text-[var(--faint)]">Duo</span>
-          {api && <TopBarCount api={api} />}
-          {api && <TopBarConfirmations api={api} />}
-          <button
-            aria-label="Open navigation"
-            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2"
-            onClick={() => setNavOpen(true)}
-          >
-            {/* Self-labelled (the #34 icon law): an icon that speaks alone
-                says what it is; the button's name says what it does. */}
-            <Menu aria-label="Open navigation" size={20} />
-          </button>
-        </header>
-        <MobileNav
-          api={api}
-          session={session}
-          route={route}
-          open={navOpen}
-          onOpenChange={setNavOpen}
-          onDisconnect={() => setApi(null)}
-          onPairDuo={openPairDuo}
-        />
-        {/* #41 meets #62: a revoked pairing drops the member into the
-            member shell, and the reason must not vanish with Setup — the
-            banner says what happened until a fresh pairing clears it. */}
-        {/* #55: the same banner slot for an ended duo — and the true one:
-            it outranks "no longer paired", which the same 401 would say. */}
-        {ended && !api && (
-          <p
-            className="border-b border-[var(--edge)] bg-[var(--surface-2)] px-4 py-2 text-center type-provenance text-[var(--escalate)]"
-            data-testid="ended-notice"
-            role="status"
-          >
-            {endedNoticeText(ended)}
-          </p>
-        )}
-        {revoked && !ended && !api && (
-          <p
-            className="border-b border-[var(--edge)] bg-[var(--surface-2)] px-4 py-2 text-center type-provenance text-[var(--escalate)]"
-            data-testid="revoked-notice"
-            role="status"
-          >
-            This device is no longer paired. Run duo pair new on your Mac and paste the new token to pair again.
-          </p>
-        )}
-        <nav aria-label="Surfaces" className="hidden w-56 flex-col gap-1 border-r border-[var(--edge)] p-3 md:flex">
-          {/* #40: the duos the daemon reports, where the hardcoded wordmark
-              stood — `useDuos` stops being dead code the moment the shell
-              renders it. Falls back to the plain wordmark above. For a
-              member with no duo paired, the same slot explains and offers
-              (#62: pairing is offered, never demanded). */}
-          {api ? (
-            <>
-              <DuoRoster api={api} />
-              {/* A draft page belongs to the review loop — Review stays the
-                  lit entry while one is open, so the way back is always
-                  named. */}
-              <ReviewLink api={api} active={route === "review" || (typeof route === "object" && "draft" in route)} />
-              {/* #52: what waits on an explicit yes sits right under Review
-                  — the two queues the owner opens the app for. */}
-              <ConfirmationsLink api={api} active={route === "confirmations"} />
-            </>
-          ) : (
-            <NoDuoPanel onPairDuo={openPairDuo} condensed />
-          )}
-          {/* #62: Conversations — the member's default space — sits under
-              Review where §1.5 puts it, only when there is a workspace to
-              read. */}
-          {session && (
-            <NavLink
-              active={route === "conversations" || (typeof route === "object" && ("room" in route || "thread" in route))}
-              href="#conversations"
-            >
-              Conversations
-            </NavLink>
-          )}
-          {api && (
-            <>
-              {/* #44: the loop's second queue, directly under Review —
-                  deciding drafts and confirming what they taught are the
-                  same morning's work, so they read together, each still its
-                  own surface. */}
-              <NavLink active={route === "corrections"} href="#corrections">
-                Corrections
-              </NavLink>
-              <NavLink active={route === "duo"} href="#duo">
-                Duo
-              </NavLink>
-              <NavLink active={route === "trust"} href="#trust">
-                Trust
-              </NavLink>
-              <NavLink active={route === "audit"} href="#audit">
-                Audit
-              </NavLink>
-              <NavLink active={route === "mirror"} href="#mirror">
-                Mirror
-              </NavLink>
-              {/* #45: with the your-duo surfaces — what it derived (Mirror),
-                  then what it knows (Knowledge). */}
-              <NavLink active={route === "knowledge"} href="#knowledge">
-                Knowledge
-              </NavLink>
-              {/* #47: what the duo is reachable through — the bridged
-                  channels and whether each is working, right after what it
-                  knows. */}
-              <NavLink active={route === "channels"} href="#channels">
-                Channels
-              </NavLink>
-              {/* #54: then where that knowledge runs out — what it keeps
-                  having to ask about. */}
-              <NavLink active={route === "escalations"} href="#escalations">
-                Escalations
-              </NavLink>
-            </>
-          )}
-          <NavLink active={route === "settings"} href="#settings">
-            Settings
-          </NavLink>
-          {api && (
-            <button
-              className="mt-auto inline-flex min-h-11 items-center px-2 text-left type-provenance text-[var(--faint)]"
-              onClick={() => setApi(null)}
-            >
-              Forget this device
-            </button>
-          )}
-        </nav>
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {/* §3.3's bar rides above every surface — it is the one state that
-              is true of the whole app, not of whichever route is mounted. */}
-          <OfflineBar />
-          <main className="flex-1 overflow-y-auto">
-            {routeSurface(route, {
-              api,
-              session,
-              connection,
-              workspaceError,
-              setApi,
-              signOutWorkspace,
-              onPairDuo: openPairDuo,
-              onWorkspaceSignIn: openWorkspaceSignIn,
-              onDuoEnded: duoEnded,
-            })}
-          </main>
-          {/* #39: the app's polite live region — a draft arriving
-              announces here, once, never stealing focus. */}
-          <p className="sr-only" role="status">
-            {arrivalNotice}
-          </p>
-          {/* #52: the confirmation moment's ear — while paired, the pending
-              confirmations are read on an interval (the daemon has no push
-              for them); a new one notifies and announces here. It holds no
-              way to confirm anything. */}
-          {api && <ConfirmationWatcher api={api} onArrived={() => announce("An action is waiting for your confirmation.")} />}
-          {/* #46: over the screen, never instead of it — the main surface
-              stays mounted underneath while search is open. */}
-          {searchOpen && api && <SearchOverlay api={api} onClose={() => setSearchOpen(false)} />}
-        </div>
-      </div>
-      {/* #62's two doors, as overlays from the shell: pairing from the
-          member surfaces' offer, sign-in from Settings' empty state. Each
-          lands through the same choke point the front door uses. */}
+      <ChatShell
+        api={api}
+        banners={banners}
+        connection={connection}
+        footer={footer}
+        onPairDuo={openPairDuo}
+        onSignIn={openWorkspaceSignIn}
+        onSignOutWorkspace={signOutWorkspace}
+        overlays={overlays}
+        pane={routeSurface(route, {
+          api,
+          session: activeSession,
+          connection,
+          workspaceError,
+          setApi,
+          signOutWorkspace,
+          onPairDuo: openPairDuo,
+          onWorkspaceSignIn: openWorkspaceSignIn,
+          onDuoEnded: duoEnded,
+        })}
+        route={route}
+        session={activeSession}
+        workspaceError={workspaceError}
+      />
       <PairDuoDialog
         open={pairOpen}
         onOpenChange={setPairOpen}
@@ -1075,6 +825,7 @@ function AppShell() {
         }}
       />
     </SyncStatusProvider>
+    </WorkspaceAccessProvider>
   );
 }
 
@@ -1089,10 +840,9 @@ export function App() {
         // #70: a message search is asked, answered, and forgotten — what a
         // member looked for, and what came back, never rests in storage, and
         // a restored answer could never outlive a membership that ended.
-        dehydrateOptions: {
-          shouldDehydrateQuery: (query) =>
-            defaultShouldDehydrateQuery(query) && !(query.queryKey[0] === "workspace" && query.queryKey[1] === "search"),
-        },
+        // #128: nor does the super admin's view of the server — the orgs, who is in them (names and
+        // Google addresses) and the invites — rest in storage; it is fetched afresh each visit.
+        dehydrateOptions: { shouldDehydrateQuery: shouldPersistQuery },
       }}
     >
       <AppShell />

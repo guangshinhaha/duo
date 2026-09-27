@@ -187,7 +187,7 @@ function EndDuoBody({
             <ul className="flex list-disc flex-col gap-1 pl-5 type-provenance text-[var(--muted)]">
               <li>Your duo stops answering — here and on every paired device. Every pairing to it, this one included, stops working.</li>
               <li>
-                Deleted: {files(preview.storePaths.length)} of what your duo knows, and {files(preview.duoDirPaths.length)} derived from it.
+                Deleted: {files(preview.storePaths.length)} of what your duo knows, and {files(preview.duoDirPaths.length)} built from it.
               </li>
             </ul>
             {/* The daemon's own lists, verbatim — "exactly what happens" is checkable, not paraphrased. */}

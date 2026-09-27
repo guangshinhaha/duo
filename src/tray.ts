@@ -34,7 +34,7 @@ export async function setTrayPendingCount(count: number): Promise<void> {
 export async function wireTrayReview(): Promise<(() => void) | null> {
   try {
     const unlisten = await listen("tray-open-review", () => {
-      window.location.hash = "#review";
+      window.location.hash = "#waiting";
     });
     return () => void unlisten();
   } catch {

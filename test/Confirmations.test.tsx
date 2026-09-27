@@ -210,17 +210,18 @@ describe("#52 AC1 — a pending confirmation reaches the owner", () => {
     localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
     render(<App />);
 
+    // The chat list carries its own count for what waits on an explicit yes — no
+    // push reaches a browser tab (AR-15) — and it is counted in Waiting on you too.
     const badge = await screen.findByTestId("confirmations-badge");
     expect(badge).toHaveTextContent("1");
-    // The phone's top bar carries its own count — no push reaches a browser tab (AR-15).
-    expect(screen.getByTestId("topbar-confirmations")).toHaveTextContent("1");
+    expect(screen.getByTestId("waiting-badge")).toHaveTextContent("1");
     await waitFor(() => expect(notifyConfirmationWaiting).toHaveBeenCalledTimes(1));
     // The polite live region carries it for a screen reader, without moving focus.
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("waiting for your confirmation"));
     expect(document.activeElement).toBe(document.body);
 
-    // …and the entry leads to the request itself.
-    const link = screen.getAllByRole("link", { name: /Confirmations/ })[0]!;
+    // …and the chip leads to the request itself.
+    const link = screen.getByTestId("confirmations-chip");
     expect(link).toHaveAttribute("href", "#confirmations");
     window.location.hash = "#confirmations";
     expect(await screen.findByTestId("confirmation-card")).toBeInTheDocument();

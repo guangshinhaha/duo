@@ -1,14 +1,15 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { App } from "../src/App.js";
-import { Review } from "../src/routes/Review.js";
-import { Corrections } from "../src/routes/Corrections.js";
+import { stubPhone } from "./desktop.js";
+import { DraftTray } from "../src/components/DraftTray.js";
+import { CandidateCard } from "../src/profile/CandidateCard.js";
 import { Duo } from "../src/routes/Duo.js";
 import { Setup } from "../src/routes/Setup.js";
 import { Settings } from "../src/routes/Settings.js";
-import { Trust } from "../src/routes/Trust.js";
+import { MayDo } from "../src/profile/MayDo.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import type { CorrectionCandidate, DraftRecord, GridRow } from "../src/api/types.js";
 
@@ -28,9 +29,9 @@ vi.mock("../src/notifications.js", () => ({
 /*
  * #38: responsive down to a phone browser (G4's mitigation — a responsive
  * web client reached over Tailscale in mobile Safari). The layout folds
- * at the desktop breakpoint, the navigation re-arranges rather than
- * shrinking (§1.5: "no tab bar, no second product"), §3.1's mobile rules
- * hold (Trust and Audit share one "More" section; rule authoring is gone
+ * at the desktop breakpoint: a phone shows the chat list or one screen
+ * pushed onto it, rather than a shrunken sidebar (§1.5: "no tab bar, no second product"), §3.1's mobile rules
+ * hold (the phone folds the same chat-first structure as the desktop, epic #138; rule authoring is gone
  * — AR-18), and every control is a real touch target.
  *
  * happy-dom does not apply media queries, so these tests pin the
@@ -103,7 +104,7 @@ const candidate: CorrectionCandidate = {
 
 const gridRow: GridRow = { topicId: "t1", topicLabel: "Refunds", tier: "T1", level: "approve", source: "earned", stale: false };
 
-/** The paired shell: config in storage, fetch stubbed, settled on Review. */
+/** The paired shell: config in storage, fetch stubbed, settled on its chats. */
 async function renderApp(routes: Record<string, unknown>) {
   localStorage.setItem("duo.api-config", JSON.stringify({ baseUrl: "http://d:7717", token: "t" }));
   const fetchMock = stubFetch(routes);
@@ -117,12 +118,6 @@ async function renderApp(routes: Record<string, unknown>) {
     expect(main().querySelector("h1")).not.toBeNull();
   });
   return view;
-}
-
-/** Opens the folded navigation and returns its element. */
-async function openMobileNav() {
-  fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
-  return screen.findByTestId("mobile-nav");
 }
 
 /** The 44px law, applied to every interactive element under a root. */
@@ -148,23 +143,21 @@ afterEach(() => {
 });
 
 describe("#38 AC1 — the app works on a phone", () => {
-  it("the shell stacks below the desktop width, and its one fixed-width element is gone with it", async () => {
+  it("the shell is one column sized to the dynamic viewport; the list is full width on a phone and a fixed column from md", async () => {
     const view = await renderApp({ "/drafts?outcome=pending": [] });
 
-    // The root is a column on a phone, a row from the desktop breakpoint
-    // up, sized to the dynamic viewport (mobile Safari's bar collapses
-    // dvh; a fixed 100vh would bury the composer under it).
+    // Sized to the dynamic viewport (mobile Safari's bar collapses dvh; a
+    // fixed 100vh would bury the composer under it).
     const root = view.container.querySelector("div") as HTMLElement;
     expect(root.className).toContain("flex-col");
-    expect(root.className).toContain("md:flex-row");
     expect(root.className).toContain("h-dvh");
 
-    // The sidebar is the desktop arrangement: hidden below md, flex from
-    // md up — a 14rem column cannot be what a phone renders.
-    const sidebar = view.container.querySelector('nav[aria-label="Surfaces"]') as HTMLElement;
-    expect(sidebar.className).toContain("w-56");
-    expect(sidebar.className).toMatch(/(^|\s)hidden\b/);
-    expect(sidebar.className).toMatch(/md:flex/);
+    // The chat list is a phone's whole home screen (full width) and, from md
+    // up, a 20rem column beside the open surface — never a wide sidebar on a phone.
+    const list = view.container.querySelector('[data-testid="chat-list-column"]') as HTMLElement;
+    expect(list.className).toContain("w-full");
+    expect(list.className).toContain("md:w-80");
+    expect(list.className).toContain("md:shrink-0");
 
     // The main column yields to its content rather than clipping it.
     const column = view.container.querySelector("main")?.parentElement as HTMLElement;
@@ -173,87 +166,68 @@ describe("#38 AC1 — the app works on a phone", () => {
 
   it("the surfaces with unbounded text truncate, they do not push width", async () => {
     vi.stubGlobal("fetch", stubFetch({ "/trust/grid": [gridRow] }));
-    renderWithClient(<Trust api={api} />);
-    // Trust's topic cell is the one row-shaped element with unbounded
+    renderWithClient(<MayDo api={api} />);
+    // May do's topic cell is the one row-shaped element with unbounded
     // text — it must yield (min-w-0) and clip (truncate), never widen.
-    const topic = await screen.findByTestId("trust-topic");
+    const topic = await screen.findByTestId("may-topic");
     expect(topic.className).toContain("min-w-0");
     expect(topic.className).toContain("truncate");
   });
 });
 
 describe("#38 AC2 — navigation adapts", () => {
-  it("a top bar carries a labelled menu control below the desktop width; nothing of it survives at md", async () => {
+  it("on a phone, a chat opens as a screen of its own, and the way back is always named", async () => {
+    stubPhone();
+    window.location.hash = "#duo";
     await renderApp({ "/drafts?outcome=pending": [] });
 
+    // The open surface alone — the list is not mounted behind it — under a
+    // top bar whose one control says where it goes and is a real touch target.
     const bar = await screen.findByTestId("mobile-topbar");
-    expect(bar.className).toContain("md:hidden");
-
-    const menu = within(bar).getByRole("button", { name: "Open navigation" });
-    // An icon-only control: named for what it does, a real touch target
-    // in both dimensions (#39 named it; #38 makes it hittable). Its
-    // desktop-width absence is the bar's — the parent is display:none
-    // from md up, and nothing inside a hidden bar renders.
-    expect(menu.className).toMatch(/min-w-11\b/);
-    expect(menu.className).toMatch(/min-h-11\b/);
+    expect(screen.queryByTestId("chat-list")).toBeNull();
+    const back = within(bar).getByRole("link", { name: "Back to chats" });
+    expect(back).toHaveAttribute("href", "#chats");
+    expect(back.className).toMatch(/min-h-11\b/);
   });
 
-  it("the menu opens the folded navigation; Review keeps its count, and a link closes it on the way through", async () => {
-    await renderApp({ "/drafts?outcome=pending": [draftFor("d1")] });
+  it("the home screen is the list: what is waiting on you reads without opening anything", async () => {
+    stubPhone();
+    await renderApp({ "/drafts?outcome=pending": [draftFor("d1", { provenance: { origin: "owner" } })] });
 
-    // The count is the phone's notification surrogate (AR-15: no push) —
-    // it must read without opening anything.
-    const bar = await screen.findByTestId("mobile-topbar");
-    expect(within(bar).getByTestId("topbar-count").textContent).toBe("1");
-
-    const nav = await openMobileNav();
-
-    // Review stays on top and its count still its own (§1.5).
-    const review = within(nav).getByRole("link", { name: /Review/ });
-    expect(review.getAttribute("href")).toBe("#review");
-    expect(within(review).getByTestId("review-badge").textContent).toBe("1");
-
-    // A link is a link — native href navigation — and following one
-    // hands the screen back (the overlay never outstays its route).
-    const corrections = within(nav).getByRole("link", { name: "Corrections" });
-    expect(corrections.getAttribute("href")).toBe("#corrections");
-    fireEvent.click(corrections);
-    await waitFor(() => expect(screen.queryByTestId("mobile-nav")).toBeNull());
-
-    // The phone's own dismissal is a labelled control, not a keyboard's
-    // Escape or an invisible scrim-tap.
-    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
-    await screen.findByTestId("mobile-nav");
-    fireEvent.click(screen.getByRole("button", { name: "Close navigation" }));
-    await waitFor(() => expect(screen.queryByTestId("mobile-nav")).toBeNull());
+    // The phone's notification surrogate (AR-15: no push) — the count is on
+    // the first screen, and the list is the page's one main landmark.
+    expect(await screen.findByTestId("waiting-badge")).toHaveTextContent("1");
+    expect(screen.queryByTestId("mobile-topbar")).toBeNull();
+    expect(screen.getByTestId("chat-list-column").tagName).toBe("MAIN");
+    // Your duo is pinned first, with the same count on its row.
+    expect(screen.getByTestId("duo-row-count")).toHaveTextContent("1");
   });
 });
 
 describe("#38 AC3 — §3.1's mobile rules hold", () => {
-  it("Trust and Audit fold into one secondary section at narrow width, and stay flat on the desktop sidebar", async () => {
-    const view = await renderApp({ "/drafts?outcome=pending": [] });
+  it("the phone folds the same structure — the list, then a screen pushed onto it — and never a second product", async () => {
+    stubPhone();
+    await renderApp({ "/drafts?outcome=pending": [] });
+    // Home: the list, no pane, no menu button to open and no tab bar.
+    expect(screen.getByTestId("chat-list")).toBeInTheDocument();
+    expect(screen.queryByTestId("pane")).toBeNull();
+    expect(screen.queryByRole("button", { name: /open navigation/i })).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    cleanup();
 
-    // The desktop sidebar first — its queries must run before the folded
-    // navigation opens, because the dialog primitive marks everything
-    // outside itself aria-hidden while it is open (#34's focus contract).
-    const sidebar = view.container.querySelector('nav[aria-label="Surfaces"]') as HTMLElement;
-    expect(within(sidebar).getByRole("link", { name: "Trust" }));
-    expect(within(sidebar).getByRole("link", { name: "Audit" }));
-    expect(within(sidebar).queryByText("More")).toBeNull();
-
-    // One "More" section, exactly the two rare surfaces in it.
-    const nav = await openMobileNav();
-    const more = within(nav).getByText("More").closest("section") as HTMLElement;
-    const moreLinks = within(more).getAllByRole("link");
-    expect(moreLinks.map((link) => link.textContent)).toEqual(["Trust", "Audit"]);
+    // A pushed screen: the pane, no list.
+    window.location.hash = "#duo";
+    await renderApp({ "/drafts?outcome=pending": [] });
+    expect(screen.getByTestId("pane")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-list")).toBeNull();
   });
 
   it("no rule-authoring affordance appears on a phone (AR-18) — read, approve, reject, promote stay", async () => {
     // The one free-text affordance that authors a standing-order: gated
     // out of narrow widths, still itself on the desktop it belongs to.
     vi.stubGlobal("fetch", stubFetch({ "/drafts?outcome=pending": [escalatedDraft] }));
-    renderWithClient(<Review api={api} />);
-    const answerInput = await screen.findByLabelText("Answer it yourself — becomes a standing-order candidate");
+    renderWithClient(<DraftTray api={api} draft={escalatedDraft} />);
+    const answerInput = await screen.findByLabelText("Answer it yourself");
     const authoring = answerInput.closest("div");
     expect(authoring?.className).toMatch(/(^|\s)hidden\b/);
     expect(authoring?.className).toContain("md:flex");
@@ -261,7 +235,7 @@ describe("#38 AC3 — §3.1's mobile rules hold", () => {
 
     // The verbs AR-18 spells out for mobile stay ungated: a verdict…
     vi.stubGlobal("fetch", stubFetch({ "/review?status=pending": [candidate] }));
-    renderWithClient(<Corrections api={api} />);
+    renderWithClient(<CandidateCard api={api} candidate={candidate} />);
     const approve = await screen.findByRole("button", { name: "Approve" });
     expect(approve.className).not.toMatch(/(^|\s)hidden\b/);
     cleanup();
@@ -277,16 +251,21 @@ describe("#38 AC3 — §3.1's mobile rules hold", () => {
 
 describe("#38 AC4 — touch targets are real", () => {
   it("every control on the reading surfaces is at least 44 CSS pixels tall", async () => {
-    // Review with both card kinds — the surface the phone exists for.
-    vi.stubGlobal("fetch", stubFetch({ "/drafts?outcome=pending": [draftFor("d1"), escalatedDraft] }));
-    const review = renderWithClient(<Review api={api} />);
-    await screen.findAllByTestId("draft-card");
+    // The draft tray with both kinds — the surface the phone exists for.
+    vi.stubGlobal("fetch", stubFetch({}));
+    const review = renderWithClient(
+      <>
+        <DraftTray api={api} draft={draftFor("d1")} />
+        <DraftTray api={api} draft={escalatedDraft} />
+      </>,
+    );
+    await screen.findAllByTestId("draft-tray");
     expectTouchTargets(review.container);
     cleanup();
 
-    // Corrections with a candidate.
+    // A correction candidate, as the Rules tab lists it.
     vi.stubGlobal("fetch", stubFetch({ "/review?status=pending": [candidate] }));
-    const corrections = renderWithClient(<Corrections api={api} />);
+    const corrections = renderWithClient(<CandidateCard api={api} candidate={candidate} />);
     await screen.findByTestId("candidate");
     expectTouchTargets(corrections.container);
     cleanup();

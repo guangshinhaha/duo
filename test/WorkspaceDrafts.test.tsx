@@ -172,6 +172,11 @@ function fakeDaemon(initial: DraftRecord[], delivery: DraftRecord["delivery"] = 
       );
       return json({});
     }
+    const single = /\/drafts\/([^/?]+)$/.exec(url);
+    if (single && (init?.method ?? "GET") === "GET") {
+      const found = log.find((draft) => draft.id === single[1]);
+      return found ? json(found) : json({ error: { code: "not_found", message: "no such draft" } }, 404);
+    }
     if (url.includes("/drafts?outcome=pending")) {
       return json(log.filter((draft) => draft.outcome === null));
     }
@@ -195,7 +200,7 @@ function navigate(hash: string): void {
   window.dispatchEvent(new Event("hashchange"));
 }
 
-const ROOM_HASH = `#room/${encodeURIComponent(PROJECT)}`;
+const ROOM_HASH = `#chat/${encodeURIComponent(PROJECT)}`;
 
 function seed({ paired = true }: { paired?: boolean } = {}) {
   localStorage.setItem("duo.workspace-session", JSON.stringify(SESSION));
@@ -215,38 +220,42 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-describe("#68 AC1 — a message here produces a draft, and it appears in Review", () => {
+describe("#68 AC1 — a message here produces a draft, and it is waiting on you in the chat it answers", () => {
   it("the draft carries the conversation and the message as its provenance, rendered as the daemon sent them", async () => {
+    // A draft page is where provenance reads in full — the daemon's strings, verbatim.
+    // (A draft for a conversation you hold opens that chat instead, below.)
     seed();
-    const daemon = fakeDaemon([draftFor({ id: "d1" })]);
+    const daemon = fakeDaemon([draftFor({ id: "d1", provenance: hereProvenance(ELSEWHERE) })]);
     vi.stubGlobal("fetch", daemon.fetchMock);
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
 
     await renderApp();
-    navigate("#review");
+    navigate("#draft/d1");
 
-    const entry = await screen.findByTestId("review-entry");
-    expect(within(entry).getByTestId("duo-message")).toHaveTextContent(DRAFT_TEXT);
+    const page = await screen.findByTestId("draft-page");
+    expect(within(page).getByTestId("duo-message")).toHaveTextContent(DRAFT_TEXT);
     // Who asked and where — the daemon's strings, verbatim; the kind is
     // whatever the daemon calls it, never mapped here.
-    expect(within(entry).getByTestId("draft-origin")).toHaveTextContent("Asked by @bose:workspace.example in native");
+    expect(within(page).getByTestId("draft-origin")).toHaveTextContent("Asked by @bose:workspace.example in native");
     // The message itself, addressed: the permalink the daemon recorded.
-    expect(within(entry).getByTestId("origin-permalink")).toHaveAttribute(
+    expect(within(page).getByTestId("origin-permalink")).toHaveAttribute(
       "href",
-      `https://matrix.to/#/${PROJECT}/${BOSE_EVENT}?via=workspace.example`,
+      `https://matrix.to/#/${ELSEWHERE}/${BOSE_EVENT}?via=workspace.example`,
     );
   });
 
-  it("names its conversation as a link into it, when the member has that conversation", async () => {
+  it("places the draft in its chat: in Waiting on you the row is the conversation, and it leads into it", async () => {
     seed();
     vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" })]).fetchMock);
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
 
     await renderApp();
-    navigate("#review");
+    navigate("#waiting");
 
-    const link = await screen.findByTestId("open-conversation");
-    expect(link).toHaveAttribute("href", ROOM_HASH);
+    const row = await screen.findByTestId("waiting-link");
+    expect(row).toHaveAttribute("href", ROOM_HASH);
+    expect(within(row).getByTestId("waiting-title")).toHaveTextContent("project-x");
+    expect(within(row).getByTestId("waiting-preview")).toHaveTextContent("Draft ready");
   });
 
   it("offers no conversation link for a room the member is not in", async () => {
@@ -257,21 +266,21 @@ describe("#68 AC1 — a message here produces a draft, and it appears in Review"
     vi.mocked(connect).mockResolvedValue(fakeConnection({}).connection);
 
     await renderApp();
-    navigate("#review");
+    navigate("#draft/d1");
     await screen.findByTestId("draft-origin");
     // Let the rooms read settle before asserting an absence.
     await waitFor(() => expect(vi.mocked(connect)).toHaveBeenCalled());
     expect(screen.queryByTestId("open-conversation")).toBeNull();
   });
 
-  it("the sidebar's Review count follows the draft, like any draft", async () => {
+  it("the Waiting on you count follows the draft, like any draft", async () => {
     seed();
     vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" }), draftFor({ id: "d2" })]).fetchMock);
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
 
     await renderApp();
 
-    expect((await screen.findAllByTestId("review-badge"))[0]).toHaveTextContent("2");
+    expect(await screen.findByTestId("waiting-badge")).toHaveTextContent("2");
   });
 });
 
@@ -408,7 +417,7 @@ describe("#68 AC2 — sending replies in the conversation, and delivery is visib
     const drafts = await screen.findByTestId("room-drafts");
     fireEvent.click(await within(drafts).findByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(within(drafts).queryByTestId("draft-card")).toBeNull());
+    await waitFor(() => expect(within(drafts).queryByTestId("draft-tray")).toBeNull());
     expect(await within(drafts).findByTestId("delivery-state")).toHaveTextContent("Delivered.");
   });
 });
@@ -424,7 +433,7 @@ describe("#68 AC3 — the owner is never pre-empted", () => {
     await renderApp();
     navigate(ROOM_HASH);
     const drafts = await screen.findByTestId("room-drafts");
-    await within(drafts).findByTestId("draft-card");
+    await within(drafts).findByTestId("draft-tray");
     // Give any eager behaviour every chance to fire.
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -446,12 +455,14 @@ describe("#68 AC3 — the owner is never pre-empted", () => {
     await renderApp();
     navigate(ROOM_HASH);
     const drafts = await screen.findByTestId("room-drafts");
-    const card = await within(drafts).findByTestId("draft-card");
+    const card = await within(drafts).findByTestId("draft-tray");
 
     // Structurally the duo's (AR-13): the generated text sits in the duo's
     // own container, attributed, never in a person's.
-    expect(within(card).getByTestId("duo-message-attribution")).toHaveTextContent("Your duo");
-    expect(within(card).getByTestId("duo-message")).toHaveTextContent(DRAFT_TEXT);
+    expect(within(card).getByTestId("draft-tray-attribution")).toHaveTextContent("Your duo");
+    expect(within(card).getByTestId("draft-tray-attribution")).toHaveTextContent("only you can see this");
+    expect(within(card).getByTestId("draft-tray-line")).toHaveTextContent(DRAFT_TEXT);
+    expect(within(card).getByTestId("draft-tray-line")).toHaveAttribute("data-duo-line", "confident");
     expect(within(drafts).getByTestId("room-drafts-notice")).toHaveTextContent("Only you can see your duo’s drafts");
   });
 
@@ -486,13 +497,13 @@ describe("#68 AC3 — the owner is never pre-empted", () => {
     navigate(ROOM_HASH);
     const drafts = await screen.findByTestId("room-drafts");
 
-    await waitFor(() => expect(within(drafts).getAllByTestId("draft-card")).toHaveLength(1));
-    expect(within(drafts).getByTestId("duo-message")).toHaveTextContent("For project-x.");
+    await waitFor(() => expect(within(drafts).getAllByTestId("draft-tray")).toHaveLength(1));
+    expect(within(drafts).getByTestId("draft-tray-line")).toHaveTextContent("For project-x.");
   });
 });
 
-describe("#68 AC4 — dispositioning from the conversation, with Review the durable home", () => {
-  it("a pending draft for the conversation shows there with Send, Edit and Ignore", async () => {
+describe("#68 AC4 — dispositioning from the conversation, with Waiting on you the durable count", () => {
+  it("a pending draft for the conversation shows there, as a tray, with Send, Edit and Dismiss", async () => {
     seed();
     vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" })]).fetchMock);
     vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
@@ -503,13 +514,15 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
 
     expect(await within(drafts).findByRole("button", { name: "Send" })).toBeInTheDocument();
     expect(within(drafts).getByRole("button", { name: "Edit" })).toBeInTheDocument();
-    expect(within(drafts).getByRole("button", { name: "Ignore" })).toBeInTheDocument();
-    // It answers a message: the words it answers are on the card.
-    expect(within(drafts).getByTestId("owner-message")).toHaveTextContent(BOSE_QUESTION);
-    expect(within(drafts).getByTestId("draft-origin")).toHaveTextContent("Asked by @bose:workspace.example in native");
+    expect(within(drafts).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    // It answers a message that is right above it in the conversation, so the
+    // tray does not repeat the question or who asked it: the transcript has both.
+    expect(within(drafts).queryByTestId("owner-message")).toBeNull();
+    expect(within(drafts).queryByTestId("draft-origin")).toBeNull();
+    expect(within(await screen.findByTestId("room-timeline")).getByText(BOSE_QUESTION)).toBeInTheDocument();
   });
 
-  it("opening the conversation dispositions nothing: the draft is still in Review, untouched", async () => {
+  it("opening the conversation dispositions nothing: the draft is still waiting on you, untouched", async () => {
     seed();
     const daemon = fakeDaemon([draftFor({ id: "d1" })]);
     vi.stubGlobal("fetch", daemon.fetchMock);
@@ -517,17 +530,17 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
 
     await renderApp();
     navigate(ROOM_HASH);
-    await within(await screen.findByTestId("room-drafts")).findByTestId("draft-card");
+    await within(await screen.findByTestId("room-drafts")).findByTestId("draft-tray");
     expect(daemon.outcomes).toEqual([]);
 
-    navigate("#review");
-    const entry = await screen.findByTestId("review-entry");
-    expect(within(entry).getByTestId("duo-message")).toHaveTextContent(DRAFT_TEXT);
+    navigate("#waiting");
+    expect(await screen.findByTestId("waiting-link")).toHaveAttribute("href", ROOM_HASH);
+    expect(screen.getByTestId("waiting-badge")).toHaveTextContent("1");
     // Reading is not deciding — nothing in the daemon moved.
     expect(daemon.log()[0]!.outcome).toBeNull();
   });
 
-  it("deciding it in the conversation clears it from Review too — one draft, one decision", async () => {
+  it("deciding it in the conversation clears it from Waiting on you too — one draft, one decision", async () => {
     seed();
     const daemon = fakeDaemon([draftFor({ id: "d1" })]);
     vi.stubGlobal("fetch", daemon.fetchMock);
@@ -539,11 +552,11 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
     fireEvent.click(await within(drafts).findByRole("button", { name: "Send" }));
     await waitFor(() => expect(daemon.outcomes).toHaveLength(1));
 
-    navigate("#review");
+    navigate("#waiting");
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
   });
 
-  it("Ignore holds the same undo window it does in Review, and records the discard only when it ends", async () => {
+  it("Dismiss holds the same undo window it did in Review, and records the discard only when it ends", async () => {
     seed();
     const daemon = fakeDaemon([draftFor({ id: "d1" })]);
     vi.stubGlobal("fetch", daemon.fetchMock);
@@ -552,9 +565,9 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
     await renderApp();
     navigate(ROOM_HASH);
     const drafts = await screen.findByTestId("room-drafts");
-    fireEvent.click(await within(drafts).findByRole("button", { name: "Ignore" }));
+    fireEvent.click(await within(drafts).findByRole("button", { name: "Dismiss" }));
 
-    expect(within(drafts).getByTestId("ignore-window")).toHaveTextContent("Ignoring — not sent yet.");
+    expect(within(drafts).getByTestId("ignore-window")).toHaveTextContent("Dismissing — not sent yet.");
     expect(daemon.outcomes).toEqual([]);
     fireEvent.click(within(drafts).getByRole("button", { name: "Undo" }));
     expect(within(drafts).getByRole("button", { name: "Send" })).toBeInTheDocument();
@@ -576,5 +589,49 @@ describe("#68 AC4 — dispositioning from the conversation, with Review the dura
     const drafts = await screen.findByTestId("room-drafts");
 
     expect(await within(drafts).findByTestId("escalation-reason")).toHaveTextContent("No rule covers refunds over 90 days.");
+  });
+});
+
+describe("#142 — an old draft address opens the chat the draft belongs to", () => {
+  it("#draft/:id for a message that arrived in a conversation you hold lands in that chat, on its tray", async () => {
+    seed();
+    vi.stubGlobal("fetch", fakeDaemon([draftFor({ id: "d1" })]).fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate("#draft/d1");
+
+    const tray = await within(await screen.findByTestId("room-drafts")).findByTestId("draft-tray");
+    expect(tray).toHaveTextContent(DRAFT_TEXT);
+    expect(window.location.hash).toBe(ROOM_HASH);
+  });
+
+  it("a question you asked your own duo opens in Your duo, on its tray", async () => {
+    seed();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    const daemon = fakeDaemon([draftFor({ id: "d1", provenance: { origin: "owner" } })]);
+    vi.stubGlobal("fetch", daemon.fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate("#draft/d1");
+
+    expect(await within(await screen.findByTestId("duo-drafts")).findByTestId("draft-tray")).toHaveTextContent(DRAFT_TEXT);
+    expect(window.location.hash).toBe("#duo");
+  });
+
+  it("a question bridged from another platform opens its own chat (#150)", async () => {
+    seed();
+    vi.stubGlobal(
+      "fetch",
+      fakeDaemon([draftFor({ id: "d1", provenance: { origin: "channel", channelKind: "slack", askerRef: "U1", threadId: null, permalink: null } })]).fetchMock,
+    );
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate("#draft/d1");
+
+    expect(await screen.findByTestId("bridged-chat")).toBeInTheDocument();
+    expect(window.location.hash).toBe(`#chat/${encodeURIComponent("bridge:slack:U1")}`);
   });
 });
