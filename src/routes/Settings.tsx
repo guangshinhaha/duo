@@ -19,7 +19,7 @@ import { ConnectToClaude } from "../components/ConnectToClaude.js";
 import { PairAnotherDevice } from "../components/PairAnotherDevice.js";
 import { AskLinks } from "../components/AskLinks.js";
 import { InvitePeople } from "../components/InvitePeople.js";
-import { readHostedAccount } from "../api/hosted.js";
+import { readHostedAccount, type AdminAccess } from "../api/hosted.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import {
   clearMissed,
@@ -59,7 +59,14 @@ export function Settings({
   onWorkspaceSignIn,
   onDuoEnded,
   section,
+  admin,
 }: {
+  /**
+   * The shell's answer to "is this device an admin of the server it is paired with" (`adminRoleOf`, from the
+   * daemon's live role). The invite tool and the "as an admin" line follow it, never the stored sign-in flag, and
+   * the token goes only to `admin.origin`, the paired server. Absent: no admin tools.
+   */
+  admin?: AdminAccess;
   /**
    * Which part of the settings is open: `"index"` is the list of sections, a
    * section id is that section alone, and no value at all is every section in
@@ -348,12 +355,12 @@ export function Settings({
         </section>
       )}
 
-        {api && account?.isAdmin && <InvitePeople api={api} origin={account.origin} />}
+        {api && admin?.role === "super" && admin.origin && <InvitePeople api={api} origin={admin.origin} />}
       {api && account && (
         <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-account">
           <h2 className="type-heading">Account</h2>
           <p className="type-body text-[var(--muted)]">
-            Signed in to {account.ownerName}&apos;s duo with Google{account.isAdmin ? ", as an admin of this server" : ""}.
+            Signed in to {account.ownerName}&apos;s duo with Google{admin?.role === "super" ? ", as an admin of this server" : ""}.
           </p>
           <p className="type-provenance text-[var(--muted)]">
             Signing out forgets this browser&apos;s connection; sign in again any time. To cut a browser off for good, revoke it under Devices.

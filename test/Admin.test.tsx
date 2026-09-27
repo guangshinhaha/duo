@@ -110,7 +110,7 @@ describe("#128 — who sees the way in", () => {
     const mock = daemon({});
     window.location.hash = "#admin";
     await renderShell();
-    expect(screen.getByTestId("admin-not-available")).toHaveTextContent("Only the person who runs this server can open this page.");
+    expect(screen.getByTestId("admin-not-available")).toHaveTextContent("This page is for admins, and your account isn't one right now. If that changed, ask an admin of your org.");
     expect(callsTo(mock, "GET", "/hosted/orgs")).toHaveLength(0);
   });
 
@@ -275,7 +275,7 @@ describe("#128 — one org", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ name: "Platform" });
   });
 
-  it("a rename to a taken name says the name isn't available and leaves the form open", async () => {
+  it("a rename to a taken name shows the daemon's words to the super admin, who sees every org's name, and leaves the form open", async () => {
     daemon({
       "GET /hosted/orgs": () => json([PLATFORM, DEFAULT_ORG]),
       "GET /hosted/orgs/plat1/members": () => json([]),
@@ -285,8 +285,7 @@ describe("#128 — one org", () => {
     fireEvent.click(await screen.findByTestId("admin-rename"));
     fireEvent.change(screen.getByRole("textbox", { name: "New name" }), { target: { value: "default" } });
     fireEvent.click(screen.getByRole("button", { name: "Save name" }));
-    expect(await screen.findByTestId("mutation-error")).toHaveTextContent("That name isn't available. Choose a different one.");
-    expect(screen.getByTestId("mutation-error")).not.toHaveTextContent("Default");
+    expect(await screen.findByTestId("mutation-error")).toHaveTextContent('There is already an org named "Default".');
     expect(screen.getByRole("textbox", { name: "New name" })).toBeInTheDocument();
     expect(screen.getByTestId("admin-org-name")).toHaveTextContent("Platform team");
   });

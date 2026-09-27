@@ -365,10 +365,11 @@ export function readOrgMembers(raw: unknown): HostedOrgMember[] {
   for (const row of raw) {
     const fields = typeof row === "object" && row !== null ? (row as Record<string, unknown>) : {};
     const duoId = str(fields.duoId);
-    const name = str(fields.name);
-    if (duoId === null || name === null) {
+    if (duoId === null) {
       continue;
     }
+    // A person with no name stays on the list, under a label: dropping the row would shorten the people list against the org's count and leave that person un-appointable.
+    const name = str(fields.name) ?? str(fields.email) ?? "Unnamed member";
     const superAdmin = fields.superAdmin === true || fields.isAdmin === true;
     const orgRole: OrgRole = fields.orgRole === "org_admin" ? "org_admin" : "member";
     const log: OrgAdminLogRow[] = [];
@@ -440,12 +441,28 @@ function orgGet(api: DuoApiConfig, path: string): Promise<Response> {
   return fetch(orgUrl(api, path), { headers: { Authorization: `Bearer ${api.token}` } });
 }
 
+/** The daemon said this duo has no org role to show: it is in no org (404 `not_found`) or is refused (403). An answer, not a failure. */
+export interface OrgNone {
+  readonly none: true;
+}
+
 /**
- * `GET {basePath}/org` — the signed-in duo's org and role (404 `not_found` when it is in no org). Null when the
- * answer isn't the documented shape (an older or different server): that is "no usable answer", never a role.
+ * `GET {basePath}/org` — the signed-in duo's org and role. A 404 (in no org) or 403 resolves to `{ none: true }`
+ * instead of throwing: a query that never had data reports its error as null again while it refetches, so an
+ * answer kept as an error would flip back to "no answer yet" on every refresh. A 401 still throws (the revocation
+ * guard's). Null when the answer isn't the documented shape (an older or different server): "no usable answer",
+ * never a role.
  */
-export async function fetchOrgOverview(api: DuoApiConfig): Promise<OrgOverview | null> {
-  const raw = await readAnswer<unknown>(await orgGet(api, "/org"));
+export async function fetchOrgOverview(api: DuoApiConfig): Promise<OrgOverview | OrgNone | null> {
+  let raw: unknown;
+  try {
+    raw = await readAnswer<unknown>(await orgGet(api, "/org"));
+  } catch (error) {
+    if (error instanceof ApiRequestError && (error.status === 404 || error.status === 403)) {
+      return { none: true };
+    }
+    throw error;
+  }
   const fields = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   const org = typeof fields.org === "object" && fields.org !== null ? (fields.org as Record<string, unknown>) : {};
   const id = str(org.id);
@@ -583,6 +600,12 @@ export function pairedDuoId(api: DuoApiConfig): string | null {
 /** What the admin screens are for this person: the super admin's (every org), an org admin's (their own), or neither. */
 export type AdminRole = "super" | "org" | null;
 
+/** What the shell knows of this device's admin standing: the screens it may open, and the paired server's origin they are asked of (null with no role). */
+export interface AdminAccess {
+  readonly role: AdminRole;
+  readonly origin: string | null;
+}
+
 /**
  * #254: which admin screens this signed-in device may open, from the stored account and the daemon's live
  * answer to `GET {basePath}/org` (`useOrgOverview`). The stored account is a per-browser hint and the daemon
@@ -590,23 +613,40 @@ export type AdminRole = "super" | "org" | null;
  *
  * - an answer (`live` a role) decides both: an org admin now, the super admin now. A stored "admin" flag the
  *   answer contradicts is stale, and the entry goes.
- * - a "no" (404: in no org; 403) is final for the org role, but says nothing about the super admin, so
- *   the stored flag still decides that one (the root duo of a server with no org for it is asked, and 404s).
+ * - a "no" (`{ none: true }`: 404 in no org, or 403) is final for the org role, but says nothing about the
+ *   super admin, so the stored flag still decides that one (the root duo of a server with no org for it is asked, and 404s).
  * - no answer yet (loading, offline, a server or answer we can't read): the stored flag, and the role the
  *   sign-in carried, stand in. That only ever draws an entry; the daemon re-checks every call it opens.
- *
- * `live` is the answer when there is one; `refused` says the daemon answered "no org" (404) or "not yours" (403).
  */
-export function adminRoleOf(account: HostedAccount | null, live: OrgOverview | null | undefined, refused: boolean): AdminRole {
+export function adminRoleOf(account: HostedAccount | null, live: OrgOverview | OrgNone | null | undefined): AdminRole {
   if (!account) {
     return null;
   }
-  const superAdmin = live ? live.superAdmin : account.isAdmin;
+  const answered = live && !("none" in live) ? live : null;
+  const superAdmin = answered ? answered.superAdmin : account.isAdmin;
   if (superAdmin) {
     return "super";
   }
-  const orgAdmin = live ? live.role === "org_admin" : refused ? false : account.orgRole === "org_admin";
+  const orgAdmin = answered ? answered.role === "org_admin" : live ? false : account.orgRole === "org_admin";
   return orgAdmin ? "org" : null;
+}
+
+/**
+ * Writes what the daemon just answered back to the stored account, so the next cold start draws its first paint
+ * from the last live answer and not from the sign-in's: a revoked ex-admin no longer sees the entry flash back on
+ * every launch. A role answer replaces both hints; a "no org" answer clears the org hint and leaves the super admin
+ * flag alone, since it says nothing about that. Only the account of the paired server is touched, and only when
+ * something changed.
+ */
+export function rememberLiveRole(api: DuoApiConfig | null, live: OrgOverview | OrgNone): void {
+  const account = pairedHostedAccount(api);
+  if (!account) {
+    return;
+  }
+  const next: HostedAccount = "none" in live ? { ...account, orgRole: "member" } : { ...account, isAdmin: live.superAdmin, orgRole: live.role };
+  if (next.isAdmin !== account.isAdmin || next.orgRole !== account.orgRole) {
+    writeHostedAccount(next);
+  }
 }
 
 /**

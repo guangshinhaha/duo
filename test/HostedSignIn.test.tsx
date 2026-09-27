@@ -7,7 +7,7 @@ import { Landing } from "../src/routes/Landing.js";
 import { Join } from "../src/routes/Join.js";
 import { Settings } from "../src/routes/Settings.js";
 import { InvitePeople } from "../src/components/InvitePeople.js";
-import { configuredDaemonOrigin, readHostedAccount, writeHostedAccount } from "../src/api/hosted.js";
+import { configuredDaemonOrigin, readHostedAccount, writeHostedAccount, type AdminAccess } from "../src/api/hosted.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 
 vi.mock("../src/notifications.js", () => ({
@@ -249,21 +249,48 @@ describe("Join with Google", () => {
 });
 
 describe("Invite people (admins)", () => {
-  const settings = () => (
-    <Settings api={api} onConfigChange={vi.fn()} onPairDuo={vi.fn()} onSignOut={vi.fn()} onWorkspaceSignIn={vi.fn()} session={null} />
+  // What the shell says (`adminRoleOf`, the daemon's live role): Settings follows it, never the stored sign-in flag.
+  const settings = (admin?: AdminAccess) => (
+    <Settings admin={admin} api={api} onConfigChange={vi.fn()} onPairDuo={vi.fn()} onSignOut={vi.fn()} onWorkspaceSignIn={vi.fn()} session={null} />
   );
 
-  it("is absent for a signed-in non-admin, present for an admin", async () => {
+  it("is absent for a signed-in non-admin, present for a super admin", async () => {
     routeFetch({});
     writeHostedAccount({ origin: ORIGIN, ownerName: "Sam", isAdmin: false });
-    const { unmount } = withClient(settings());
+    const { unmount } = withClient(settings({ role: null, origin: null }));
     expect(screen.getByTestId("settings-account")).toBeInTheDocument();
     expect(screen.queryByTestId("settings-invite-people")).not.toBeInTheDocument();
     unmount();
 
     writeHostedAccount({ origin: ORIGIN, ownerName: "Shin", isAdmin: true });
-    withClient(settings());
+    withClient(settings({ role: "super", origin: ORIGIN }));
     expect(screen.getByTestId("settings-invite-people")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-account")).toHaveTextContent("as an admin of this server");
+  });
+
+  it("a stale stored admin flag keeps nothing on screen once the shell says the role is gone", async () => {
+    routeFetch({});
+    writeHostedAccount({ origin: ORIGIN, ownerName: "Shin", isAdmin: true });
+    withClient(settings({ role: null, origin: null }));
+    expect(screen.queryByTestId("settings-invite-people")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-account")).not.toHaveTextContent("as an admin of this server");
+  });
+
+  it("an org admin is not the server's admin: no invite tool of the server's", async () => {
+    routeFetch({});
+    writeHostedAccount({ origin: ORIGIN, ownerName: "Ada", isAdmin: false, orgRole: "org_admin" });
+    withClient(settings({ role: "org", origin: ORIGIN }));
+    expect(screen.queryByTestId("settings-invite-people")).not.toBeInTheDocument();
+  });
+
+  it("asks the paired origin the shell names, not the stored account's", async () => {
+    const fetchMock = routeFetch({});
+    writeHostedAccount({ origin: "https://elsewhere.example.org", ownerName: "Shin", isAdmin: true });
+    withClient(settings({ role: "super", origin: ORIGIN }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const called = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(called.every((url) => url.startsWith(ORIGIN))).toBe(true);
+    expect(called.some((url) => url.includes("elsewhere"))).toBe(false);
   });
 
   it("mints an invite with this device's token at the daemon origin and shows the link once", async () => {

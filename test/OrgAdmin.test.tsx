@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import { stubDesktop } from "./desktop.js";
 import { Admin } from "../src/routes/Admin.js";
 import type { DuoApiConfig } from "../src/api/client.js";
-import { adminRoleOf, readOrgMembers, type HostedAccount, type OrgOverview } from "../src/api/hosted.js";
+import { adminRoleOf, readHostedAccount, readOrgMembers, type HostedAccount, type OrgOverview } from "../src/api/hosted.js";
 import { queryKeys, shouldPersistQuery } from "../src/api/queries.js";
 
 vi.mock("../src/notifications.js", () => ({
@@ -30,6 +30,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const refusal = (status: number, code: string, message = "Refused.") => json({ error: { code, message } }, status);
 const forbidden = () => refusal(403, "forbidden", "Only an admin can do this.");
 
+const NOT_FOR_YOU = "This page is for admins, and your account isn't one right now. If that changed, ask an admin of your org.";
 const ORG = { id: "plat1", name: "Platform team" };
 const overview = (role: "member" | "org_admin", superAdmin = false, org = ORG) => json({ org, role, superAdmin });
 
@@ -153,7 +154,7 @@ afterEach(() => {
 
 /** A fake org the org-admin routes read and the appoint/revoke routes write. */
 function orgDaemon(initial: Row[], extra: Record<string, Handler> = {}) {
-  const state = { members: initial, invites: [] as { id: string; name: string; email: string | null; orgId: string; createdAt: string; expiresAt: string }[], role: "org_admin" as "member" | "org_admin", org: ORG };
+  const state = { members: initial, invites: [] as { id: string; name: string; email: string | null; orgId: string; createdAt: string; expiresAt: string; code?: string; link?: string }[], role: "org_admin" as "member" | "org_admin", org: ORG };
   const set = (duoId: string, orgRole: "member" | "org_admin") => {
     state.members = state.members.map((m) =>
       m.duoId === duoId
@@ -351,7 +352,7 @@ describe("#254 — how the role is learned", () => {
 
   it("the role and the org's people are never written to the persisted cache or to storage", async () => {
     const client = new QueryClient();
-    const keys: (readonly unknown[])[] = [queryKeys.orgOverview, queryKeys.orgMembers, queryKeys.orgInvites, queryKeys.devices];
+    const keys: (readonly unknown[])[] = [queryKeys.orgOverview, queryKeys.orgMembers("plat1"), queryKeys.orgInvites("plat1"), queryKeys.devices];
     await Promise.all(keys.map((queryKey) => client.prefetchQuery({ queryKey, queryFn: async () => "x" })));
     expect(dehydrate(client, { shouldDehydrateQuery: shouldPersistQuery }).queries.map((q) => q.queryKey)).toEqual([queryKeys.devices]);
 
@@ -374,23 +375,24 @@ describe("#254 — how the role is learned", () => {
 describe("#254 — the entry matrix (adminRoleOf)", () => {
   const account = (fields: Partial<HostedAccount> = {}): HostedAccount => ({ origin: ORIGIN, ownerName: "Ada", isAdmin: false, ...fields });
   const answer = (role: OrgOverview["role"], superAdmin = false): OrgOverview => ({ org: ORG, role, superAdmin });
+  const none = { none: true } as const;
 
   it.each([
-    ["no account", null, undefined, false, null],
-    ["a member", account(), answer("member"), false, null],
-    ["an org admin", account(), answer("org_admin"), false, "org"],
-    ["a super admin", account(), answer("member", true), false, "super"],
-    ["a super admin who is also an org admin: the super admin's screens", account(), answer("org_admin", true), false, "super"],
-    ["a stale flag the answer contradicts", account({ isAdmin: true }), answer("member"), false, null],
-    ["a stale hint the answer contradicts", account({ orgRole: "org_admin" }), answer("member"), false, null],
-    ["no answer yet, the stored flag", account({ isAdmin: true }), undefined, false, "super"],
-    ["no answer yet, the stored hint", account({ orgRole: "org_admin" }), undefined, false, "org"],
-    ["no answer yet, nothing stored", account(), undefined, false, null],
-    ["an unreadable answer is no answer", account({ isAdmin: true }), null, false, "super"],
-    ["in no org, a stored hint", account({ orgRole: "org_admin" }), undefined, true, null],
-    ["in no org, a stored super admin flag", account({ isAdmin: true }), undefined, true, "super"],
-  ] as const)("%s", (_label, stored, live, refused, expected) => {
-    expect(adminRoleOf(stored as HostedAccount | null, live, refused)).toBe(expected);
+    ["no account", null, undefined, null],
+    ["a member", account(), answer("member"), null],
+    ["an org admin", account(), answer("org_admin"), "org"],
+    ["a super admin", account(), answer("member", true), "super"],
+    ["a super admin who is also an org admin: the super admin's screens", account(), answer("org_admin", true), "super"],
+    ["a stale flag the answer contradicts", account({ isAdmin: true }), answer("member"), null],
+    ["a stale hint the answer contradicts", account({ orgRole: "org_admin" }), answer("member"), null],
+    ["no answer yet, the stored flag", account({ isAdmin: true }), undefined, "super"],
+    ["no answer yet, the stored hint", account({ orgRole: "org_admin" }), undefined, "org"],
+    ["no answer yet, nothing stored", account(), undefined, null],
+    ["an unreadable answer is no answer", account({ isAdmin: true }), null, "super"],
+    ["in no org, a stored hint", account({ orgRole: "org_admin" }), none, null],
+    ["in no org, a stored super admin flag", account({ isAdmin: true }), none, "super"],
+  ] as const)("%s", (_label, stored, live, expected) => {
+    expect(adminRoleOf(stored as HostedAccount | null, live)).toBe(expected);
   });
 });
 
@@ -442,12 +444,17 @@ describe("#254 — an org admin's page is their own org and nothing else", () =>
     expect(await screen.findByTestId("admin-pending-invites-empty")).toHaveTextContent("No invites waiting.");
     cleanup();
 
-    state.invites = [{ id: "i1", name: "Lee", email: "lee@example.com", orgId: "plat1", createdAt: "2026-09-25T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" }];
+    // The daemon must never send these, so the fixture does: a row that rendered either would fail below.
+    state.invites = [
+      { id: "i1", name: "Lee", email: "lee@example.com", orgId: "plat1", createdAt: "2026-09-25T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z", code: "leak-code", link: "https://leak.example/x" },
+    ];
     withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
     const invite = await screen.findByTestId("admin-pending-invite");
     expect(invite).toHaveTextContent("Lee");
     expect(invite).toHaveTextContent("lee@example.com");
-    expect(invite.textContent).not.toMatch(/code|http/i); // the code exists only in the create answer
+    expect(document.body.textContent).not.toContain("leak-code"); // the code exists only in the create answer
+    expect(document.body.textContent).not.toContain("leak.example");
+    expect(document.body.innerHTML).not.toContain("leak-code");
   });
 
   it("invites into the org: no org id is sent, the link is shown once, focused, copyable, and the pending list is re-read", async () => {
@@ -481,7 +488,7 @@ describe("#254 — an org admin's page is their own org and nothing else", () =>
     expect(JSON.parse(String(init?.body))).toEqual({ name: "Sam2", email: "sam2@example.com" });
     expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer member-tok");
     expect(await screen.findByTestId("admin-pending-invite")).toHaveTextContent("Sam2");
-    expect(document.body.textContent).not.toContain("c0de".repeat(2)); // shown in one place only
+    expect(document.body.textContent!.match(/c0de/g)).toHaveLength(1); // shown in one place only: the link, once
   });
 
   it("the invite link made for one org is gone when the org changes underneath", async () => {
@@ -538,7 +545,9 @@ describe("#254 — an org admin's page is their own org and nothing else", () =>
     withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Who it's for" }), { target: { value: "Sam2" } });
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
-    expect(await screen.findByTestId("mutation-error")).toHaveTextContent("This org has too many invites waiting.");
+    expect(await screen.findByTestId("mutation-error")).toHaveTextContent(
+      "This org has too many invites waiting. Some need to be used or to expire (invites last up to a year) before you can make another, or the super admin can cancel one.",
+    );
     expect(screen.queryByTestId("admin-invite-minted")).toBeNull();
     expect(screen.getByRole("textbox", { name: "Who it's for" })).toHaveValue("Sam2");
   });
@@ -701,7 +710,7 @@ describe("#254 — the role goes while the page is open", () => {
     const before = callsTo(mock, "GET", "/t/abc123/org").length;
     fireEvent.click(within(rowFor("Kim")).getByTestId("admin-appoint"));
     fireEvent.click(screen.getByTestId("admin-appoint-confirm"));
-    expect(await screen.findByTestId("admin-not-available")).toHaveTextContent("Only the person who runs this server can open this page.");
+    expect(await screen.findByTestId("admin-not-available")).toHaveTextContent(NOT_FOR_YOU);
     expect(screen.queryByTestId("route-error")).toBeNull();
     expect(screen.queryByTestId("admin-org-page")).toBeNull();
     await waitFor(() => expect(callsTo(mock, "GET", "/t/abc123/org").length).toBeGreaterThan(before));
@@ -892,5 +901,225 @@ describe("#254 — the super admin's org page: appoint, revoke, marks and histor
     fireEvent.click(screen.getByTestId("admin-appoint-confirm"));
     expect(await screen.findByText('There is no org "plat1".')).toBeInTheDocument();
     expect(screen.queryByTestId("route-error")).toBeNull();
+  });
+});
+
+describe("#254 — review fixes", () => {
+  it("the not-for-you note replaces a page the person was using: it is announced and takes focus", async () => {
+    orgDaemon([ME, SAM, KIM], { "POST /t/abc123/org/admins/kim1/grant": () => forbidden() });
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
+    await screen.findAllByTestId("admin-member");
+    fireEvent.click(within(rowFor("Kim")).getByTestId("admin-appoint"));
+    fireEvent.click(screen.getByTestId("admin-appoint-confirm"));
+    const note = await screen.findByTestId("admin-not-available");
+    expect(note).toHaveAttribute("role", "status");
+    expect(note).toHaveTextContent(NOT_FOR_YOU);
+    expect(note.textContent).not.toMatch(/runs this server/);
+    await waitFor(() => expect(note).toHaveFocus());
+  });
+
+  it("the header says who else manages the org, the super admin included", async () => {
+    orgDaemon([ME, KIM]);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
+    await screen.findAllByTestId("admin-member");
+    expect(screen.getByTestId("admin-org-page")).toHaveTextContent("You and the org's other org admins manage it, and so does the super admin.");
+    expect(screen.getByTestId("admin-org-page").textContent).not.toContain("Only you");
+  });
+
+  it("a second Confirm while one change is in flight sends one request and still ends the page on a step-down", async () => {
+    signInAs({ orgRole: "org_admin" });
+    let release: (r: Response) => void = () => {};
+    const { mock, state } = orgDaemon([ME, SAM, KIM], {
+      "POST /t/abc123/org/admins/abc123/revoke": () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        }),
+    });
+    window.location.hash = "#admin";
+    await renderShell();
+    await screen.findAllByTestId("admin-member");
+    fireEvent.click(within(rowFor("Ada")).getByRole("button", { name: "Step down as an org admin…" }));
+    const confirm = screen.getByTestId("admin-revoke-confirm");
+    // Two clicks in one tick: the button has not yet had a render to show it is busy.
+    act(() => {
+      confirm.click();
+      confirm.click();
+    });
+    await waitFor(() => expect(callsTo(mock, "POST", "/t/abc123/org/admins/abc123/revoke")).toHaveLength(1));
+    state.role = "member";
+    await act(async () => release(json({ member: state.members[0], changed: true })));
+    expect(await screen.findByTestId("admin-stepped-down")).toBeInTheDocument();
+    expect(callsTo(mock, "POST", "/t/abc123/org/admins/abc123/revoke")).toHaveLength(1);
+  });
+
+  it("a change that finished can be followed by another (the guard lets go)", async () => {
+    const { mock } = orgDaemon([ME, SAM, KIM]);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
+    await screen.findAllByTestId("admin-member");
+    fireEvent.click(within(rowFor("Kim")).getByTestId("admin-appoint"));
+    fireEvent.click(screen.getByTestId("admin-appoint-confirm"));
+    await waitFor(() => expect(within(rowFor("Kim")).getByTestId("admin-member-org-admin")).toBeInTheDocument());
+    fireEvent.click(within(rowFor("Sam")).getByTestId("admin-revoke"));
+    fireEvent.click(screen.getByTestId("admin-revoke-confirm"));
+    await waitFor(() => expect(within(rowFor("Sam")).queryByTestId("admin-member-org-admin")).toBeNull());
+    expect(callsTo(mock, "POST", "/t/abc123/org/admins/sam1/revoke")).toHaveLength(1);
+  });
+
+  it("a 404 on the role stays an answer across refreshes: a stale hint does not bring the entry back while one is in flight", async () => {
+    signInAs({ orgRole: "org_admin" });
+    let calls = 0;
+    daemon({
+      "GET /t/abc123/org": () => {
+        calls += 1;
+        return calls === 1 ? refusal(404, "not_found", "This duo is in no org.") : new Promise<Response>(() => {});
+      },
+    });
+    await renderShell();
+    await waitFor(() => expect(adminLink()).toBeNull());
+    // The hint is stale again (as it would be from another tab's sign-in), and the next refresh is slow.
+    localStorage.setItem("duo.hosted-account", JSON.stringify({ origin: ORIGIN, ownerName: "Ada", isAdmin: false, orgRole: "org_admin" }));
+    await act(async () => {
+      window.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2));
+    expect(adminLink()).toBeNull();
+  });
+
+  it("the live answer is written back to the stored account: a revoked ex-admin's next cold start draws no entry", async () => {
+    signInAs({ isAdmin: true, orgRole: "org_admin" });
+    daemon({ "GET /t/abc123/org": () => overview("member", false) });
+    const first = await renderShell();
+    await waitFor(() => expect(adminLink()).toBeNull());
+    await waitFor(() => expect(readHostedAccount()).toMatchObject({ origin: ORIGIN, isAdmin: false, orgRole: "member" }));
+    first.unmount();
+
+    // A cold start whose answer is slow: only the stored account is there to draw from.
+    daemon({ "GET /t/abc123/org": () => new Promise<Response>(() => {}) });
+    await renderShell();
+    expect(adminLink()).toBeNull();
+  });
+
+  it("an appointment is written back too, so the entry is there at the next cold start", async () => {
+    signInAs();
+    daemon({ "GET /t/abc123/org": () => overview("org_admin") });
+    await renderShell();
+    await waitFor(() => expect(readHostedAccount()).toMatchObject({ isAdmin: false, orgRole: "org_admin" }));
+  });
+
+  it("'in no org' clears the org hint and leaves the super admin flag, which it says nothing about", async () => {
+    signInAs({ isAdmin: true, orgRole: "org_admin" });
+    daemon({ "GET /t/abc123/org": () => refusal(404, "not_found") });
+    await renderShell();
+    await waitFor(() => expect(readHostedAccount()).toMatchObject({ isAdmin: true, orgRole: "member" }));
+    expect(adminLink()).not.toBeNull();
+  });
+
+  it("nothing is written for an account of another server", async () => {
+    localStorage.setItem("duo.api-config", JSON.stringify(api));
+    const other = { origin: "https://elsewhere.example.org", ownerName: "Ada", isAdmin: true, orgRole: "org_admin" };
+    localStorage.setItem("duo.hosted-account", JSON.stringify(other));
+    daemon({ "GET /t/abc123/org": () => overview("member") });
+    await renderShell();
+    expect(readHostedAccount()).toEqual(other);
+  });
+
+  it("a person with no name stays on the list under a label, and can still be appointed", async () => {
+    expect(readOrgMembers([{ duoId: "n1", name: "", email: "nn@example.com" }, { duoId: "n2" }, { duoId: "n3", name: "  " }]).map((m) => m.name)).toEqual([
+      "nn@example.com",
+      "Unnamed member",
+      "  ",
+    ]);
+    orgDaemon([ME, { ...KIM, name: "" }]);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
+    await screen.findAllByTestId("admin-member");
+    expect(screen.getAllByTestId("admin-member")).toHaveLength(2);
+    fireEvent.click(within(rowFor("kim@example.com")).getByRole("button", { name: "Appoint kim@example.com as an org admin…" }));
+    expect(screen.getByTestId("admin-appoint-confirmation")).toHaveTextContent("Make kim@example.com an org admin?");
+  });
+
+  it("a switch of org never shows the old org's people or invites while the new org's load", async () => {
+    let current = "plat1";
+    let releaseMembers: (r: Response) => void = () => {};
+    let releaseInvites: (r: Response) => void = () => {};
+    const old = { id: "i1", name: "OldInvite", email: null, orgId: "plat1", createdAt: "2026-09-25T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" };
+    const { state } = orgDaemon([ME], {
+      "GET /t/abc123/org/members": () => (current === "plat1" ? json([ME, KIM]) : new Promise<Response>((resolve) => (releaseMembers = resolve))),
+      "GET /t/abc123/org/invites": () => (current === "plat1" ? json([old]) : new Promise<Response>((resolve) => (releaseInvites = resolve))),
+    });
+    const { client } = withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
+    await screen.findAllByTestId("admin-member");
+    expect(await screen.findByTestId("admin-pending-invite")).toHaveTextContent("OldInvite");
+
+    current = "agency9";
+    state.org = { id: "agency9", name: "Agency" };
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: queryKeys.orgOverview });
+    });
+    expect(await screen.findByRole("heading", { name: "Invite someone into Agency" })).toBeInTheDocument();
+    expect(screen.queryAllByTestId("admin-member")).toHaveLength(0);
+    expect(screen.queryByTestId("admin-pending-invite")).toBeNull();
+    expect(document.body.textContent).not.toContain("Kim");
+    expect(document.body.textContent).not.toContain("OldInvite");
+
+    await act(async () => {
+      releaseMembers(json([row({ duoId: "abc123", name: "Ada", orgRole: "org_admin" }), row({ duoId: "zed1", name: "Zed" })]));
+      releaseInvites(json([]));
+    });
+    expect(await screen.findByText("Zed")).toBeInTheDocument();
+    expect(screen.queryByText("Kim")).toBeNull();
+  });
+
+  it("the org's cached people and invites are keyed by the org", () => {
+    expect(queryKeys.orgMembers("a")).not.toEqual(queryKeys.orgMembers("b"));
+    expect(queryKeys.orgInvites("a")).not.toEqual(queryKeys.orgInvites("b"));
+    expect(queryKeys.orgMembers("a").slice(0, 2)).toEqual(["org", "a"]);
+  });
+
+  it("a revoke that the daemon refuses for the root duo says the root duo's plain sentence", async () => {
+    const PLAT = { id: "plat1", name: "Platform team", createdAt: "2026-09-20T00:00:00.000Z", memberCount: 2 };
+    daemon({
+      "GET /hosted/orgs": () => json([PLAT]),
+      "GET /hosted/orgs/plat1/members": () => json([ME, KIM]),
+      "POST /hosted/orgs/plat1/admins/abc123/revoke": () => refusal(409, "root_not_appointable", "Daemon text that must not be shown."),
+    });
+    withClient(<Admin api={{ baseUrl: BASE, token: "super-tok" }} origin={ORIGIN} orgId="plat1" role="super" />);
+    await screen.findAllByTestId("admin-member");
+    fireEvent.click(within(rowFor("Ada")).getByTestId("admin-revoke"));
+    fireEvent.click(screen.getByTestId("admin-revoke-confirm"));
+    expect(await screen.findByText("The first duo on this server can't be made an org admin.")).toBeInTheDocument();
+    expect(screen.queryByText(/Daemon text/)).toBeNull();
+  });
+
+  it("Settings offers the invite tool from the live role, not the stored flag: a stale super admin flag loses it", async () => {
+    signInAs({ isAdmin: true });
+    daemon({ "GET /t/abc123/org": () => overview("member", false) });
+    window.location.hash = "#settings/advanced";
+    await renderShell();
+    await screen.findByTestId("settings-account");
+    await waitFor(() => expect(screen.queryByTestId("settings-invite-people")).toBeNull());
+    expect(screen.getByTestId("settings-account")).not.toHaveTextContent("as an admin of this server");
+  });
+
+  it("Settings offers the invite tool to the live super admin, and its token goes to the paired origin", async () => {
+    signInAs();
+    const mock = daemon({ "GET /t/abc123/org": () => overview("member", true) });
+    window.location.hash = "#settings/advanced";
+    await renderShell();
+    expect(await screen.findByTestId("settings-invite-people")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-account")).toHaveTextContent("as an admin of this server");
+    await waitFor(() => expect(callsTo(mock, "GET", "/hosted/invites")).toHaveLength(1));
+    const [url, init] = callsTo(mock, "GET", "/hosted/invites")[0]!;
+    expect(String(url)).toBe(`${ORIGIN}/hosted/invites`);
+    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer member-tok");
+  });
+
+  it("Settings offers an org admin no invite tool of the server's", async () => {
+    signInAs();
+    const mock = daemon({ "GET /t/abc123/org": () => overview("org_admin", false) });
+    window.location.hash = "#settings/advanced";
+    await renderShell();
+    await screen.findByTestId("settings-account");
+    expect(screen.queryByTestId("settings-invite-people")).toBeNull();
+    expect(callsTo(mock, "GET", "/hosted/invites")).toHaveLength(0);
   });
 });

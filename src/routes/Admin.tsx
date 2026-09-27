@@ -63,11 +63,21 @@ export function orgHref(orgId: string): string {
   return `#admin/${encodeURIComponent(orgId)}`;
 }
 
+/**
+ * One note for everyone this page is not for: a member, an org admin whose role was just withdrawn, a wrong address.
+ * It can replace a page the person was using, so it is announced and takes focus (the row that held it is gone).
+ */
 function NotAvailable() {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
   return (
-    <div className="mx-auto flex max-w-xl flex-col gap-2 p-6" data-testid="admin-not-available">
+    <div className="mx-auto flex max-w-xl flex-col gap-2 p-6" data-testid="admin-not-available" ref={ref} role="status" tabIndex={-1}>
       <h1 className="type-heading">Admin</h1>
-      <p className="type-body text-[var(--muted)]">Only the person who runs this server can open this page.</p>
+      <p className="type-body text-[var(--muted)]">
+        This page is for admins, and your account isn&apos;t one right now. If that changed, ask an admin of your org.
+      </p>
     </div>
   );
 }
@@ -209,7 +219,7 @@ function knownRefusal(error: unknown): string | null {
       // Two codes for one answer (the super admin's route and an org admin's): neither says which org has the name.
       return "That name isn't available. Choose a different one.";
     case "too_many_invites":
-      return "This org has too many invites waiting. Some need to be used or to expire before you can make another.";
+      return "This org has too many invites waiting. Some need to be used or to expire (invites last up to a year) before you can make another, or the super admin can cancel one.";
     default:
       return null;
   }
@@ -434,6 +444,7 @@ function OrgPeople({
   members,
   onRefused,
   onSteppedDown,
+  orgId,
   orgName,
   scope,
   viewer,
@@ -445,22 +456,33 @@ function OrgPeople({
   onRefused?: () => void;
   /** An org admin revoked themselves. */
   onSteppedDown?: () => void;
+  /** The org this list is of: keys an org admin's cached people, so a change of org never shows the old one's. */
+  orgId: string;
   orgName: string;
   scope: OrgScope;
   viewer: "super" | "org";
 }) {
-  const change = useSetOrgAdmin(api, scope);
+  const change = useSetOrgAdmin(api, scope, orgId);
   const [notice, setNotice] = useState<Notice | null>(null);
   const rows = Array.isArray(members.data) ? members.data : [];
   const selfId = viewer === "org" ? pairedDuoId(api) : null;
   const orgAdminCount = rows.filter((member) => member.orgRole === "org_admin").length;
   const rowElements = useRef(new Map<string, HTMLLIElement>());
+  const inFlight = useRef(false);
 
   function apply(member: HostedOrgMember, appoint: boolean): void {
+    // One mutation serves the whole list: a second confirm while one is in flight would replace its callbacks (a step-down would lose its page swap). The ref covers two clicks in one render, before `isPending` has shown.
+    if (change.isPending || inFlight.current) {
+      return;
+    }
+    inFlight.current = true;
     setNotice(null);
     change.mutate(
       { duoId: member.duoId, appoint },
       {
+        onSettled: () => {
+          inFlight.current = false;
+        },
         onSuccess: ({ changed }) => {
           if (!appoint && member.duoId === selfId) {
             onSteppedDown?.();
@@ -603,16 +625,17 @@ function RenameOrg({ api, name: current, scope }: { api: DuoApiConfig; name: str
           Cancel
         </button>
       </form>
-      <MutationError error={friendlyError(rename.error)} />
+      {/* An org admin's route must not say which org has a name; the super admin sees every org's name, so the daemon's own words tell them more. */}
+      <MutationError error={scope === null ? friendlyError(rename.error) : rename.error} />
     </div>
   );
 }
 
 /** One invite link into this org, shown once. An email locks it to that Google account. */
-function InviteIntoOrg({ api, orgName, scope }: { api: DuoApiConfig; orgName: string; scope: OrgScope }) {
+function InviteIntoOrg({ api, orgId, orgName, scope }: { api: DuoApiConfig; orgId: string; orgName: string; scope: OrgScope }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const create = useInviteIntoOrg(api, scope);
+  const create = useInviteIntoOrg(api, scope, orgId);
   const minted = create.data;
   const emailValid = email.trim() === "" || email.includes("@");
   const trimmed = name.trim();
@@ -698,8 +721,8 @@ function OrgBody({ api, back, org, origin }: { api: DuoApiConfig; back: ReactNod
         </p>
         <RenameOrg api={api} name={org.name} scope={scope} />
       </header>
-      <OrgPeople api={api} emptyText="No one has joined yet. Send an invite link below." members={members} orgName={org.name} scope={scope} viewer="super" />
-      <InviteIntoOrg api={api} key={org.id} orgName={org.name} scope={scope} />
+      <OrgPeople api={api} emptyText="No one has joined yet. Send an invite link below." members={members} orgId={org.id} orgName={org.name} scope={scope} viewer="super" />
+      <InviteIntoOrg api={api} key={org.id} orgId={org.id} orgName={org.name} scope={scope} />
     </div>
   );
 }
@@ -776,10 +799,10 @@ function PendingInvites({ invites }: { invites: UseQueryResult<OrgPendingInvite[
 }
 
 /** An org admin's page for their own org, once the daemon has said they are one. */
-function OwnOrgBody({ api, name, onSteppedDown }: { api: DuoApiConfig; name: string; onSteppedDown: () => void }) {
+function OwnOrgBody({ api, name, onSteppedDown, orgId }: { api: DuoApiConfig; name: string; onSteppedDown: () => void; orgId: string }) {
   const queryClient = useQueryClient();
-  const members = useOwnOrgMembers(api);
-  const invites = useOwnOrgInvites(api);
+  const members = useOwnOrgMembers(api, orgId);
+  const invites = useOwnOrgInvites(api, orgId);
   const [refused, setRefused] = useState(false);
   if (isNotAdmin(members.error) || isNotAdmin(invites.error) || refused) {
     return <NotAvailable />;
@@ -790,7 +813,7 @@ function OwnOrgBody({ api, name, onSteppedDown }: { api: DuoApiConfig; name: str
         <h1 className="type-heading" data-testid="admin-org-name">
           {name}
         </h1>
-        <p className="type-provenance text-[var(--muted)]">You&apos;re an org admin here. Only you and the org&apos;s other org admins see this page.</p>
+        <p className="type-provenance text-[var(--muted)]">You&apos;re an org admin here. You and the org&apos;s other org admins manage it, and so does the super admin.</p>
         <RenameOrg api={api} name={name} scope={null} />
       </header>
       <OrgPeople
@@ -802,12 +825,13 @@ function OwnOrgBody({ api, name, onSteppedDown }: { api: DuoApiConfig; name: str
           void queryClient.invalidateQueries({ queryKey: queryKeys.orgOverview });
         }}
         onSteppedDown={onSteppedDown}
+        orgId={orgId}
         orgName={name}
         scope={null}
         viewer="org"
       />
       <PendingInvites invites={invites} />
-      <InviteIntoOrg api={api} orgName={name} scope={null} />
+      <InviteIntoOrg api={api} orgId={orgId} orgName={name} scope={null} />
     </div>
   );
 }
@@ -823,18 +847,19 @@ function OwnOrgPage({ api, onSteppedDown }: { api: DuoApiConfig; onSteppedDown: 
   if (overview.isLoading) {
     return <RouteLoading variant="rows" />;
   }
-  // A "not yours" or "no org" answer outranks an earlier answer still in the cache; a failure to get any answer does not.
-  if (isNotAdmin(overview.error) || (overview.error instanceof ApiRequestError && overview.error.status === 404)) {
+  // A 401 (the revocation guard unpairs the app) outranks an earlier answer still in the cache; a failure to get any answer does not.
+  if (isNotAdmin(overview.error)) {
     return <NotAvailable />;
   }
   if (overview.error && !overview.data) {
     return <RouteError api={api} error={overview.error} onRetry={() => void overview.refetch()} />;
   }
   const answer = overview.data;
-  if (!answer || answer.role !== "org_admin") {
+  // "No org" and "not yours" are answers (`{ none: true }`), and outrank whatever the person was doing here.
+  if (!answer || "none" in answer || answer.role !== "org_admin") {
     return <NotAvailable />;
   }
-  return <OwnOrgBody api={api} key={answer.org.id} name={answer.org.name} onSteppedDown={() => onSteppedDown(answer.org.name)} />;
+  return <OwnOrgBody api={api} key={answer.org.id} name={answer.org.name} onSteppedDown={() => onSteppedDown(answer.org.name)} orgId={answer.org.id} />;
 }
 
 /** After stepping down: the page is gone and the entry follows, so say so, plainly, where the person is looking. */

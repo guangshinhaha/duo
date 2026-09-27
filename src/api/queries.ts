@@ -120,8 +120,9 @@ export const queryKeys = {
   // #254: an org admin's own org, through the duo's own routes (`<basePath>/org*`). One root, so the persisted cache
   // can leave all of it out and a role change can refresh all of it.
   orgOverview: ["org", "overview"] as const,
-  orgMembers: ["org", "members"] as const,
-  orgInvites: ["org", "invites"] as const,
+  // Keyed by the org, so a duo that moves to another org never shows the first org's cached people or invites while the new ones load.
+  orgMembers: (orgId: string) => ["org", orgId, "members"] as const,
+  orgInvites: (orgId: string) => ["org", orgId, "invites"] as const,
   // Under the ["trust"] root: accepting a promotion or granting autonomy moves the grid too.
   trustPromotions: ["trust", "promotions"] as const,
   // #46: keyed by the submitted query — each distinct search is its own
@@ -782,8 +783,9 @@ export function useCreateHostedOrg(origin: string, api: DuoApiConfig) {
  * again on focus, on reconnect, once a minute while it is open and after any appoint or revoke — so a role
  * change reaches a person who is already signed in, with no sign-out. Never persisted (`shouldPersistQuery`).
  * `enabled` is `pairedHostedAccount(api) !== null`: only a signed-in hosted device asks, and only the paired
- * daemon is asked. A failure is not retried here (the next refresh is the retry) and never says "member":
- * `data` stays what it was, or empty. A 401 is the revocation guard's (the app unpairs).
+ * daemon is asked. A "no org" (404) or "not yours" (403) is an answer
+ * (`{ none: true }`), not an error, so it holds across refreshes. Any other failure is not retried here (the next
+ * refresh is the retry) and never says "member": `data` stays what it was, or empty. A 401 is the revocation guard's (the app unpairs).
  */
 export function useOrgOverview(api: DuoApiConfig | null, enabled: boolean) {
   return useQuery({
@@ -795,33 +797,37 @@ export function useOrgOverview(api: DuoApiConfig | null, enabled: boolean) {
   });
 }
 
-export function useOwnOrgMembers(api: DuoApiConfig) {
-  return useQuery({ queryKey: queryKeys.orgMembers, queryFn: () => listOwnOrgMembers(api), retry: false });
+export function useOwnOrgMembers(api: DuoApiConfig, orgId: string) {
+  return useQuery({ queryKey: queryKeys.orgMembers(orgId), queryFn: () => listOwnOrgMembers(api), retry: false });
 }
 
-export function useOwnOrgInvites(api: DuoApiConfig) {
-  return useQuery({ queryKey: queryKeys.orgInvites, queryFn: () => listOwnOrgInvites(api), retry: false });
+export function useOwnOrgInvites(api: DuoApiConfig, orgId: string) {
+  return useQuery({ queryKey: queryKeys.orgInvites(orgId), queryFn: () => listOwnOrgInvites(api), retry: false });
 }
 
-/** Which org a screen manages: the super admin's (`{ origin, orgId }`, the `hosted/orgs` routes) or, as null, an org admin's own (`<basePath>/org*`). */
+/**
+ * Which org a screen manages: the super admin's (`{ origin, orgId }`, the `hosted/orgs` routes) or, as null, an
+ * org admin's own (`<basePath>/org*`). The hooks below also take that org's id (`orgId`), which an org admin's
+ * scope doesn't carry: it keys their cached people and invites, and is never sent.
+ */
 export type OrgScope = { origin: string; orgId: string } | null;
 
 /**
  * An invite into the org, shown once: the answer carries the code and link, and the pending list is re-read
  * and never carries either. The super admin names the org; an org admin's own route takes none (it is always theirs).
  */
-export function useInviteIntoOrg(api: DuoApiConfig, scope: OrgScope) {
+export function useInviteIntoOrg(api: DuoApiConfig, scope: OrgScope, orgId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: Omit<CreateInviteInput, "orgId">) =>
       scope ? createInvite(scope.origin, api.token, { ...input, orgId: scope.orgId }) : createOwnOrgInvite(api, input),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: scope ? queryKeys.hostedInvites : queryKeys.orgInvites });
+      queryClient.invalidateQueries({ queryKey: scope ? queryKeys.hostedInvites : queryKeys.orgInvites(orgId) });
     },
   });
 }
 
-/** Renames the org. The role query is re-read too: it is where the app's own chrome reads the org's name. */
+/** Renames the org. The role query is re-read too: an org admin's own page draws the org's name from it. */
 export function useRenameOrg(api: DuoApiConfig, scope: OrgScope) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -839,7 +845,7 @@ export function useRenameOrg(api: DuoApiConfig, scope: OrgScope) {
  * so is this duo's own role — stepping down, or being revoked by someone else meanwhile, ends the admin entry
  * on the next answer instead of the next minute.
  */
-export function useSetOrgAdmin(api: DuoApiConfig, scope: { origin: string; orgId: string } | null) {
+export function useSetOrgAdmin(api: DuoApiConfig, scope: { origin: string; orgId: string } | null, orgId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ duoId, appoint }: { duoId: string; appoint: boolean }) =>
@@ -847,7 +853,7 @@ export function useSetOrgAdmin(api: DuoApiConfig, scope: { origin: string; orgId
         ? (appoint ? grantOrgAdmin : revokeOrgAdmin)(scope.origin, api.token, scope.orgId, duoId)
         : (appoint ? grantOwnOrgAdmin : revokeOwnOrgAdmin)(api, duoId),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: scope ? queryKeys.hostedOrgMembers(scope.orgId) : queryKeys.orgMembers });
+      queryClient.invalidateQueries({ queryKey: scope ? queryKeys.hostedOrgMembers(scope.orgId) : queryKeys.orgMembers(orgId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.orgOverview });
     },
   });

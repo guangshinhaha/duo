@@ -22,12 +22,13 @@ import { Join } from "./routes/Join.js";
 import { Landing } from "./routes/Landing.js";
 import {
   adminRoleOf,
+  rememberLiveRole,
   configuredDaemonOrigin,
   pairedHostedAccount,
   readHostedAccount,
   trustedDaemonOrigins,
   writeHostedAccount,
-  type AdminRole,
+  type AdminAccess,
 } from "./api/hosted.js";
 import { Settings } from "./routes/Settings.js";
 import { Onboarding } from "./routes/Onboarding.js";
@@ -214,11 +215,10 @@ async function dispatchArrival(
  * isn't for you. The bearer token is `api.token`: super admin calls go to the origin of `api.baseUrl` and to no
  * other, an org admin's to `api.baseUrl` itself, and a stored account for a different server receives neither.
  */
-function adminAccess(api: DuoApiConfig | null, overview: ReturnType<typeof useOrgOverview>): { role: AdminRole; origin: string | null } {
+function adminAccess(api: DuoApiConfig | null, overview: ReturnType<typeof useOrgOverview>): AdminAccess {
   const account = pairedHostedAccount(api);
-  // A "no org" or "not yours" is an answer too, and it outranks whatever an earlier answer left in the cache.
-  const refused = overview.error instanceof ApiRequestError && (overview.error.status === 404 || overview.error.status === 403);
-  const role = adminRoleOf(account, refused ? undefined : overview.data, refused);
+  // A "no org" or "not yours" is an answer too (`{ none: true }`, kept as data so a refetch can't blank it), and it replaces whatever an earlier answer said.
+  const role = adminRoleOf(account, overview.data);
   return { role, origin: role ? (account?.origin ?? null) : null };
 }
 
@@ -239,7 +239,7 @@ interface SurfaceContext {
   onWorkspaceSignIn: () => void;
   onDuoEnded: () => void;
   /** #254: the admin screens this device may open, and where. */
-  admin: { role: AdminRole; origin: string | null };
+  admin: AdminAccess;
 }
 
 /** Settings: the index of its sections, or one section alone (#148). */
@@ -252,6 +252,7 @@ function settingsSurface(section: SettingsSectionId | "index", shell: SurfaceCon
       onPairDuo={shell.onPairDuo}
       onSignOut={shell.signOutWorkspace}
       onWorkspaceSignIn={shell.onWorkspaceSignIn}
+      admin={shell.admin}
       section={section}
       session={shell.session}
     />
@@ -378,10 +379,16 @@ function AppShell() {
     }
   });
   const hostedActive = isHostedAccess(hosted.access);
-  // #254: the person's role, asked of the daemon each time the app opens and on a timer and focus after (never
-  // read back from storage), so an appointment or a revoke reaches a phone that is already signed in.
+  // #254: the person's role, asked of the daemon each time the app opens and on a timer and focus after (storage
+  // is only the first paint's hint), so an appointment or a revoke reaches a phone that is already signed in.
   const overview = useOrgOverview(api, pairedHostedAccount(api) !== null);
   const admin = adminAccess(api, overview);
+  // What the daemon answered is written back to the stored account, so the next cold start's first paint isn't the sign-in's stale hint.
+  useEffect(() => {
+    if (overview.data) {
+      rememberLiveRole(api, overview.data);
+    }
+  }, [api, overview.data]);
   const activeSession = hostedActive ? hosted.session : session;
   // The public front door: a signed-out visitor who arrives at the bare
   // root of a hosted build sees the landing page, not the sign-in card.
