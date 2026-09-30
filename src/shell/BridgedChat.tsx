@@ -83,6 +83,8 @@ export function BridgedChat({ api, chatId }: { api: DuoApiConfig; chatId: string
 
   // A decided draft folds away instead of vanishing (motion-plan B1).
   const waiting = useLeaving(chat?.waiting ?? [], (draft) => draft.id);
+  // The shortcuts belong to the first draft that is staying, not one still folding away above it.
+  const firstLive = waiting.findIndex((row) => !row.leaving);
 
   if (isLoading && !chat) {
     return <RouteLoading />;
@@ -141,7 +143,7 @@ export function BridgedChat({ api, chatId }: { api: DuoApiConfig; chatId: string
           <section aria-label="Drafts from your duo" className="mt-5 flex flex-col gap-4" data-testid="bridged-drafts">
             {waiting.map(({ item: draft, leaving }, index) => (
               <Collapse key={draft.id} leaving={leaving}>
-                <DraftTray api={api} draft={draft} keyboard={!leaving && index === 0} />
+                <DraftTray api={api} draft={draft} keyboard={index === firstLive} />
               </Collapse>
             ))}
           </section>

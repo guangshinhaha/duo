@@ -271,7 +271,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       );
     }
     if ("chat" in route && isBridgedId(route.chat)) {
-      return shell.api ? <BridgedChat api={shell.api} chatId={route.chat} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
+      return shell.api ? <BridgedChat api={shell.api} chatId={route.chat} key={route.chat} /> : <NoDuoPanel onPairDuo={shell.onPairDuo} />;
     }
     if ("chat" in route) {
       return (
@@ -279,7 +279,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
           at={route.at}
           connection={shell.connection}
           roomId={route.chat}
-          drafts={shell.api ? <RoomDrafts api={shell.api} roomId={route.chat} /> : null}
+          drafts={shell.api ? <RoomDrafts api={shell.api} key={route.chat} roomId={route.chat} /> : null}
         />
       );
     }

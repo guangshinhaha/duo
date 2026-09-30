@@ -138,7 +138,7 @@ describe("the waiting count ticks (B3)", () => {
     expect(container.querySelector(".tick-in")).toHaveTextContent("2");
 
     act(() => {
-      vi.advanceTimersByTime(200);
+      vi.advanceTimersByTime(260);
     });
     expect(container.querySelector(".tick-out")).toBeNull();
     expect(container).toHaveTextContent("2");
@@ -149,8 +149,38 @@ describe("the waiting count ticks (B3)", () => {
     rerender(<TickingCount value={0} />);
     expect(container.querySelector(".tick-in")).toBeNull();
     act(() => {
-      vi.advanceTimersByTime(200);
+      vi.advanceTimersByTime(260);
     });
     expect(container).toHaveTextContent("");
+  });
+});
+
+describe("review fixes (#198)", () => {
+  beforeEach(() => vi.useFakeTimers());
+
+  it("the figure's entrance is not cut short: the old one lingers as long as the new one rises", () => {
+    const { container, rerender } = render(<TickingCount value={3} />);
+    rerender(<TickingCount value={2} />);
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+    expect(container.querySelector(".tick-in")).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(60);
+    });
+    expect(container.querySelector(".tick-in")).toBeNull();
+  });
+
+  it("a badge stays for one tick after reaching zero, so the last figure is seen leaving", async () => {
+    const { useLingering } = await import("../src/components/TickingCount.js");
+    const { renderHook } = await import("@testing-library/react");
+    const { result, rerender } = renderHook(({ n }) => useLingering(n), { initialProps: { n: 1 } });
+    expect(result.current).toBe(true);
+    rerender({ n: 0 });
+    expect(result.current).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(result.current).toBe(false);
   });
 });

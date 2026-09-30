@@ -36,6 +36,8 @@ export function RoomDrafts({ api, roomId }: { api: DuoApiConfig; roomId: string 
   const waitingNow = (pending.data ?? []).filter((draft) => conversationOf(draft.provenance)?.roomId === roomId);
   // A decided draft folds away instead of vanishing, as its outcome appears below it (motion-plan B1).
   const waiting = useLeaving(waitingNow, (draft) => draft.id);
+  // The shortcuts belong to the first draft that is staying, not one still folding away above it.
+  const firstLive = waiting.findIndex((row) => !row.leaving);
   // The conversation's outcomes: what was sent from a draft here, and how
   // its delivery went. Read from the newest window of the draft log — the
   // recent past is what an owner checking on a delivery is asking about.
@@ -70,7 +72,7 @@ export function RoomDrafts({ api, roomId }: { api: DuoApiConfig; roomId: string 
           ))}
           {waiting.map(({ item: draft, leaving }, index) => (
             <Collapse key={draft.id} leaving={leaving}>
-              <DraftTray api={api} draft={draft} keyboard={!leaving && index === 0} />
+              <DraftTray api={api} draft={draft} keyboard={index === firstLive} />
             </Collapse>
           ))}
         </section>
