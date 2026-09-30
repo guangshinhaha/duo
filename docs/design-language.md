@@ -190,7 +190,7 @@ above.
 
   *Editorial surfaces* (the landing page, the Mirror) may add ambient motion. Operational UI may not
   (P3, Quiet until it matters): it has the working hairline and nothing else that loops. The landing
-  page plays the loop as a self-running demo that stops at the first touch, reveals its sections
+  page plays the loop as a self-running demo with a visible Pause control (it stops for good at the first real use, never at a scroll), reveals its sections
   once, and drifts its hero glow. It is one file with no dependencies, and nothing on it is hidden
   when scripts do not run.
 
