@@ -370,7 +370,8 @@ describe("motion comes from tokens", () => {
     for (const body of keyframes) {
       const properties = [...body.matchAll(/([a-z-]+)\s*:/g)].map((m) => m[1]);
       for (const property of properties) {
-        expect(["opacity", "transform"]).toContain(property);
+        // A registered custom property (`--n`, the Portrait's count-up) animates a number, not a layout property.
+        expect(["opacity", "transform"].includes(property ?? "") || (property ?? "").startsWith("--")).toBe(true);
       }
     }
   });

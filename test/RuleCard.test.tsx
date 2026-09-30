@@ -67,6 +67,26 @@ describe("RuleCard — read and disposition only (AR-18), never authoring", () =
     expect(screen.getByTestId("rule-card")).not.toHaveTextContent("%");
   });
 
+  it("once the daemon takes the decision the card says what it now is and its buttons are done (motion-plan C2)", async () => {
+    renderWithClient(<RuleCard api={api} rule={ruleFor({ id: "r9" })} bucket="awaitingApproval" />);
+    fireEvent.click(screen.getByTestId("approve-rule"));
+    expect(await screen.findByTestId("rule-decided")).toHaveTextContent("Approved. It's a standing order now.");
+    expect(screen.queryByTestId("approve-rule")).toBeNull();
+    expect(screen.queryByTestId("reject-rule")).toBeNull();
+    expect(screen.getByTestId("rule-card").className).toContain("is-decided");
+  });
+
+  it("a refused decision leaves the card undecided, its buttons still there, and the error in place", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "conflict", message: "Already decided." } }), { status: 409 })));
+    renderWithClient(<RuleCard api={api} rule={ruleFor({ id: "r9" })} bucket="awaitingApproval" />);
+    fireEvent.click(screen.getByTestId("approve-rule"));
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId("approve-rule")).not.toBeDisabled());
+    expect(screen.queryByTestId("rule-decided")).toBeNull();
+    expect(screen.getByTestId("rule-card").className).not.toContain("is-decided");
+    expect(screen.getByTestId("reject-rule")).toBeInTheDocument();
+  });
+
   it("posts the action to the daemon's route and disables buttons while pending", async () => {
     renderWithClient(<RuleCard api={api} rule={ruleFor({ id: "r9" })} bucket="awaitingApproval" />);
     fireEvent.click(screen.getByTestId("approve-rule"));

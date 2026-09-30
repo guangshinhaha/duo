@@ -5,6 +5,7 @@ import type { GrantOutcome, GridRow, PromotionOffer, TrustTier } from "../api/ty
 import { MutationError } from "../components/MutationError.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { Swap } from "../components/Swap.js";
 import { OfferCard } from "../components/TrainingCards.js";
 import { GRANTABLE, LEVEL_WORDS, TIER_WORDS } from "./words.js";
 
@@ -17,7 +18,7 @@ function Row({ row }: { row: GridRow }) {
           {row.topicLabel ?? row.topicId}
         </span>
         <span className="shrink-0 type-body" data-testid="may-level">
-          {LEVEL_WORDS[row.level] ?? row.level}
+          <Swap value={row.level}>{LEVEL_WORDS[row.level] ?? row.level}</Swap>
         </span>
       </div>
       <p className="type-provenance text-[var(--muted)]" data-testid="may-detail">

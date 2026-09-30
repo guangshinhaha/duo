@@ -23,38 +23,55 @@ export function Collapse({ leaving = false, children }: { leaving?: boolean; chi
  * exit. Derived during render (the documented "adjust state while
  * rendering" pattern) so a removed item never unmounts for a frame before
  * coming back as leaving. An item that returns stops leaving. The leaving
- * item is shown as it last looked when the set of items changed.
+ * item is shown as it last looked when the set of items changed. With
+ * `holdMs` a removed item first stays put, not yet leaving, so what just
+ * happened to it can be seen.
  */
-export function useLeaving<T>(items: readonly T[], keyOf: (item: T) => string): { item: T; leaving: boolean }[] {
+export function useLeaving<T>(items: readonly T[], keyOf: (item: T) => string, holdMs = 0): { item: T; leaving: boolean }[] {
   const signature = items.map(keyOf).join("\u0000");
-  const [state, setState] = useState<{ signature: string; items: readonly T[]; leaving: { item: T; index: number }[] }>({
+  // Each departed item has its own phase: held (still as it was), then leaving (folding). A second removal never
+  // un-folds the first.
+  type Departed = { item: T; index: number; leaving: boolean };
+  const [state, setState] = useState<{ signature: string; items: readonly T[]; departed: Departed[] }>({
     signature,
     items,
-    leaving: [],
+    departed: [],
   });
 
   if (state.signature !== signature) {
     const present = new Set(items.map(keyOf));
-    const carried = state.leaving.filter(({ item }) => !present.has(keyOf(item)));
+    const carried = state.departed.filter(({ item }) => !present.has(keyOf(item)));
     const carriedKeys = new Set(carried.map(({ item }) => keyOf(item)));
-    const gone = state.items
-      .map((item, index) => ({ item, index }))
+    const gone: Departed[] = state.items
+      .map((item, index) => ({ item, index, leaving: holdMs === 0 }))
       .filter(({ item }) => !present.has(keyOf(item)) && !carriedKeys.has(keyOf(item)));
-    setState({ signature, items, leaving: [...carried, ...gone] });
+    setState({ signature, items, departed: [...carried, ...gone] });
   }
 
-  const leavingCount = state.leaving.length;
+  const held = state.departed.filter((entry) => !entry.leaving).length;
+  const folding = state.departed.length - held;
+  // Held first (so a decided thing can be seen to be decided), then folded away, then gone.
   useEffect(() => {
-    if (leavingCount === 0) {
+    if (held === 0) {
       return;
     }
-    const timer = setTimeout(() => setState((current) => ({ ...current, leaving: [] })), LEAVE_MS);
+    const timer = setTimeout(
+      () => setState((current) => ({ ...current, departed: current.departed.map((entry) => ({ ...entry, leaving: true })) })),
+      holdMs,
+    );
     return () => clearTimeout(timer);
-  }, [leavingCount, state.signature]);
+  }, [held, holdMs, state.departed]);
+  useEffect(() => {
+    if (folding === 0) {
+      return;
+    }
+    const timer = setTimeout(() => setState((current) => ({ ...current, departed: current.departed.filter((entry) => !entry.leaving) })), LEAVE_MS);
+    return () => clearTimeout(timer);
+  }, [folding, state.departed]);
 
   const result = items.map((item) => ({ item, leaving: false }));
-  for (const { item, index } of state.leaving) {
-    result.splice(Math.min(index, result.length), 0, { item, leaving: true });
+  for (const { item, index, leaving } of state.departed) {
+    result.splice(Math.min(index, result.length), 0, { item, leaving });
   }
   return result;
 }
