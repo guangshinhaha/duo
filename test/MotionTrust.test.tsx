@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Collapse, useLeaving } from "../src/components/Collapse.js";
 import { EditDiff } from "../src/components/EditDiff.js";
 import { Swap } from "../src/components/Swap.js";
+import { Figures } from "../src/profile/Portrait.js";
 import { SwipeRow } from "../src/shell/SwipeRow.js";
 import { setThemePreference } from "../src/theme.js";
 
@@ -190,5 +191,80 @@ describe("the swipe feels like something (B9)", () => {
     drag(surface, -110);
     fireEvent.pointerUp(surface, { ...touch, clientX: 190, clientY: 100 });
     expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("review fixes (#201)", () => {
+  function List({ ids, hold }: { ids: string[]; hold: number }) {
+    const rows = useLeaving(ids, (id) => id, hold);
+    return (
+      <ul>
+        {rows.map(({ item, leaving }) => (
+          <li data-testid={`row-${item}`} key={item}>
+            <Collapse leaving={leaving}>{item}</Collapse>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  it("a second removal never un-folds the first: each departed item has its own phase", () => {
+    vi.useFakeTimers();
+    const { rerender } = render(<List hold={400} ids={["a", "b", "c"]} />);
+    rerender(<List hold={400} ids={["b", "c"]} />);
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    const a = () => screen.getByTestId("row-a").firstElementChild as HTMLElement;
+    expect(a()).toHaveAttribute("data-leaving");
+
+    rerender(<List hold={400} ids={["c"]} />);
+    expect(a()).toHaveAttribute("data-leaving");
+    // The newly removed one is held, not folding yet.
+    expect(screen.getByTestId("row-b").firstElementChild).not.toHaveAttribute("data-leaving");
+
+    // Held for 400ms, then folding for a moment (each step lets React schedule the next timer).
+    for (const step of [450, 300]) {
+      act(() => {
+        vi.advanceTimersByTime(step);
+      });
+    }
+    expect(screen.queryByTestId("row-a")).toBeNull();
+    expect(screen.queryByTestId("row-b")).toBeNull();
+    expect(screen.getByTestId("row-c")).toBeInTheDocument();
+  });
+
+  it("Swap does not re-render itself for a JSX child whose identity changes each render", () => {
+    const renders = vi.fn();
+    function Child() {
+      renders();
+      return <b>Asks you</b>;
+    }
+    const { rerender } = render(
+      <Swap value="ask">
+        <Child />
+      </Swap>,
+    );
+    const before = renders.mock.calls.length;
+    rerender(
+      <Swap value="ask">
+        <Child />
+      </Swap>,
+    );
+    expect(renders.mock.calls.length - before).toBeLessThanOrEqual(1);
+  });
+
+  it("only standalone figures count up: an id with digits in it, or a leading zero, is plain text", () => {
+    const { container } = render(<Figures counting text="You were asked 73 times about q3-2026 and t007 (12)." />);
+    expect([...container.querySelectorAll(".count")].map((el) => el.textContent)).toEqual(["73", "12"]);
+    expect(container).toHaveTextContent("You were asked 73 times about q3-2026 and t007 (12).");
+  });
+
+  it("the count overlay is dropped when the count ends, leaving the digits showing", () => {
+    const { container } = render(<Figures counting text="asked 73 times" />);
+    const figure = container.querySelector(".count") as HTMLElement;
+    expect(figure.className).toContain("counting");
+    fireEvent.animationEnd(figure);
+    expect(figure.className).not.toContain("counting");
   });
 });

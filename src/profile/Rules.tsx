@@ -87,7 +87,7 @@ export function Rules({ api }: { api: DuoApiConfig }) {
       )}
       {candidates.length > 0 && (
         <section className="shape-container flex flex-col gap-3 p-4" data-testid="rules-from-edits">
-          <h2 className="type-heading">From your edits ({candidatesNow.length})</h2>
+          <h2 className="type-heading">From your edits ({candidates.length})</h2>
           <p className="type-provenance text-[var(--muted)]">What you changed in its drafts. It only learns from one once you say so.</p>
           {candidates.map(({ item: candidate, leaving }) => (
             <Collapse key={candidate.id} leaving={leaving}>

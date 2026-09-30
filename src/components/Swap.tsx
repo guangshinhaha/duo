@@ -7,15 +7,13 @@ const SWAP_MS = 340;
  * A value that changes in place cross-fades (docs/motion-plan.md C1): the
  * old one fades out where it stood while the new one fades in over it, so a
  * level stepping down is *seen* to step down rather than silently rewritten.
- * `value` is what changed (the key); `children` is how it reads. The old
+ * `value` is what changed (the key, and the only thing compared); `children` is how it reads. The old
  * copy is `aria-hidden`, so assistive tech hears the new value once.
  */
 export function Swap({ value, children }: { value: string; children: ReactNode }) {
   const [shown, setShown] = useState<{ value: string; children: ReactNode; previous: ReactNode | null }>({ value, children, previous: null });
   if (shown.value !== value) {
     setShown({ value, children, previous: shown.children });
-  } else if (shown.previous === null && shown.children !== children) {
-    setShown({ value, children, previous: null });
   }
   useEffect(() => {
     if (shown.previous === null) {
