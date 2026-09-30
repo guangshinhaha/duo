@@ -268,7 +268,14 @@ export function ChatShell({
             </div>
           )}
           {inspector.mounted && heldTarget && (
-            <aside aria-label="Info" className="motion-inspector min-h-0 shrink-0 overflow-hidden" data-shown={inspector.shown ? "" : undefined} data-testid="inspector">
+            <aside
+              aria-hidden={inspector.shown ? undefined : true}
+              aria-label="Info"
+              className="motion-inspector min-h-0 shrink-0 overflow-hidden"
+              data-shown={inspector.shown ? "" : undefined}
+              data-testid="inspector"
+              inert={inspector.shown ? undefined : true}
+            >
              <div className="flex h-full w-80 flex-col overflow-y-auto border-l border-[var(--edge)] bg-[var(--surface)]">
               <div className="flex justify-end px-2 pt-2">
                 <button

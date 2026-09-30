@@ -187,7 +187,7 @@ export function Room({
   // Opens at its end (the newest message, then any draft), unless opened at an older message.
   const scroller = useStickToEnd<HTMLDivElement>(timeline.data?.[timeline.data.length - 1]?.eventId ?? "", at === undefined);
   // Which messages were already here when the room opened: only what arrives after that rises in (B7).
-  const seen = useRef<{ roomId: string; ids: Set<string> | null }>({ roomId, ids: null });
+  const seen = useRef<{ roomId: string; at: string | undefined; ids: Set<string> | null }>({ roomId, at, ids: null });
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -217,8 +217,9 @@ export function Room({
   // The main flow carries the roots; a thread's replies belong to the
   // thread, present here only as the root's summary of them.
   const mainFlow = timeline.data.filter((message) => message.threadRootEventId === null);
-  if (seen.current.roomId !== roomId || seen.current.ids === null) {
-    seen.current = { roomId, ids: new Set(timeline.data.map((message) => message.eventId)) };
+  // Opening at a message and reading the whole room are different windows: what the second one adds is history, not news.
+  if (seen.current.roomId !== roomId || seen.current.at !== at || seen.current.ids === null) {
+    seen.current = { roomId, at, ids: new Set(timeline.data.map((message) => message.eventId)) };
   }
   const already = seen.current.ids;
 
@@ -256,7 +257,8 @@ export function Room({
               <RoomEntry
                 key={message.eventId}
                 focused={message.eventId === at}
-                live={already !== null && !already.has(message.eventId)}
+                // Only what someone else says rises in: the owner's own words already appeared where they typed them, and their echo id changing must not play it twice.
+                live={already !== null && !already.has(message.eventId) && message.senderId !== connection.userId}
                 message={message}
                 connection={connection}
                 roomId={roomId}
