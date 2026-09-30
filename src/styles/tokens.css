@@ -534,3 +534,145 @@ button:not(:disabled):active,
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * Trust and editorial moments (docs/motion-plan.md B9, C1 to C6).
+ */
+
+/* The swipe: the row settles back without overshoot, and the label the finger is committing to comes to full size. */
+.swipe-settle {
+  transition: transform 250ms var(--ease-standard);
+}
+.swipe-label {
+  display: inline-block;
+  transform: scale(0.92);
+  transition: transform var(--dur-quick) var(--ease-standard);
+}
+.swipe-label[data-armed] {
+  transform: none;
+}
+
+/* A value that changes in place: the old one leaves where it stood as the new one arrives. */
+@keyframes duo-swap-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes duo-swap-out {
+  to {
+    opacity: 0;
+  }
+}
+.swap {
+  position: relative;
+  display: inline-block;
+}
+.swap-in {
+  animation: duo-swap-in var(--dur-slow) var(--ease-standard) both;
+}
+.swap-out {
+  position: absolute;
+  inset: 0;
+  text-align: right;
+  animation: duo-swap-out var(--dur-slow) var(--ease-standard) both;
+}
+
+/* A decided card settles: dimmed, its words changed, nothing left to press. */
+.motion-settle {
+  transition: opacity var(--dur-std) var(--ease-standard);
+}
+.motion-settle.is-decided {
+  opacity: 0.55;
+}
+
+/* What an edit taught, drawn: the strike runs left to right and the highlight wipes in. */
+@keyframes duo-strike {
+  from {
+    transform: scaleX(0);
+  }
+}
+.diff-del {
+  position: relative;
+  text-decoration: none;
+}
+.diff-del::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 55%;
+  height: 1px;
+  background: currentColor;
+  transform-origin: left;
+  animation: duo-strike var(--dur-std) var(--ease-enter) both;
+}
+.diff-ins {
+  position: relative;
+  isolation: isolate;
+}
+.diff-ins::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 3px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  transform-origin: left;
+  animation: duo-strike var(--dur-std) var(--ease-enter) 120ms both;
+}
+
+/* The Portrait: sentences rise in one after another (90ms apart), and its figures count up. */
+.portrait-in {
+  animation: duo-rise-in 450ms var(--ease-enter) both;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+@property --n {
+  syntax: "<integer>";
+  inherits: false;
+  initial-value: 0;
+}
+@keyframes duo-count {
+  from {
+    --n: 0;
+  }
+  to {
+    --n: var(--to);
+  }
+}
+/* The real digits stay in the text; while it counts, an overlay paints the running figure over them. */
+.count {
+  font-variant-numeric: tabular-nums;
+}
+.count.counting {
+  position: relative;
+  color: transparent;
+  counter-reset: n var(--n);
+  animation: duo-count 600ms var(--ease-enter) 300ms both;
+}
+.count.counting::after {
+  content: counter(n);
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--paper-warm);
+}
+
+/* ⌘K results cascade in, 20ms apart (capped by the caller), and a row's highlight moves rather than snaps. */
+.result-in {
+  animation: duo-rise-in var(--dur-std) var(--ease-enter) both;
+  animation-delay: calc(var(--i, 0) * 20ms);
+}
+.result-row {
+  transition: background-color var(--t);
+}
+.result-row:hover,
+.result-row[open] {
+  background: var(--surface-2);
+}
+
+/* The theme switch cross-fades the whole document instead of flipping it. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--dur-std);
+  animation-timing-function: var(--ease-standard);
+}

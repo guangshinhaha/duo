@@ -24,9 +24,15 @@ export function CandidateCard({ api, candidate }: { api: DuoApiConfig; candidate
   // queued — a verdict firing hours later against a queue that moved on is
   // worse than a button that waits.
   const { reachable } = useSyncStatus();
+  // Once the daemon has taken the verdict the card says so and settles back (docs/motion-plan.md C2).
+  const decided = decide.isSuccess
+    ? decide.variables.action === "approve"
+      ? "Approved. Your duo will learn from this edit."
+      : "Rejected. It won't learn from this edit."
+    : null;
 
   return (
-    <div className="flex flex-row gap-3 shape-entry p-4" data-testid="candidate">
+    <div className={`flex flex-row gap-3 shape-entry p-4 motion-settle ${decided !== null ? "is-decided" : ""}`} data-testid="candidate">
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         {/* The kind is the daemon's own string, verbatim — style and
             substance mean different things downstream (a voice correction
@@ -40,6 +46,12 @@ export function CandidateCard({ api, candidate }: { api: DuoApiConfig; candidate
         <DuoMessage>
           <EditDiff original={candidate.draftText} edited={candidate.sentText} />
         </DuoMessage>
+        {decided !== null && (
+          <p className="motion-rise type-provenance text-[var(--muted)]" data-testid="candidate-decided" role="status">
+            {decided}
+          </p>
+        )}
+        {decided === null && (
         <div className="flex gap-2">
           <button
             className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
@@ -56,6 +68,7 @@ export function CandidateCard({ api, candidate }: { api: DuoApiConfig; candidate
             Reject
           </button>
         </div>
+        )}
         <MutationError error={decide.error} />
       </div>
     </div>

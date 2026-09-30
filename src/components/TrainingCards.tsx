@@ -228,7 +228,7 @@ export interface TrustNotice {
  */
 export function NoticeCard({ notice }: { notice: TrustNotice }) {
   return (
-    <div className="max-w-[90%]" data-testid="notice-card">
+    <div className="max-w-[90%] motion-rise" data-testid="notice-card">
       <DuoLine attributionTestId="notice-card-attribution" label="Your duo" state="neutral" testId="notice-card-line">
         <p className="type-body">{notice.text}</p>
       </DuoLine>

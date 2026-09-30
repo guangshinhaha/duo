@@ -28,10 +28,15 @@ function applyStamp(preference: ThemePreference): void {
   }
 }
 
-/** Remembers the choice and applies it now. */
+/** Remembers the choice and applies it now — cross-fading the whole document where the browser can, and not at all for someone who asked for less motion (docs/motion-plan.md C6). */
 export function setThemePreference(preference: ThemePreference): void {
   localStorage.setItem(THEME_STORAGE_KEY, preference);
-  applyStamp(preference);
+  const fade = (document as Document & { startViewTransition?: (update: () => void) => unknown }).startViewTransition;
+  if (typeof fade === "function" && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+    fade.call(document, () => applyStamp(preference));
+  } else {
+    applyStamp(preference);
+  }
 }
 
 /** Launch: stamp what was remembered, before first paint, and report what applied. */

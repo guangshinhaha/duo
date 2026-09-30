@@ -7,6 +7,8 @@ import { Timestamp } from "./Timestamp.js";
 
 /** Mechanical preview truncation — presentation only. The full text is one click away (#46 AC2); the summary never edits it. */
 const SNIPPET_LENGTH = 140;
+/** How many results take part in the cascade; the rest arrive with the last of them. */
+const MAX_CASCADE = 8;
 
 function snippet(text: string): string {
   return text.length <= SNIPPET_LENGTH ? text : `${text.slice(0, SNIPPET_LENGTH)}…`;
@@ -21,7 +23,7 @@ function snippet(text: string): string {
  */
 function SearchResultRow({ record }: { record: CorpusRecord }) {
   return (
-    <details className="shape-entry p-3" data-testid="search-result">
+    <details className="shape-entry result-row p-3" data-testid="search-result">
       <summary className="cursor-pointer type-body text-[var(--text)]" data-testid="search-result-summary">
         {snippet(record.text)}
       </summary>
@@ -143,8 +145,9 @@ function SearchBody({ api, onClose }: { api: DuoApiConfig; onClose: () => void }
 
       {rows.length > 0 && (
         <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
-          {rows.map(({ record, rank }) => (
-            <div key={`${rank}-${record.id}`} className="flex flex-col">
+          {rows.map(({ record, rank }, index) => (
+            // Results cascade in 20ms apart, capped so a long page never waits on its tail.
+            <div key={`${rank}-${record.id}`} className="result-in flex flex-col" style={{ ["--i" as string]: Math.min(index, MAX_CASCADE - 1) }}>
               <SearchResultRow record={record} />
               <div className="flex items-baseline justify-between px-1">
                 <span className="type-provenance text-[var(--faint)]" data-testid="search-result-source">

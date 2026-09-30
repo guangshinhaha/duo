@@ -1,6 +1,7 @@
 import type { DuoApiConfig } from "../api/client.js";
 import { useMirrorRules, useReview } from "../api/queries.js";
 import type { CorrectionCandidate, Rule, RuleReviewListing } from "../api/types.js";
+import { Collapse, useLeaving } from "../components/Collapse.js";
 import { RuleCard, type RuleBucket } from "../components/RuleCard.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -16,15 +17,22 @@ const BUCKETS: ReadonlyArray<{ key: RuleBucket; heading: string; empty: string; 
   { key: "rejected", heading: "Set aside", empty: "Nothing set aside.", collapsed: true },
 ];
 
+/** How long a decided card stays as it is before it folds away. */
+const HOLD_DECIDED_MS = 400;
+
 function Bucket({ api, listing, bucket }: { api: DuoApiConfig; listing: RuleReviewListing; bucket: (typeof BUCKETS)[number] }) {
   const rules: Rule[] = Array.isArray(listing[bucket.key]) ? listing[bucket.key] : [];
+  // A decided rule is seen to be decided, then folds out of the list (motion-plan C2).
+  const rows = useLeaving(rules, (rule) => rule.id, HOLD_DECIDED_MS);
   const body =
-    rules.length === 0 ? (
+    rows.length === 0 ? (
       <p className="type-provenance text-[var(--faint)]">{bucket.empty}</p>
     ) : (
       <div className="flex flex-col gap-3">
-        {rules.map((rule) => (
-          <RuleCard api={api} bucket={bucket.key} key={rule.id} rule={rule} />
+        {rows.map(({ item: rule, leaving }) => (
+          <Collapse key={rule.id} leaving={leaving}>
+            <RuleCard api={api} bucket={bucket.key} rule={rule} />
+          </Collapse>
         ))}
       </div>
     );
@@ -61,13 +69,14 @@ const isCandidate = (value: unknown): value is CorrectionCandidate =>
 export function Rules({ api }: { api: DuoApiConfig }) {
   const rules = useMirrorRules(api);
   const review = useReview(api);
+  const candidatesNow = Array.isArray(review.data) ? review.data.filter(isCandidate) : [];
+  const candidates = useLeaving(candidatesNow, (candidate) => candidate.id, HOLD_DECIDED_MS);
   if (rules.isLoading) {
     return <RouteLoading variant="panels" />;
   }
   if (rules.error) {
     return <RouteError api={api} error={rules.error} onRetry={() => void rules.refetch()} />;
   }
-  const candidates = Array.isArray(review.data) ? review.data.filter(isCandidate) : [];
   const listing = rules.data;
   return (
     <div className="flex max-w-2xl flex-col gap-5 p-6" data-testid="rules-tab">
@@ -78,10 +87,12 @@ export function Rules({ api }: { api: DuoApiConfig }) {
       )}
       {candidates.length > 0 && (
         <section className="shape-container flex flex-col gap-3 p-4" data-testid="rules-from-edits">
-          <h2 className="type-heading">From your edits ({candidates.length})</h2>
+          <h2 className="type-heading">From your edits ({candidatesNow.length})</h2>
           <p className="type-provenance text-[var(--muted)]">What you changed in its drafts. It only learns from one once you say so.</p>
-          {candidates.map((candidate) => (
-            <CandidateCard api={api} candidate={candidate} key={candidate.id} />
+          {candidates.map(({ item: candidate, leaving }) => (
+            <Collapse key={candidate.id} leaving={leaving}>
+              <CandidateCard api={api} candidate={candidate} />
+            </Collapse>
           ))}
         </section>
       )}

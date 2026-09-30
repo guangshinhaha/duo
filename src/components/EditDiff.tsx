@@ -87,11 +87,11 @@ export function EditDiff({ original, edited }: { original: string; edited: strin
           // `del`'s native strike-through is the at-a-glance cue; the color
           // names the verdict. Added text keeps its baseline (no underline)
           // — it is text to read, not a hyperlink.
-          <del key={index} data-testid="edit-diff-removed" className="text-[var(--refused)]">
+          <del key={index} data-testid="edit-diff-removed" className="diff-del text-[var(--refused)]">
             {segment.text}
           </del>
         ) : (
-          <ins key={index} data-testid="edit-diff-added" className="text-[var(--confident)] no-underline">
+          <ins key={index} data-testid="edit-diff-added" className="diff-ins text-[var(--confident)] no-underline">
             {segment.text}
           </ins>
         ),

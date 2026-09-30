@@ -117,7 +117,8 @@ describe("Portrait — who it thinks you are, in words", () => {
   it("shows the sentences, where they came from, the numbers one tap away, and the rules waiting", async () => {
     stub({ "/mirror/portrait": portrait(), "/mirror/rules": { awaitingApproval: [rule("r1", "x")], weakSignals: [], inconsistent: [], approved: [], rejected: [] } });
     mount(<Portrait api={api} />);
-    expect(await screen.findByText("You were asked about scheduling 73 times.")).toBeInTheDocument();
+    // The figures are their own spans (so they can count up), but the sentence reads exactly as the daemon's counts say it.
+    expect(await screen.findByTestId("portrait-sentences")).toHaveTextContent("You were asked about scheduling 73 times.");
     expect(screen.getByTestId("portrait-source")).toHaveTextContent("214 questions");
     const numbers = screen.getByTestId("portrait-numbers");
     expect(within(numbers).getAllByTestId("portrait-topic")).toHaveLength(5);

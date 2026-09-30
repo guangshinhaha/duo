@@ -35,6 +35,13 @@ const ACTION_LABELS: Record<RuleAction, string> = {
   promote: "Promote",
 };
 
+/** What a decision now is, said where it was made (docs/motion-plan.md C2). */
+const DECIDED_WORDS: Record<RuleAction, string> = {
+  approve: "Approved. It's a standing order now.",
+  reject: "Rejected. Your duo won't use this rule.",
+  promote: "Promoted. It now waits for your approval.",
+};
+
 /**
  * One derived rule and its disposition buttons. AR-18: read and disposition
  * only — there is no free-text editing here, because `duo/rules/*.md` on the
@@ -49,9 +56,11 @@ export function RuleCard({ api, rule, bucket }: { api: DuoApiConfig; rule: Rule;
   // AR-15, same as DraftCard: disposition waits for the daemon to answer —
   // a queued Approve firing against rules that moved is worse than none.
   const { reachable } = useSyncStatus();
+  // Once the daemon has taken the decision the card says so and settles back; the buttons are done.
+  const decided = ruleAction.isSuccess ? DECIDED_WORDS[ruleAction.variables.action] : null;
 
   return (
-    <div className="flex flex-col gap-2 shape-entry p-4" data-testid="rule-card">
+    <div className={`flex flex-col gap-2 shape-entry p-4 motion-settle ${decided !== null ? "is-decided" : ""}`} data-testid="rule-card">
       <DuoMessage>{rule.text}</DuoMessage>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 type-provenance text-[var(--muted)]" data-testid="rule-meta">
         <span>{rule.origin === "owner_asserted" ? "you wrote this" : "worked out from your messages"}</span>
@@ -79,7 +88,12 @@ export function RuleCard({ api, rule, bucket }: { api: DuoApiConfig; rule: Rule;
         </button>
       </div>
       {showEvidence && <RuleEvidence api={api} rule={rule} />}
-      {actions.length > 0 && (
+      {decided !== null && (
+        <p className="motion-rise type-provenance text-[var(--muted)]" data-testid="rule-decided" role="status">
+          {decided}
+        </p>
+      )}
+      {actions.length > 0 && decided === null && (
         <div className="flex gap-2">
           {actions.map((action) => (
             <button

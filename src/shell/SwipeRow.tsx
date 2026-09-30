@@ -17,6 +17,15 @@ const COMMIT_PX = 96;
 const COMMIT_FRACTION = 0.35;
 /** How far a finger moves before we know whether it is scrolling or swiping. */
 const LOCK_PX = 10;
+/** Past the commit point the row follows the finger at this fraction: it resists, so the commit is felt. */
+const RESISTANCE = 0.35;
+
+/** The row's travel for a finger travel of `raw`: one to one until the commit point, then resisted. */
+function travel(raw: number, threshold: number): number {
+  const distance = Math.abs(raw);
+  const shown = distance <= threshold ? distance : threshold + (distance - threshold) * RESISTANCE;
+  return raw < 0 ? -shown : shown;
+}
 
 type Phase = "idle" | "sending" | "sent" | "dismissed" | "failed";
 
@@ -44,7 +53,9 @@ export function SwipeRow({
   const [dragging, setDragging] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
-  const gesture = useRef<{ x: number; y: number; axis: "h" | "v" | null } | null>(null);
+  const gesture = useRef<{ x: number; y: number; axis: "h" | "v" | null; raw: number } | null>(null);
+  // Which side has crossed its commit point: its label settles to full size.
+  const [armed, setArmed] = useState<"send" | "dismiss" | null>(null);
   const swallowClick = useRef(false);
   // A ref, and never cleared on unmount: walking off the list inside the window is not an undo, and dropping the timer would leave the owner believing a dismissal was recorded that the daemon never received (the same law `useDraftDecision` keeps).
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -86,7 +97,7 @@ export function SwipeRow({
     if (phase !== "idle" || (send === null && dismiss === null) || (e.pointerType === "mouse" && e.button !== 0)) {
       return;
     }
-    gesture.current = { x: e.clientX, y: e.clientY, axis: null };
+    gesture.current = { x: e.clientX, y: e.clientY, axis: null, raw: 0 };
   };
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>): void => {
@@ -112,7 +123,11 @@ export function SwipeRow({
       return;
     }
     // Toward a side with nothing to reveal, the row does not move.
-    setOffset(dx < 0 ? (send ? dx : 0) : dismiss ? dx : 0);
+    const raw = dx < 0 ? (send ? dx : 0) : dismiss ? dx : 0;
+    g.raw = raw;
+    const threshold = Math.max(COMMIT_PX, e.currentTarget.getBoundingClientRect().width * COMMIT_FRACTION);
+    setOffset(travel(raw, threshold));
+    setArmed(raw <= -threshold ? "send" : raw >= threshold ? "dismiss" : null);
   };
 
   const finish = (e: PointerEvent<HTMLDivElement>, cancelled: boolean): void => {
@@ -122,13 +137,15 @@ export function SwipeRow({
       return;
     }
     setDragging(false);
+    setArmed(null);
     // The tap that ends a swipe is not a tap on the link underneath.
     swallowClick.current = true;
     const width = e.currentTarget.getBoundingClientRect().width;
     const threshold = Math.max(COMMIT_PX, width * COMMIT_FRACTION);
-    if (!cancelled && offset <= -threshold && send) {
+    // The decision is the finger's travel, not the resisted row's.
+    if (!cancelled && g.raw <= -threshold && send) {
       commitSend();
-    } else if (!cancelled && offset >= threshold && dismiss) {
+    } else if (!cancelled && g.raw >= threshold && dismiss) {
       commitDismiss();
     } else {
       setOffset(0);
@@ -184,16 +201,20 @@ export function SwipeRow({
     <div className="relative overflow-hidden rounded-[var(--r-md)]" data-testid="swipe-row">
       {dismiss && (
         <div aria-hidden="true" className="absolute inset-y-0 left-0 flex w-full items-center bg-[var(--surface-2)] pl-4 type-body text-[var(--muted)]" data-testid="swipe-reveal-dismiss">
-          Dismiss
+          <span className="swipe-label" data-armed={armed === "dismiss" ? "" : undefined}>
+            Dismiss
+          </span>
         </div>
       )}
       {send && (
         <div aria-hidden="true" className="absolute inset-y-0 right-0 flex w-full items-center justify-end bg-[var(--accent)] pr-4 type-body text-[var(--bg)]" data-testid="swipe-reveal-send">
-          Send
+          <span className="swipe-label" data-armed={armed === "send" ? "" : undefined}>
+            Send
+          </span>
         </div>
       )}
       <div
-        className={`relative touch-pan-y bg-[var(--bg)] ${dragging ? "" : "transition-transform motion-reduce:transition-none"}`}
+        className={`relative touch-pan-y bg-[var(--bg)] ${dragging ? "" : "swipe-settle motion-reduce:transition-none"}`}
         data-testid="swipe-surface"
         onClickCapture={(e) => {
           if (swallowClick.current) {

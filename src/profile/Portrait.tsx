@@ -4,6 +4,7 @@ import type { InterruptionPortrait } from "../api/types.js";
 import { MeterBar } from "../components/MeterBar.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { useState } from "react";
 
 const times = (n: number): string => (n === 1 ? "once" : `${n} times`);
 const formatDate = (iso: string | null): string => (iso ? new Date(iso).toLocaleDateString() : "—");
@@ -34,12 +35,42 @@ export function portraitSentences(portrait: InterruptionPortrait): string[] {
 }
 
 /**
+ * The portrait reveals once per visit (docs/motion-plan.md C4): its sentences
+ * rise in one after another and its figures count up. Coming back to the tab,
+ * or reopening it, finds it in place.
+ */
+let portraitRevealed = false;
+
+/**
+ * A sentence with its figures marked so they can count up. The real digits
+ * stay in the text (they are what is read, searched and pinned); the count is
+ * an overlay that only paints while it runs.
+ */
+function Figures({ text, counting }: { text: string; counting: boolean }) {
+  return (
+    <>
+      {text.split(/(\d+)/).map((part, index) =>
+        /^\d+$/.test(part) ? (
+          <span className={counting ? "count counting" : "count"} key={index} style={{ ["--to" as string]: part }}>
+            {part}
+          </span>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
+/**
  * Who your duo thinks you are (the profile's Portrait tab): a few sentences
  * in the reflection face — the one place the product speaks *about you* —
  * with the numbers behind them one tap away. A thin history says so in
  * words instead of dressing four questions up as a personality (AR-19).
  */
 export function Portrait({ api }: { api: DuoApiConfig }) {
+  // Decided once, when this tab first mounts: only the first showing of a visit reveals.
+  const [reveal] = useState(() => !portraitRevealed);
   const portrait = useMirrorPortrait(api);
   const rules = useMirrorRules(api);
   if (portrait.isLoading) {
@@ -64,9 +95,16 @@ export function Portrait({ api }: { api: DuoApiConfig }) {
       ) : (
         <>
           <div className="flex flex-col gap-3" data-testid="portrait-sentences">
-            {portraitSentences(data).map((sentence) => (
-              <p className="type-reflection" key={sentence}>
-                {sentence}
+            {portraitSentences(data).map((sentence, index) => (
+              <p
+                className={reveal ? "type-reflection portrait-in" : "type-reflection"}
+                key={sentence}
+                onAnimationEnd={() => {
+                  portraitRevealed = true;
+                }}
+                style={{ ["--i" as string]: index }}
+              >
+                <Figures counting={reveal} text={sentence} />
               </p>
             ))}
           </div>

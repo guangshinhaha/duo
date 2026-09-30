@@ -23,14 +23,17 @@ export function Collapse({ leaving = false, children }: { leaving?: boolean; chi
  * exit. Derived during render (the documented "adjust state while
  * rendering" pattern) so a removed item never unmounts for a frame before
  * coming back as leaving. An item that returns stops leaving. The leaving
- * item is shown as it last looked when the set of items changed.
+ * item is shown as it last looked when the set of items changed. With
+ * `holdMs` a removed item first stays put, not yet leaving, so what just
+ * happened to it can be seen.
  */
-export function useLeaving<T>(items: readonly T[], keyOf: (item: T) => string): { item: T; leaving: boolean }[] {
+export function useLeaving<T>(items: readonly T[], keyOf: (item: T) => string, holdMs = 0): { item: T; leaving: boolean }[] {
   const signature = items.map(keyOf).join("\u0000");
-  const [state, setState] = useState<{ signature: string; items: readonly T[]; leaving: { item: T; index: number }[] }>({
+  const [state, setState] = useState<{ signature: string; items: readonly T[]; leaving: { item: T; index: number }[]; released: boolean }>({
     signature,
     items,
     leaving: [],
+    released: holdMs === 0,
   });
 
   if (state.signature !== signature) {
@@ -40,21 +43,30 @@ export function useLeaving<T>(items: readonly T[], keyOf: (item: T) => string): 
     const gone = state.items
       .map((item, index) => ({ item, index }))
       .filter(({ item }) => !present.has(keyOf(item)) && !carriedKeys.has(keyOf(item)));
-    setState({ signature, items, leaving: [...carried, ...gone] });
+    setState({ signature, items, leaving: [...carried, ...gone], released: holdMs === 0 });
   }
 
   const leavingCount = state.leaving.length;
+  const { released } = state;
+  // Held first (so a decided thing can be seen to be decided), then folded away, then gone.
   useEffect(() => {
-    if (leavingCount === 0) {
+    if (leavingCount === 0 || released) {
       return;
     }
-    const timer = setTimeout(() => setState((current) => ({ ...current, leaving: [] })), LEAVE_MS);
+    const timer = setTimeout(() => setState((current) => ({ ...current, released: true })), holdMs);
     return () => clearTimeout(timer);
-  }, [leavingCount, state.signature]);
+  }, [leavingCount, released, holdMs, state.signature]);
+  useEffect(() => {
+    if (leavingCount === 0 || !released) {
+      return;
+    }
+    const timer = setTimeout(() => setState((current) => ({ ...current, leaving: [], released: holdMs === 0 })), LEAVE_MS);
+    return () => clearTimeout(timer);
+  }, [leavingCount, released, holdMs, state.signature]);
 
   const result = items.map((item) => ({ item, leaving: false }));
   for (const { item, index } of state.leaving) {
-    result.splice(Math.min(index, result.length), 0, { item, leaving: true });
+    result.splice(Math.min(index, result.length), 0, { item, leaving: released });
   }
   return result;
 }
