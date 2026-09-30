@@ -190,3 +190,32 @@ export function roomOfRoute(route: Route): string | null {
   }
   return null;
 }
+
+/**
+ * What makes one surface a *different* surface, for the shell's pane
+ * transition (docs/motion-plan.md B5): a chat opening another chat is a new
+ * pane, but moving between the duo's profile tabs, or between Settings'
+ * sections, or to another message in the same chat, is the same pane
+ * changing its mind — it must not remount (and must not animate).
+ */
+export function paneKey(route: Route): string {
+  if (typeof route === "string") {
+    return route;
+  }
+  if ("draft" in route) {
+    return `draft:${route.draft}`;
+  }
+  if ("chat" in route) {
+    return `chat:${route.chat}`;
+  }
+  if ("thread" in route) {
+    return `thread:${route.thread.roomId}:${route.thread.rootEventId}`;
+  }
+  if ("profile" in route) {
+    return "profile";
+  }
+  if ("settings" in route) {
+    return "settings";
+  }
+  return "admin";
+}

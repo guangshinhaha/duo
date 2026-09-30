@@ -903,6 +903,39 @@ describe("#64 AC2 — editing and deleting are honest", () => {
     expect(within(row).getByTestId("room-message-edited")).toBeInTheDocument();
     expect(within(row).queryByText("what's our refund policy?")).toBeNull();
   });
+
+  it("only a message that arrives while the room is open rises in: history renders in place (#192)", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    for (const row of screen.getAllByTestId("room-message")) {
+      expect(row.className).not.toContain("motion-rise");
+    }
+
+    act(() => fake.deliver(messageFor({ eventId: "$live", senderId: "@bose:workspace.example", senderName: "Bose", body: "one more thing" })));
+    const arrived = await waitFor(() => messageRow("one more thing"));
+    expect(arrived.className).toContain("motion-rise");
+    // The ones that were already here still sit still.
+    expect(screen.getAllByTestId("room-message").filter((row) => row.className.includes("motion-rise"))).toHaveLength(1);
+  });
+
+  it("the owner's own message never rises in: it already appeared where they typed it, and its echo id changing must not play it twice (#192 review)", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    act(() => fake.deliver(messageFor({ eventId: "$mine", senderId: SESSION.userId, senderName: "ana", body: "sending this myself" })));
+    const mine = await waitFor(() => messageRow("sending this myself"));
+    expect(mine.className).not.toContain("motion-rise");
+  });
 });
 
 describe("#64 AC3 — threads and reactions work", () => {
