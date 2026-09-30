@@ -1,6 +1,8 @@
 # Motion plan: making Duo feel sleeker
 
-> Status: proposed, 2026-09-30. It extends `design-language.md` §3.4 and does not override it.
+> Status: **superseded**. What shipped is recorded in `design-language.md` §3.1 and §3.4; this file is the audit and the reasoning that led to it, kept for history. Deviations from it are listed below.
+>
+> Originally: proposed, 2026-09-30. It extends `design-language.md` §3.4 and does not override it.
 > It was drafted with the `motion-design` skill (`.agents/skills/motion-design`). Where the skill
 > and Hairline disagree, Hairline wins, and each case is called out below.
 
@@ -166,3 +168,15 @@ the bundle for springs we've decided not to use.
   (Chrome DevTools → Animations). The skill's quality checks are: no linear spatial motion, exits
   shorter than entrances, total staggers under 500ms in the app, and no more than ⅓ of the
   elements on screen moving at once.
+
+## What shipped differently from this plan
+
+- **Phone push and pop** use keyed CSS entrances, not the View Transitions API: the Tauri WKWebView path
+  could not be tested, so it was not adopted. Only entrances animate; the departing screen cannot.
+- **Undo (B2)**: a dismissal is held in the tray for its undo window and recorded only when that ends, so the
+  collapse happens after the window and there is nothing to reverse on Undo.
+- **Count to zero (B3)**: the figure leaves and nothing replaces it, instead of showing a literal 0.
+- **Portrait rise (C4)** uses the shared 8px entrance instead of 12px.
+- **The duo route's tray-to-answer swap** inside a turn did not gain a collapse.
+- **Landing page (L1 to L11)**: autoplay runs at every width; layout shift is lower than before but not zero
+  (the web-font swap remains); one trust cell (Deploy access, Answer) stays demoted after the demo.

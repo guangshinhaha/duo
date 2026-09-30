@@ -67,8 +67,10 @@ reads as a pause mark and as a pair, and it draws on the product's own signature
 ```
 
 - **Wordmark**: `duo`, lowercase, Inter 600, tracking −0.02em, set after the mark.
-- **Loading state**: the hairline draws top to bottom (400ms) while the duo is working. It is
-  the only looping motion in the product.
+- **Loading state**: while the duo is working (asking it something), the mark's hairline draws
+  top to bottom (400ms), fades and draws again, an 800ms loop. It is the only looping motion in the
+  operational product. Skeletons do not loop: they hold still and appear only if a wait lasts
+  longer than 150ms.
 - **Favicon/app icon**: the mark in Paper on Ink, with the hairline in Signal.
 
 ### 3.2 Colour
@@ -127,12 +129,70 @@ above.
   asymmetric shape in the product, and it belongs to the duo.
 - **Elevation**: none in operational UI. Surfaces separate by value (Ink → Graphite → Slate) and
   by Edge borders. The only shadow is on dialogs.
-- **Motion**: `--t` (150ms, ease-out) on state change only. Three named moments are allowed more:
-  - *Draft arrives*: fade-up 8px over 200ms, and the hairline draws in over 300ms.
-  - *Waiting on you clears*: *Waiting on you clears*: the count ticks down, then settles to "Nothing waiting on you." (no confetti).
-  - *Demotion*: the trust cell steps down one level with a 300ms cross-fade, and the sentence
-    announcing it arrives at the same time.
-  - Everything respects `prefers-reduced-motion` by collapsing to instant.
+- **Motion**: calm and certain. The archetype is Corporate leaning Premium: no bounce, no
+  overshoot, short durations, confident deceleration. Two rules sit above everything else here.
+  **Only `transform` and `opacity` animate** (a fold or a resize may ease a size, and the
+  Portrait's count-up animates a number, and those are the only exceptions). **Nothing moves
+  without a reason the owner can name**: where it came from, where it went, or that something
+  changed. Everything respects `prefers-reduced-motion` by collapsing to instant.
+
+  *The tokens* (`src/styles/tokens.css`; a component takes its motion from these or it does not
+  ship, and `test/DesignSystem.test.tsx` enforces that):
+
+  | Token | Value | Use |
+  |---|---|---|
+  | `--ease-standard` | `cubic-bezier(0.2, 0, 0, 1)` | the signature curve: on-screen change, about 80% of all motion |
+  | `--ease-enter` | `cubic-bezier(0.05, 0.7, 0.1, 1)` | arrivals decelerate |
+  | `--ease-exit` | `cubic-bezier(0.3, 0, 1, 1)` | departures accelerate |
+  | `--dur-quick` | 120ms | press, hover, tooltips, menus |
+  | `--dur-std` | 200ms | entries arriving, dialogs, toasts, pane changes |
+  | `--dur-slow` | 320ms | sheets, the hairline draw, a value that changes in place |
+  | `--dur-exit` | 150ms | every exit, shorter than its entrance |
+  | `--rise` | 8px | the one entrance: rise and fade in |
+  | `--t` | quick + standard | state change; the original token, kept as an alias |
+
+  *State change* uses `--t`. *Arrivals* rise 8px and fade in. *Exits* are shorter than the
+  entrance they undo. *Pressing* any button or chat row shrinks it to 0.98.
+
+  *The named moments*, each with its own timing because it says something:
+  - **Dialogs and sheets**: the scrim fades in and the panel rises into place (200ms). A phone's
+    bottom sheet slides up from the edge (320ms in, 200ms out). Menus pop from their trigger,
+    tooltips shift 2px toward the side they sit on, toasts slide in from the right and follow a
+    swipe.
+  - **Draft arrives**: only a draft the daemon pushed while the owner was there. The block rises 8px
+    (200ms) and its hairline draws top to bottom (320ms, starting 60ms later, so the line lands
+    last). A draft that was already there, or that returns after navigating away, is in place.
+  - **The duo is working**: the hairline loop above.
+  - **A draft is decided**: its tray folds away (height and opacity together, 200ms) as its outcome
+    rises in below it. A dismissal is held for its undo window *before* it is recorded, so nothing
+    has collapsed yet when Undo is pressed and there is nothing to reverse.
+  - **Waiting on you clears**: the count ticks (the old figure leaves upward while the new one rises
+    from below, in tabular numerals), then "Nothing waiting on you." rises in. No confetti.
+  - **Moving between places**: the pane's content fades and rises 4px when a *different* surface
+    opens, while the list and chrome stay still; moving between profile tabs or settings sections is
+    not a new surface and does not animate. On a phone the pane slides in 24px from the right and
+    the list slides back from the left. Only entrances animate: a screen that unmounts cannot play
+    an exit. The Info column eases open as the pane narrows; the offline bar folds open and shut.
+  - **A message arrives in a room**: it rises in; history never does. The scroll to the end is
+    smooth after the first landing, instant under reduced motion.
+  - **The swipe**: the row follows the finger, resists past its commit point, and the label being
+    committed to settles to full size. The decision is the finger's travel, not the resisted row's.
+  - **Demotion**: the trust level cross-fades (320ms) and the sentence announcing it rises in at the
+    same moment. No shake: a demotion is an announcement, not an error.
+  - **A rule or correction is decided**: once the daemon has taken it, the card says what it now is
+    and dims to 0.55; it holds for 400ms, then folds out of its list.
+  - **An edit's diff**: the strike draws left to right and the highlight wipes in.
+  - **The Portrait** (a Reflection surface, so it may do more): its sentences rise in 90ms apart
+    and its figures count up over 600ms, once per visit. The real digits stay in the text; an
+    overlay paints the count, so nothing shifts.
+  - **Search** results cascade in 20ms apart, capped at eight, and a theme switch cross-fades the
+    document.
+
+  *Editorial surfaces* (the landing page, the Mirror) may add ambient motion. Operational UI may not
+  (P3, Quiet until it matters): it has the working hairline and nothing else that loops. The landing
+  page plays the loop as a self-running demo that stops at the first touch, reveals its sections
+  once, and drifts its hero glow. It is one file with no dependencies, and nothing on it is hidden
+  when scripts do not run.
 
 ### 3.5 Iconography
 
