@@ -15,7 +15,7 @@ export const DropdownMenuTrigger = RadixDropdownMenu.Trigger;
 export function DropdownMenuContent({ className = "", children, ...props }: ComponentProps<typeof RadixDropdownMenu.Content>) {
   return (
     <RadixDropdownMenu.Portal>
-      <RadixDropdownMenu.Content className={`z-50 flex min-w-40 flex-col gap-1 p-2 shape-container ${className}`} {...props}>
+      <RadixDropdownMenu.Content className={`z-50 flex min-w-40 flex-col gap-1 p-2 shape-container motion-menu ${className}`} {...props}>
         {children}
       </RadixDropdownMenu.Content>
     </RadixDropdownMenu.Portal>

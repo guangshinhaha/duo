@@ -337,3 +337,41 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+describe("motion comes from tokens", () => {
+  it("no component sets its own duration, easing or millisecond transition", () => {
+    // Motion is a system (docs/motion-plan.md §1.1): the durations and curves
+    // are tokens, so a surface can't quietly invent a 137ms of its own. The
+    // same law the type scale follows.
+    const utilities = /\b(?:duration|ease|delay)-(?:\d+|\[[^\]]+\]|in|out|in-out|linear)\b/g;
+    const inlineMs = /(?:transition|animation)(?:Duration|Delay)?\s*[:=]\s*["'`{]?[^;"'`]*\b\d+m?s\b/g;
+    const offenders: string[] = [];
+    for (const path of srcSources()) {
+      const text = readFileSync(path, "utf8");
+      const relative = join("src", path.slice(root.length + 1));
+      for (const match of [...text.matchAll(utilities), ...text.matchAll(inlineMs)]) {
+        offenders.push(`${relative}: ${match[0]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("defines the three durations and three curves once, in tokens", () => {
+    for (const token of ["--dur-quick: 120ms", "--dur-std: 200ms", "--dur-slow: 320ms", "--ease-standard:", "--ease-enter:", "--ease-exit:"]) {
+      expect(tokensCss).toContain(token);
+    }
+    // The original state-change token survives as an alias of quick + standard.
+    expect(tokensCss).toContain("--t: var(--dur-quick) var(--ease-standard)");
+  });
+
+  it("only transform and opacity animate", () => {
+    const keyframes = [...tokensCss.matchAll(/@keyframes[^{]+\{([\s\S]*?)\n\}/g)].map((m) => m[1] ?? "");
+    expect(keyframes.length).toBeGreaterThan(0);
+    for (const body of keyframes) {
+      const properties = [...body.matchAll(/([a-z-]+)\s*:/g)].map((m) => m[1]);
+      for (const property of properties) {
+        expect(["opacity", "transform"]).toContain(property);
+      }
+    }
+  });
+});
