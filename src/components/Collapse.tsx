@@ -60,14 +60,14 @@ export function useLeaving<T>(items: readonly T[], keyOf: (item: T) => string, h
       holdMs,
     );
     return () => clearTimeout(timer);
-  }, [held, holdMs, state.signature]);
+  }, [held, holdMs, state.departed]);
   useEffect(() => {
     if (folding === 0) {
       return;
     }
     const timer = setTimeout(() => setState((current) => ({ ...current, departed: current.departed.filter((entry) => !entry.leaving) })), LEAVE_MS);
     return () => clearTimeout(timer);
-  }, [folding, state.signature]);
+  }, [folding, state.departed]);
 
   const result = items.map((item) => ({ item, leaving: false }));
   for (const { item, index, leaving } of state.departed) {
