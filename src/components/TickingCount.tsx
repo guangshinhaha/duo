@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
-/** How long the old figure lingers: its exit (`--dur-quick`) plus a frame. */
-const TICK_MS = 140;
+/** How long the old figure lingers: the entrance of the new one (`--dur-std`) plus a frame, so neither is cut short. */
+const TICK_MS = 210;
 
 /**
  * A count that ticks (docs/motion-plan.md B3): when the number changes the
@@ -38,4 +38,24 @@ export function TickingCount({ value }: { value: number }) {
       )}
     </span>
   );
+}
+
+/**
+ * Whether a badge that shows `value` should still be on screen: while it is
+ * above zero, and for one tick after it reaches zero, so the last figure is
+ * seen leaving instead of the badge popping out.
+ */
+export function useLingering(value: number): boolean {
+  const [state, setState] = useState({ previous: value, lingering: false });
+  if (state.previous !== value) {
+    setState({ previous: value, lingering: value === 0 && state.previous > 0 });
+  }
+  useEffect(() => {
+    if (!state.lingering) {
+      return;
+    }
+    const timer = setTimeout(() => setState((current) => ({ ...current, lingering: false })), TICK_MS);
+    return () => clearTimeout(timer);
+  }, [state.lingering]);
+  return value > 0 || state.lingering;
 }
