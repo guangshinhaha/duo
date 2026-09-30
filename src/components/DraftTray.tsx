@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import type { DraftRecord } from "../api/types.js";
+import { useArrival } from "../arrivals.js";
 import { toDraftPipelineResult } from "./DraftCard.js";
 import { hairlineState, type HairlineState } from "./ConfidenceHairline.js";
 import { DuoLine } from "./DuoLine.js";
@@ -60,6 +61,7 @@ export function DraftTray({
   keyboard?: boolean;
 }) {
   const d = useDraftDecision(api, draft);
+  const arrived = useArrival(draft.id);
   const state = hairlineState(toDraftPipelineResult(draft));
   const passedOn = draft.escalated && !draft.refused;
   const rules = draft.sources.filter((source) => source.kind === "rule");
@@ -112,6 +114,7 @@ export function DraftTray({
     >
       <div className={unsent ? "rounded-[var(--r-md)] border border-dashed border-[var(--edge)] p-1" : ""}>
       <DuoLine
+        arrived={arrived}
         aside={unsent ? "only you can see this · not sent" : "only you can see this"}
         attributionTestId="draft-tray-attribution"
         label="Your duo"

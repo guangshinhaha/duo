@@ -8,6 +8,7 @@ import { Mark } from "../components/Mark.js";
 import { ConversationSearch } from "../components/ConversationSearch.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
+import { TickingCount } from "../components/TickingCount.js";
 import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { NoDuoPanel } from "../components/NoDuoPanel.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -711,7 +712,7 @@ function WaitingChip({ active, current, count }: { active: boolean; current: boo
       Waiting on you
       {count > 0 && (
         <span className="type-identifier text-[var(--accent)]" data-testid="waiting-badge">
-          {count}
+          <TickingCount value={count} />
         </span>
       )}
     </a>

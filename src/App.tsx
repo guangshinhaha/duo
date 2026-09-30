@@ -7,6 +7,7 @@ import { ApiRequestError, apiRequest, type DuoApiConfig } from "./api/client.js"
 import { useRevokedTokenGuard } from "./api/revocation.js";
 import { endedNoticeText, useEndedMarker } from "./api/lifecycle.js";
 import { useDraftReadySocket } from "./api/ws.js";
+import { markDraftArrived } from "./arrivals.js";
 import { SyncStatusProvider } from "./sync.js";
 import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
 import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
@@ -443,6 +444,8 @@ function AppShell() {
     noticeTimer.current = setTimeout(() => setArrivalNotice(""), 5000);
   };
   useDraftReadySocket(api, (draftId) => {
+    // The draft arrived while the owner is here: it rises in, and its hairline draws (motion-plan A5).
+    markDraftArrived(draftId);
     // #69: the push names the draft; what the draft IS decides the words.
     // The duo escalating or refusing on the owner's behalf is its own
     // category — its words come from the record, not the waiting-draft

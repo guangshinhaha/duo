@@ -4,6 +4,7 @@ import { useCreateDraft } from "../api/queries.js";
 import { readComposerBuffer, writeComposerBuffer } from "../composerBuffer.js";
 import { MutationError } from "./MutationError.js";
 import { useSyncStatus } from "../sync.js";
+import { Mark } from "./Mark.js";
 
 /**
  * The thread view's ask input — the owner's way into the drafting loop
@@ -79,12 +80,19 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
         />
         <div className="flex flex-col gap-2">
           <button
-            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
             data-testid="composer-submit"
             disabled={disabled}
             type="submit"
           >
-            {createDraft.isPending ? "Asking…" : "Ask"}
+            {createDraft.isPending ? (
+              <>
+                <Mark working />
+                Asking…
+              </>
+            ) : (
+              "Ask"
+            )}
           </button>
           {createDraft.isPending && (
             <button

@@ -2,6 +2,7 @@ import type { DuoApiConfig } from "../api/client.js";
 import type { DraftRecord } from "../api/types.js";
 import { useStickToEnd } from "./stickToEnd.js";
 import { DeliveryStateLine } from "../components/DeliveryStateLine.js";
+import { Collapse, useLeaving } from "../components/Collapse.js";
 import { DraftTray } from "../components/DraftTray.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -46,7 +47,7 @@ function AskerMessage({ draft }: { draft: DraftRecord }) {
 function OwnerSide({ draft }: { draft: DraftRecord }) {
   if ((draft.outcome === "sent" || draft.outcome === "edited" || draft.outcome === "escalation_answered") && draft.sentText) {
     return (
-      <div className="flex flex-col items-end gap-1" data-testid="bridged-reply">
+      <div className="flex flex-col items-end gap-1 motion-rise" data-testid="bridged-reply">
         <OwnerMessage bubble>{draft.sentText}</OwnerMessage>
         <DeliveryStateLine delivery={draft.delivery} />
       </div>
@@ -79,6 +80,9 @@ export function BridgedChat({ api, chatId }: { api: DuoApiConfig; chatId: string
   const chat = chats.find((candidate) => candidate.id === chatId);
   // Opens at its end — the newest question and any draft — and follows new ones.
   const scroller = useStickToEnd<HTMLDivElement>(chat ? `${chat.drafts.length}:${chat.waiting.map((draft) => draft.id).join(",")}` : "");
+
+  // A decided draft folds away instead of vanishing (motion-plan B1).
+  const waiting = useLeaving(chat?.waiting ?? [], (draft) => draft.id);
 
   if (isLoading && !chat) {
     return <RouteLoading />;
@@ -133,10 +137,12 @@ export function BridgedChat({ api, chatId }: { api: DuoApiConfig; chatId: string
           })}
         </section>
         {/* #183: the duo's draft at the end of the owner's view, unsent — nothing reaches the platform until Send. */}
-        {chat.waiting.length > 0 && (
+        {waiting.length > 0 && (
           <section aria-label="Drafts from your duo" className="mt-5 flex flex-col gap-4" data-testid="bridged-drafts">
-            {chat.waiting.map((draft, index) => (
-              <DraftTray api={api} draft={draft} key={draft.id} keyboard={index === 0} />
+            {waiting.map(({ item: draft, leaving }, index) => (
+              <Collapse key={draft.id} leaving={leaving}>
+                <DraftTray api={api} draft={draft} keyboard={!leaving && index === 0} />
+              </Collapse>
             ))}
           </section>
         )}

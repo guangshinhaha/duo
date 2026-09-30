@@ -2,6 +2,7 @@ import type { DuoApiConfig } from "../api/client.js";
 import { useDraftsFeed, usePendingDrafts } from "../api/queries.js";
 import { conversationOf } from "../workspace/drafts.js";
 import { DeliveryStateLine } from "./DeliveryStateLine.js";
+import { Collapse, useLeaving } from "./Collapse.js";
 import { DraftTray } from "./DraftTray.js";
 import { useStickToEnd } from "../shell/stickToEnd.js";
 
@@ -32,7 +33,9 @@ export function RoomDrafts({ api, roomId }: { api: DuoApiConfig; roomId: string 
   const pending = usePendingDrafts(api);
   const feed = useDraftsFeed(api);
 
-  const waiting = (pending.data ?? []).filter((draft) => conversationOf(draft.provenance)?.roomId === roomId);
+  const waitingNow = (pending.data ?? []).filter((draft) => conversationOf(draft.provenance)?.roomId === roomId);
+  // A decided draft folds away instead of vanishing, as its outcome appears below it (motion-plan B1).
+  const waiting = useLeaving(waitingNow, (draft) => draft.id);
   // The conversation's outcomes: what was sent from a draft here, and how
   // its delivery went. Read from the newest window of the draft log — the
   // recent past is what an owner checking on a delivery is asking about.
@@ -49,7 +52,7 @@ export function RoomDrafts({ api, roomId }: { api: DuoApiConfig; roomId: string 
       conversationOf(draft.provenance)?.roomId === roomId,
   );
   // A draft arriving brings the chat to its end, so the draft ⏎/E/X act on is on screen.
-  const end = useStickToEnd<HTMLDivElement>(waiting.map((draft) => draft.id).join(","));
+  const end = useStickToEnd<HTMLDivElement>(waitingNow.map((draft) => draft.id).join(","));
 
   // The wrapper is stable even when empty, so a decision moving a draft
   // from "waiting" to "sent" is one region changing, not one unmounting.
@@ -58,15 +61,17 @@ export function RoomDrafts({ api, roomId }: { api: DuoApiConfig; roomId: string 
       {(waiting.length > 0 || sent.length > 0) && (
         <section aria-label="Drafts from your duo" className="mt-5 flex flex-col gap-4">
           {sent.map((draft) => (
-            <div key={draft.id} className="flex flex-col items-end gap-1 self-end" data-testid="room-draft-outcome">
+            <div key={draft.id} className="flex flex-col items-end gap-1 self-end motion-rise" data-testid="room-draft-outcome">
               <p className="type-provenance text-[var(--muted)]">
                 {draft.outcome === "edited" ? "You sent your edit of your duo’s draft." : "You sent your duo’s draft."}
               </p>
               <DeliveryStateLine delivery={draft.delivery} />
             </div>
           ))}
-          {waiting.map((draft, index) => (
-            <DraftTray key={draft.id} api={api} draft={draft} keyboard={index === 0} />
+          {waiting.map(({ item: draft, leaving }, index) => (
+            <Collapse key={draft.id} leaving={leaving}>
+              <DraftTray api={api} draft={draft} keyboard={!leaving && index === 0} />
+            </Collapse>
           ))}
         </section>
       )}

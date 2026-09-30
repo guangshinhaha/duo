@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { askQuestion, isAskLinkUsable, parseAskLink, type AskLinkConfig } from "../api/ask.js";
 import type { PublicAnswerOutcome } from "../api/types.js";
+import { Mark } from "../components/Mark.js";
 
 /**
  * The answer half of an answered outcome — a duo-attributed container, but
@@ -195,10 +196,17 @@ export function Ask() {
         <button
           type="submit"
           data-testid="ask-submit"
-          className="inline-flex min-h-11 items-center justify-center self-end rounded-[var(--r-sm)] bg-[var(--accent)] px-4 text-[var(--bg)] disabled:opacity-50"
+          className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-[var(--r-sm)] bg-[var(--accent)] px-4 text-[var(--bg)] disabled:opacity-50"
           disabled={pending || question.trim() === ""}
         >
-          {pending ? "Asking…" : "Ask"}
+          {pending ? (
+            <>
+              <Mark working />
+              Asking…
+            </>
+          ) : (
+            "Ask"
+          )}
         </button>
       </form>
 
