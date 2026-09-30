@@ -45,11 +45,11 @@ describe("Hairline — the duo always writes behind a line (#140)", () => {
 
   it("has no prop through which an avatar, initials or a person's name could be passed", () => {
     type Keys = keyof ComponentProps<typeof DuoLine>;
-    const allowed: Keys[] = ["label", "meta", "aside", "state", "testId", "attributionTestId", "compact", "children"];
-    expect(allowed).toHaveLength(8);
+    const allowed: Keys[] = ["label", "meta", "aside", "state", "testId", "attributionTestId", "compact", "arrived", "children"];
+    expect(allowed).toHaveLength(9);
     // A compile-time guarantee: widening DuoLine's props to accept an
     // avatar would make this exhaustiveness check a visible diff.
-    const exhaustive: Record<Keys, true> = { label: true, meta: true, aside: true, state: true, testId: true, attributionTestId: true, compact: true, children: true };
+    const exhaustive: Record<Keys, true> = { label: true, meta: true, aside: true, state: true, testId: true, attributionTestId: true, compact: true, arrived: true, children: true };
     expect(Object.keys(exhaustive).sort()).toEqual([...allowed].sort());
   });
 

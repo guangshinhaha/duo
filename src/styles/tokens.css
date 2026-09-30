@@ -224,6 +224,7 @@ h3 {
 
 .shape-duo-line::before {
   content: "";
+  transform-origin: top;
   position: absolute;
   left: 0;
   top: -1px;
@@ -391,6 +392,105 @@ h3 {
     opacity: 0;
     transform: translateX(calc(var(--radix-toast-swipe-end-x) + 32px));
   }
+}
+
+/*
+ * The draft lifecycle (docs/motion-plan.md A5 to A7, B1, B3).
+ */
+@keyframes duo-line-draw {
+  from {
+    transform: scaleY(0);
+  }
+}
+/* The working mark: the hairline draws top to bottom, holds, fades, and draws again. */
+@keyframes duo-line-work {
+  0% {
+    opacity: 1;
+    transform: scaleY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  75% {
+    opacity: 0;
+    transform: scaleY(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleY(0);
+  }
+}
+@keyframes duo-tick-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes duo-tick-out {
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* A draft that arrives live: the block rises, and its hairline lands last. */
+.duo-arrive {
+  animation: duo-rise-in var(--dur-std) var(--ease-enter) both;
+}
+.duo-arrive .shape-duo-line::before {
+  animation: duo-line-draw var(--dur-slow) var(--ease-enter) 60ms both;
+}
+
+/* The one loop in the product (§3.1): the duo is working. */
+.duo-mark[data-working] i:last-child {
+  transform-origin: top;
+  animation: duo-line-work 800ms var(--ease-standard) infinite;
+}
+
+/* Something that has just happened settles in (a sent draft's outcome, an empty queue). */
+.motion-rise {
+  animation: duo-rise-in var(--dur-std) var(--ease-enter) both;
+}
+
+/* A skeleton holds still and only shows if the wait is real: a fast load never flashes one. */
+.motion-skeleton {
+  animation: duo-fade-in var(--dur-std) var(--ease-standard) 150ms both;
+}
+
+/* A thing leaving: its height and opacity ease out together, so what is below moves once. */
+.motion-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows var(--dur-std) var(--ease-standard),
+    opacity var(--dur-quick) var(--ease-exit);
+}
+.motion-collapse > * {
+  min-height: 0;
+}
+.motion-collapse[data-leaving] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+.motion-collapse[data-leaving] > * {
+  overflow: hidden;
+}
+
+/* A count that ticks: the old figure leaves upward while the new one arrives from below. */
+.tick {
+  position: relative;
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+}
+.tick-in {
+  display: inline-block;
+  animation: duo-tick-in var(--dur-std) var(--ease-enter) both;
+}
+.tick-out {
+  position: absolute;
+  inset: 0;
+  animation: duo-tick-out var(--dur-quick) var(--ease-exit) both;
 }
 
 /*

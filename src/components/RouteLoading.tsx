@@ -29,7 +29,7 @@ export function RouteLoading({
       <div className="flex flex-col gap-3">
         {Array.from({ length: blocks }, (_, index) => (
           // The skeleton block wears the entry shape the real content will.
-          <div key={index} className="shape-entry animate-pulse p-4" data-testid="route-loading-block" />
+          <div key={index} className="shape-entry motion-skeleton p-4" data-testid="route-loading-block" />
         ))}
       </div>
       {slow && slowNote !== null && (

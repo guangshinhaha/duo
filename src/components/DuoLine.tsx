@@ -55,6 +55,7 @@ export function DuoLine({
   testId,
   attributionTestId,
   compact = false,
+  arrived = false,
   children,
 }: {
   label: string;
@@ -65,11 +66,13 @@ export function DuoLine({
   testId: string;
   attributionTestId: string;
   compact?: boolean;
+  /** A draft that just arrived live: the block rises and its hairline draws in. */
+  arrived?: boolean;
   children: ReactNode;
 }) {
   const { colour, opacity } = lineColour(state);
   return (
-    <div data-testid={testId} data-duo-line={state}>
+    <div className={arrived ? "duo-arrive" : undefined} data-testid={testId} data-duo-line={state}>
       <div className="mb-1 flex items-center gap-2 type-provenance text-[var(--muted)]" data-testid={attributionTestId}>
         <Mark />
         <span>{label}</span>

@@ -33,7 +33,7 @@ export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; con
     const known = knowledge.data;
     return (
       <div className="p-6" data-testid="waiting-home-empty">
-        <h1 className="type-heading">Nothing waiting on you.</h1>
+        <h1 className="type-heading motion-rise">Nothing waiting on you.</h1>
         <div className="shape-container mt-4 flex max-w-xl flex-col gap-2 p-4" data-testid="waiting-home-knowledge">
           {known?.records && known.corpus ? (
             <>
@@ -44,7 +44,7 @@ export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; con
             </>
           ) : knowledge.isLoading ? (
             // The read is on its way — a quiet shape, not a word.
-            <div className="shape-entry-quiet animate-pulse p-4" />
+            <div className="shape-entry-quiet motion-skeleton p-4" />
           ) : null}
           <p className="type-provenance text-[var(--muted)]">⌘K searches what your duo knows.</p>
         </div>

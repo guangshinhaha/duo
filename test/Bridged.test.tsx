@@ -210,7 +210,7 @@ describe("#150 — a bridged question in the chat list and in its own chat", () 
     const reply = await screen.findByTestId("bridged-reply");
     expect(reply).toHaveTextContent("Not frozen — deploys resume after 3pm.");
     await waitFor(() => expect(within(reply).getByTestId("delivery-state")).toHaveTextContent("Delivered."));
-    expect(screen.queryByTestId("bridged-drafts")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("bridged-drafts")).toBeNull());
   });
 
   it("an old #draft address opens the chat its question belongs to", async () => {
