@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { Linter } from "eslint";
 import ts from "typescript";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error the lint config is deliberately @ts-check JS with no declaration — its shape is exercised at runtime by the Linter tests below (roomLabelling's idiom)
 import eslintConfig from "../eslint.config.js";
@@ -225,7 +226,7 @@ describe("#34 AC2 — the library supplies behaviour, never a look", () => {
     // this scan is what keeps it that way: a foreign class (a library
     // theme, a hex, a palette name) has nowhere to come from.
     const allowed =
-      /^(?:shape-container|shape-entry|shape-entry-quiet|type-heading|type-body|type-provenance|type-identifier|fixed|inset-0|inset-x-0|top-6|bottom-4|right-4|z-50|mx-auto|flex|flex-col|items-center|gap-1|gap-2|gap-3|p-2|p-4|px-2|px-4|py-1|py-3|min-w-40|cursor-pointer|(?:bg|text|fill|rounded|border)-\[var\(--[a-z0-9-]+\)\](?:\/80)?|data-highlighted:bg-\[var\(--surface-2\)\])$/;
+      /^(?:shape-container|shape-entry|shape-entry-quiet|motion-(?:scrim|panel|sheet|menu|tip|toast)|type-heading|type-body|type-provenance|type-identifier|fixed|inset-0|inset-x-0|top-6|bottom-4|right-4|z-50|mx-auto|flex|flex-col|items-center|gap-1|gap-2|gap-3|p-2|p-4|px-2|px-4|py-1|py-3|min-w-40|cursor-pointer|(?:bg|text|fill|rounded|border)-\[var\(--[a-z0-9-]+\)\](?:\/80)?|data-highlighted:bg-\[var\(--surface-2\)\])$/;
     const offenders: string[] = [];
     for (const name of readdirSync(primitivesDir)) {
       if (!name.endsWith(".tsx")) {
@@ -416,5 +417,64 @@ describe("#34 AC4 — AR-13 survives the primitive layer", () => {
         cleanup();
       }
     }).toThrow(/AR-13: a duo never poses as a person/);
+  });
+});
+
+describe("motion (docs/motion-plan.md A1 to A4)", () => {
+  it("a dialog's scrim fades and its panel rises; a sheet slides up instead", () => {
+    render(
+      <Dialog open>
+        <DialogContent data-testid="panel">
+          <DialogTitle>Panel</DialogTitle>
+        </DialogContent>
+      </Dialog>,
+    );
+    expect(screen.getByTestId("panel").className).toContain("motion-panel");
+    expect(document.querySelector(".motion-scrim")).not.toBeNull();
+    cleanup();
+
+    render(
+      <Dialog open>
+        <DialogContent data-testid="sheet" sheet>
+          <DialogTitle>Sheet</DialogTitle>
+        </DialogContent>
+      </Dialog>,
+    );
+    expect(screen.getByTestId("sheet").className).toContain("motion-sheet");
+    expect(screen.getByTestId("sheet").className).not.toContain("motion-panel");
+  });
+
+  it("a dialog opened and closed at once ends fully closed, with no scrim left behind", async () => {
+    function Flicker() {
+      const [open, setOpen] = useState(false);
+      return (
+        <Dialog onOpenChange={setOpen} open={open}>
+          <button onClick={() => setOpen(true)} type="button">
+            Open
+          </button>
+          <DialogContent>
+            <DialogTitle>Flicker</DialogTitle>
+          </DialogContent>
+        </Dialog>
+      );
+    }
+    render(<Flicker />);
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    fireEvent.keyDown(await screen.findByRole("dialog"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.querySelector(".motion-scrim")).toBeNull();
+  });
+
+  it("menus, tooltips and toasts each carry their motion class", async () => {
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>Actions</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem>Open</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Actions" }));
+    expect((await screen.findByRole("menu")).className).toContain("motion-menu");
   });
 });

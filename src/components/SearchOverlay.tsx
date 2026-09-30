@@ -51,7 +51,28 @@ function SearchResultRow({ record }: { record: CorpusRecord }) {
  * backdrop press now closes too, which is the primitive's own semantics
  * rather than something added here.
  */
-export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: () => void }) {
+export function SearchOverlay({ api, open = true, onClose }: { api: DuoApiConfig; open?: boolean; onClose: () => void }) {
+  return (
+    // The route underneath stays mounted — search opens *over* a screen,
+    // never *instead of* one (AC3): App keeps the surface rendered and
+    // this dialog portals above it. `open` is the parent's, so closing
+    // plays the exit before the body (and its query) unmounts.
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="w-[calc(100vw-3rem)] max-w-2xl" data-testid="search-overlay">
+        <SearchBody api={api} onClose={onClose} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SearchBody({ api, onClose }: { api: DuoApiConfig; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
   const search = useCorpusSearch(api, submitted);
@@ -64,99 +85,87 @@ export function SearchOverlay({ api, onClose }: { api: DuoApiConfig; onClose: ()
   const warning = pages.length > 0 ? pages[pages.length - 1]!.warning : undefined;
 
   return (
-    // The route underneath stays mounted — search opens *over* a screen,
-    // never *instead of* one (AC3): App keeps the surface rendered and
-    // this dialog portals above it.
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) {
-          onClose();
-        }
-      }}
-    >
-      <DialogContent className="w-[calc(100vw-3rem)] max-w-2xl" data-testid="search-overlay">
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setSubmitted(query.trim());
-          }}
-        >
-          <input
-            aria-label="Search what your duo knows"
-            autoFocus
-            className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 text-[var(--text)]"
-            placeholder="Search what your duo knows"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <button type="submit" className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)]">
-            Search
-          </button>
-          <button type="button" className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3" onClick={onClose}>
-            Close
-          </button>
-        </form>
+    <>
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setSubmitted(query.trim());
+        }}
+      >
+        <input
+          aria-label="Search what your duo knows"
+          autoFocus
+          className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 text-[var(--text)]"
+          placeholder="Search what your duo knows"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button type="submit" className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)]">
+          Search
+        </button>
+        <button type="button" className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3" onClick={onClose}>
+          Close
+        </button>
+      </form>
 
-        {/* #70: the other search in this product is the workspace's, over
-            what people said in conversations. This one is what the duo
-            knows — private, on the owner's Mac — and says so, so the two are
-            never mistaken for each other. */}
-        <p className="type-provenance text-[var(--faint)]" data-testid="search-scope">
-          Your duo&apos;s private history, searched on your Mac — never on the workspace.
+      {/* #70: the other search in this product is the workspace's, over
+          what people said in conversations. This one is what the duo
+          knows — private, on the owner's Mac — and says so, so the two are
+          never mistaken for each other. */}
+      <p className="type-provenance text-[var(--faint)]" data-testid="search-scope">
+        Your duo&apos;s private history, searched on your Mac — never on the workspace.
+      </p>
+
+      {/* The daemon's own degraded-retrieval sentence, verbatim — the
+          client neither paraphrases it nor hides it: results found by
+          full-text alone are still results, with their caveat attached. */}
+      {warning && (
+        <p className="type-provenance text-[var(--muted)]" data-testid="search-warning">
+          {warning}
         </p>
+      )}
 
-        {/* The daemon's own degraded-retrieval sentence, verbatim — the
-            client neither paraphrases it nor hides it: results found by
-            full-text alone are still results, with their caveat attached. */}
-        {warning && (
-          <p className="type-provenance text-[var(--muted)]" data-testid="search-warning">
-            {warning}
-          </p>
-        )}
+      {search.isLoading && <div className="type-body text-[var(--muted)]">Searching…</div>}
+      {search.error && <div className="type-body text-[var(--refused)]">{(search.error as Error).message}</div>}
 
-        {search.isLoading && <div className="type-body text-[var(--muted)]">Searching…</div>}
-        {search.error && <div className="type-body text-[var(--refused)]">{(search.error as Error).message}</div>}
+      {submitted && !search.isLoading && !search.error && rows.length === 0 && (
+        <div className="type-body text-[var(--muted)]" data-testid="search-empty">
+          {/* Two different zero-result truths (AC4): a corpus with
+              records in it and no match is about the query; a corpus
+              with nothing in it is about the corpus. The knowledge read
+              is what tells them apart — never a guess. */}
+          {knowledge.data?.records.total === 0
+            ? "Your duo hasn't read anything yet — import your history and there will be something to search."
+            : "Nothing matched."}
+        </div>
+      )}
 
-        {submitted && !search.isLoading && !search.error && rows.length === 0 && (
-          <div className="type-body text-[var(--muted)]" data-testid="search-empty">
-            {/* Two different zero-result truths (AC4): a corpus with
-                records in it and no match is about the query; a corpus
-                with nothing in it is about the corpus. The knowledge read
-                is what tells them apart — never a guess. */}
-            {knowledge.data?.records.total === 0
-              ? "Your duo hasn't read anything yet — import your history and there will be something to search."
-              : "Nothing matched."}
-          </div>
-        )}
-
-        {rows.length > 0 && (
-          <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
-            {rows.map(({ record, rank }) => (
-              <div key={`${rank}-${record.id}`} className="flex flex-col">
-                <SearchResultRow record={record} />
-                <div className="flex items-baseline justify-between px-1">
-                  <span className="type-provenance text-[var(--faint)]" data-testid="search-result-source">
-                    {record.source}
-                  </span>
-                  <Timestamp iso={record.timestamp} />
-                </div>
+      {rows.length > 0 && (
+        <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
+          {rows.map(({ record, rank }) => (
+            <div key={`${rank}-${record.id}`} className="flex flex-col">
+              <SearchResultRow record={record} />
+              <div className="flex items-baseline justify-between px-1">
+                <span className="type-provenance text-[var(--faint)]" data-testid="search-result-source">
+                  {record.source}
+                </span>
+                <Timestamp iso={record.timestamp} />
               </div>
-            ))}
-            {search.hasNextPage && (
-              <button
-                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
-                disabled={search.isFetchingNextPage}
-                onClick={() => void search.fetchNextPage()}
-                data-testid="search-load-more"
-              >
-                {search.isFetchingNextPage ? "Loading…" : "Load more"}
-              </button>
-            )}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
+            </div>
+          ))}
+          {search.hasNextPage && (
+            <button
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
+              disabled={search.isFetchingNextPage}
+              onClick={() => void search.fetchNextPage()}
+              data-testid="search-load-more"
+            >
+              {search.isFetchingNextPage ? "Loading…" : "Load more"}
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }

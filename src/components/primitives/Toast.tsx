@@ -42,11 +42,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           {toasts.map(({ id, message }) => (
             <RadixToast.Root
               key={id}
-              className="shape-entry px-4 py-3 type-body text-[var(--text)]"
+              className="shape-entry motion-toast px-4 py-3 type-body text-[var(--text)]"
               duration={5000}
               onOpenChange={(open) => {
                 if (!open) {
-                  setToasts((current) => current.filter((toast) => toast.id !== id));
+                  // Radix keeps the toast mounted for its exit animation; the queue entry goes once that has run.
+                  setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 400);
                 }
               }}
             >

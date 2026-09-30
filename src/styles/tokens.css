@@ -44,7 +44,21 @@
   --r-md: 10px;
   --r-lg: 14px;
   --sp: 4px; /* every spacing value is a multiple */
-  --t: 150ms cubic-bezier(0.2, 0, 0, 1);
+
+  /*
+   * Motion (docs/motion-plan.md §1.1): one signature curve, three
+   * durations, one entrance pattern. Exits run about 30% shorter than
+   * entrances. Only transform and opacity ever animate.
+   */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1); /* on-screen change; ~80% of all motion */
+  --ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1); /* arrivals decelerate */
+  --ease-exit: cubic-bezier(0.3, 0, 1, 1); /* departures accelerate */
+  --dur-quick: 120ms; /* press, hover, tooltips, menus */
+  --dur-std: 200ms; /* entries arriving, dialogs, toasts */
+  --dur-slow: 320ms; /* sheets, the hairline draw */
+  --dur-exit: 150ms; /* every exit; shorter than its entrance */
+  --rise: 8px; /* the one entrance: rise and fade in */
+  --t: var(--dur-quick) var(--ease-standard); /* state change; the original token */
 
   color-scheme: dark;
 }
@@ -241,6 +255,155 @@ h3 {
 .duo-mark i:last-child {
   width: 1px;
   background: var(--accent);
+}
+
+/*
+ * Motion (docs/motion-plan.md A1 to A4, A8). Radix mirrors open/closed onto
+ * `data-state` and keeps a part mounted until its exit animation ends, so
+ * every enter and exit here is CSS alone. Reduced motion collapses all of
+ * it through the global rule at the foot of this file.
+ */
+@keyframes duo-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes duo-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes duo-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise));
+  }
+}
+@keyframes duo-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise)) scale(0.98);
+  }
+}
+@keyframes duo-pop-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+@keyframes duo-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes duo-sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+@keyframes duo-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes duo-tip-in {
+  from {
+    opacity: 0;
+    transform: translate(var(--tip-x, 0), var(--tip-y, 0));
+  }
+}
+
+.motion-scrim[data-state="open"] {
+  animation: duo-fade-in var(--dur-std) var(--ease-standard) both;
+}
+.motion-scrim[data-state="closed"] {
+  animation: duo-fade-out var(--dur-exit) var(--ease-exit) both;
+}
+
+.motion-panel[data-state="open"] {
+  animation: duo-pop-in var(--dur-std) var(--ease-enter) both;
+}
+.motion-panel[data-state="closed"] {
+  animation: duo-pop-out var(--dur-exit) var(--ease-exit) both;
+}
+
+.motion-sheet[data-state="open"] {
+  animation: duo-sheet-in var(--dur-slow) var(--ease-enter) both;
+}
+.motion-sheet[data-state="closed"] {
+  animation: duo-sheet-out var(--dur-std) var(--ease-exit) both;
+}
+
+.motion-menu {
+  transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+}
+.motion-menu[data-state="open"] {
+  animation: duo-pop-in var(--dur-quick) var(--ease-enter) both;
+}
+.motion-menu[data-state="closed"] {
+  animation: duo-fade-out 100ms var(--ease-exit) both;
+}
+
+/* A tooltip is a label: it fades and shifts 2px in from the side it sits on. */
+.motion-tip[data-side="top"] {
+  --tip-y: 2px;
+}
+.motion-tip[data-side="bottom"] {
+  --tip-y: -2px;
+}
+.motion-tip[data-side="left"] {
+  --tip-x: 2px;
+}
+.motion-tip[data-side="right"] {
+  --tip-x: -2px;
+}
+.motion-tip[data-state="delayed-open"],
+.motion-tip[data-state="instant-open"] {
+  animation: duo-tip-in var(--dur-quick) var(--ease-enter) both;
+}
+.motion-tip[data-state="closed"] {
+  animation: duo-fade-out 100ms var(--ease-exit) both;
+}
+
+.motion-toast[data-state="open"] {
+  animation: duo-toast-in var(--dur-std) var(--ease-enter) both;
+}
+.motion-toast[data-state="closed"] {
+  animation: duo-fade-out var(--dur-exit) var(--ease-exit) both;
+}
+/* The swipe follows the finger, then either snaps back or leaves the way it was going. */
+.motion-toast[data-swipe="move"] {
+  transform: translateX(var(--radix-toast-swipe-move-x));
+}
+.motion-toast[data-swipe="cancel"] {
+  transform: translateX(0);
+  transition: transform var(--dur-std) var(--ease-standard);
+}
+.motion-toast[data-swipe="end"] {
+  animation: duo-toast-swipe-out var(--dur-exit) var(--ease-exit) both;
+}
+@keyframes duo-toast-swipe-out {
+  from {
+    transform: translateX(var(--radix-toast-swipe-end-x));
+  }
+  to {
+    opacity: 0;
+    transform: translateX(calc(var(--radix-toast-swipe-end-x) + 32px));
+  }
+}
+
+/*
+ * Press feedback: every button (and any row that takes .press) shrinks a
+ * hair under the finger and settles back. Only an enabled control answers.
+ */
+button,
+.press {
+  transition: transform var(--dur-quick) var(--ease-standard);
+}
+button:not(:disabled):active,
+.press:active {
+  transform: scale(0.98);
 }
 
 /*

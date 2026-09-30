@@ -796,7 +796,7 @@ function AppShell() {
       {api && <ConfirmationWatcher api={api} onArrived={() => announce("An action is waiting for your confirmation.")} />}
       {/* #46: over the screen, never instead of it — the main surface stays
           mounted underneath while search is open. */}
-      {searchOpen && api && <SearchOverlay api={api} onClose={() => setSearchOpen(false)} />}
+      {api && <SearchOverlay api={api} onClose={() => setSearchOpen(false)} open={searchOpen} />}
     </>
   );
   const footer = (

@@ -10,7 +10,7 @@ import type { ComponentProps } from "react";
  * `shape-container` scaffold as every dialog.
  */
 
-const panelClass = "fixed inset-x-0 top-6 z-50 mx-auto flex flex-col gap-3 p-4 shape-container";
+const panelClass = "fixed inset-x-0 top-6 z-50 mx-auto flex flex-col gap-3 p-4 shape-container motion-panel";
 
 export const AlertDialog = RadixAlertDialog.Root;
 export const AlertDialogTrigger = RadixAlertDialog.Trigger;
@@ -28,7 +28,7 @@ export const AlertDialogDescription = RadixAlertDialog.Description;
 export function AlertDialogContent({ className = "", children, ...props }: ComponentProps<typeof RadixAlertDialog.Content>) {
   return (
     <RadixAlertDialog.Portal>
-      <RadixAlertDialog.Overlay className="fixed inset-0 z-50 bg-[var(--bg)]/80" />
+      <RadixAlertDialog.Overlay className="fixed inset-0 z-50 bg-[var(--bg)]/80 motion-scrim" />
       <RadixAlertDialog.Content className={`${panelClass} ${className}`} {...props}>
         {children}
       </RadixAlertDialog.Content>

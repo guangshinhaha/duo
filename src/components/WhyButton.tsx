@@ -97,7 +97,7 @@ export function WhyButton({ draft }: { draft: DraftRecord }) {
       )}
       {!desktop && (
         <Dialog onOpenChange={setOpen} open={open}>
-          <DialogContent className="top-auto! bottom-0 max-h-[85dvh] overflow-y-auto" data-testid="why-sheet">
+          <DialogContent sheet className="top-auto! bottom-0 max-h-[85dvh] overflow-y-auto" data-testid="why-sheet">
             <DialogTitle className="sr-only">Why your duo wrote this</DialogTitle>
             <DialogDescription className="sr-only">How sure your duo is, the standing order and sources it used, and who asked.</DialogDescription>
             <WhyPanel draft={draft} />

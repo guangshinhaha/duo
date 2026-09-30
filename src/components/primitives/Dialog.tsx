@@ -13,7 +13,7 @@ import type { ComponentProps } from "react";
 
 /** The scrim both dialog kinds share: the ground at 80%, over everything. */
 export function DialogOverlay({ className = "" }: { className?: string }) {
-  return <RadixDialog.Overlay className={`fixed inset-0 z-50 bg-[var(--bg)]/80 ${className}`} />;
+  return <RadixDialog.Overlay className={`fixed inset-0 z-50 bg-[var(--bg)]/80 motion-scrim ${className}`} />;
 }
 
 /** The shared panel scaffold: fixed near the top, centred, a container in #33's sense. */
@@ -30,11 +30,19 @@ export const DialogDescription = RadixDialog.Description;
  * and cannot ship a dialog whose content renders outside the trap (the
  * portal, overlay and focus scope are the primitive's to get right).
  */
-export function DialogContent({ className = "", children, ...props }: ComponentProps<typeof RadixDialog.Content>) {
+export function DialogContent({
+  className = "",
+  children,
+  sheet = false,
+  ...props
+}: ComponentProps<typeof RadixDialog.Content> & {
+  /** A phone bottom sheet: it slides up from the bottom edge instead of rising into place. */
+  sheet?: boolean;
+}) {
   return (
     <RadixDialog.Portal>
       <DialogOverlay />
-      <RadixDialog.Content className={`${panelClass} ${className}`} {...props}>
+      <RadixDialog.Content className={`${panelClass} ${sheet ? "motion-sheet" : "motion-panel"} ${className}`} {...props}>
         {children}
       </RadixDialog.Content>
     </RadixDialog.Portal>

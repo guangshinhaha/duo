@@ -18,6 +18,7 @@ import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.j
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
 import { roomHref, threadHref } from "../workspace/links.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
+import { useHeld } from "../components/primitives/useHeld.js";
 
 /**
  * #62 + #63 + #64: one conversation — the timeline, the message verbs, and
@@ -181,6 +182,8 @@ export function Room({
   };
 
   const [deleteTarget, setDeleteTarget] = useState<RoomMessage | null>(null);
+  // The delete dialog stays mounted through its exit.
+  const heldDelete = useHeld(deleteTarget);
   // Opens at its end (the newest message, then any draft), unless opened at an older message.
   const scroller = useStickToEnd<HTMLDivElement>(timeline.data?.[timeline.data.length - 1]?.eventId ?? "", at === undefined);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -291,7 +294,7 @@ export function Room({
           }
         }}
       >
-        {deleteTarget && (
+        {heldDelete && (
           <DialogContent data-testid="delete-message-dialog">
             <DialogTitle>Delete this message?</DialogTitle>
             <DialogDescription>

@@ -7,6 +7,7 @@ import { usePendingT4, useRecordOutcome } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
 import { ConversationSearch } from "../components/ConversationSearch.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
+import { useHeld } from "../components/primitives/useHeld.js";
 import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { NoDuoPanel } from "../components/NoDuoPanel.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -85,7 +86,7 @@ function Row({
       <div className={`flex items-stretch gap-1 rounded-[var(--r-md)] ${active ? "bg-[var(--surface-2)]" : ""}`}>
         <a
           aria-current={active ? "page" : undefined}
-          className="grid min-h-14 min-w-0 flex-1 grid-cols-[auto_1fr_auto] items-center gap-3 rounded-[var(--r-md)] px-2 py-2"
+          className="press grid min-h-14 min-w-0 flex-1 grid-cols-[auto_1fr_auto] items-center gap-3 rounded-[var(--r-md)] px-2 py-2"
           data-testid={ids.link}
           href={href}
         >
@@ -182,6 +183,8 @@ export function ChatList({
   const workspaceAccess = useWorkspaceAccess();
   const [newOpen, setNewOpen] = useState(false);
   const [leaveTarget, setLeaveTarget] = useState<RoomSummary | null>(null);
+  // The leave dialog keeps its words while it plays its exit.
+  const heldLeave = useHeld(leaveTarget);
   const [leaving, setLeaving] = useState(false);
   const [busyRoomId, setBusyRoomId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -644,9 +647,10 @@ export function ChatList({
         )}
       </nav>
       {footer && <div className="flex flex-wrap items-center gap-x-4 border-t border-[var(--edge)] px-4 py-2">{footer}</div>}
-      {newOpen && connection && (
+      {connection && (
         <NewConversationDialog
           connection={connection}
+          open={newOpen}
           onOpenChange={setNewOpen}
           onStarted={(roomId) => {
             setNewOpen(false);
@@ -663,9 +667,9 @@ export function ChatList({
         }}
         open={leaveTarget !== null}
       >
-        {leaveTarget && (
+        {heldLeave && (
           <DialogContent data-testid="leave-conversation-dialog">
-            <DialogTitle>Leave {roomTitle(leaveTarget)}?</DialogTitle>
+            <DialogTitle>Leave {roomTitle(heldLeave)}?</DialogTitle>
             <DialogDescription>
               You&apos;ll stop getting its messages. Whoever remains keeps the conversation, and you can be invited back.
             </DialogDescription>

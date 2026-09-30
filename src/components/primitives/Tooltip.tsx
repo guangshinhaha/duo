@@ -17,7 +17,7 @@ export function TooltipContent({ className = "", children, ...props }: Component
   return (
     <RadixTooltip.Portal>
       <RadixTooltip.Content
-        className={`z-50 shape-entry px-2 py-1 type-provenance text-[var(--text)] ${className}`}
+        className={`z-50 shape-entry motion-tip px-2 py-1 type-provenance text-[var(--text)] ${className}`}
         {...props}
       >
         {children}
