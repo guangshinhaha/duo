@@ -41,23 +41,29 @@ export function portraitSentences(portrait: InterruptionPortrait): string[] {
  */
 let portraitRevealed = false;
 
+/** A standalone figure: no leading zero, and small enough for the counter. Anything else (an id like `q3-2026`) is text. */
+const isFigure = (part: string): boolean => /^(?:0|[1-9]\d{0,8})$/.test(part);
+
 /**
- * A sentence with its figures marked so they can count up. The real digits
- * stay in the text (they are what is read, searched and pinned); the count is
- * an overlay that only paints while it runs.
+ * One figure, counting up. Only while the count runs does an overlay paint
+ * over the real digits (which stay in the text: they are what is read,
+ * searched and pinned); when it ends the overlay is dropped and the digits
+ * simply show, so nothing is painted twice and nothing is left transparent.
  */
-function Figures({ text, counting }: { text: string; counting: boolean }) {
+function Figure({ digits, counting }: { digits: string; counting: boolean }) {
+  const [running, setRunning] = useState(counting);
+  return (
+    <span className={running ? "count counting" : "count"} onAnimationEnd={() => setRunning(false)} style={{ ["--to" as string]: digits }}>
+      {digits}
+    </span>
+  );
+}
+
+/** A sentence with its standalone figures marked so they can count up. */
+export function Figures({ text, counting }: { text: string; counting: boolean }) {
   return (
     <>
-      {text.split(/(\d+)/).map((part, index) =>
-        /^\d+$/.test(part) ? (
-          <span className={counting ? "count counting" : "count"} key={index} style={{ ["--to" as string]: part }}>
-            {part}
-          </span>
-        ) : (
-          part
-        ),
-      )}
+      {text.split(/([\w-]*\d[\w-]*)/).map((part, index) => (isFigure(part) ? <Figure counting={counting} digits={part} key={index} /> : part))}
     </>
   );
 }

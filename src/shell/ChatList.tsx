@@ -8,7 +8,7 @@ import { Mark } from "../components/Mark.js";
 import { ConversationSearch } from "../components/ConversationSearch.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
-import { TickingCount } from "../components/TickingCount.js";
+import { TickingCount, useLingering } from "../components/TickingCount.js";
 import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { NoDuoPanel } from "../components/NoDuoPanel.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -702,6 +702,8 @@ export function ChatList({
 
 /** The "Waiting on you" filter and its count — the count is the one number the dock, the menu bar and the window title mirror too. */
 function WaitingChip({ active, current, count }: { active: boolean; current: boolean; count: number }) {
+  // The badge stays one tick past zero, so the last figure is seen leaving.
+  const badge = useLingering(count);
   return (
     <a
       aria-current={current ? "page" : undefined}
@@ -710,7 +712,7 @@ function WaitingChip({ active, current, count }: { active: boolean; current: boo
       href="#waiting"
     >
       Waiting on you
-      {count > 0 && (
+      {badge && (
         <span className="type-identifier text-[var(--accent)]" data-testid="waiting-badge">
           <TickingCount value={count} />
         </span>
