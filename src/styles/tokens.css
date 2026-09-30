@@ -509,6 +509,78 @@ h3 {
 }
 
 /*
+ * Moving between places (docs/motion-plan.md B4 to B8). Entrances only for
+ * the pane: an unmounted screen cannot play an exit, and a slight slide plus
+ * a fade says which way you went. `backwards` fill, so nothing is left
+ * transformed (a transform would trap fixed children) once it has run.
+ */
+@keyframes duo-pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes duo-push-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+@keyframes duo-back-in {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+}
+.motion-pane {
+  animation: duo-pane-in var(--dur-std) var(--ease-enter) backwards;
+}
+.motion-push {
+  animation: duo-push-in 250ms var(--ease-enter) backwards;
+}
+.motion-back {
+  animation: duo-back-in var(--dur-std) var(--ease-enter) backwards;
+}
+
+/* The Info column: it opens as the pane narrows, its content sliding in from the side. */
+.motion-inspector {
+  width: 0;
+  opacity: 0;
+  transition:
+    width var(--dur-std) var(--ease-standard),
+    opacity var(--dur-std) var(--ease-standard);
+}
+.motion-inspector > * {
+  transform: translateX(16px);
+  transition: transform var(--dur-std) var(--ease-standard);
+}
+.motion-inspector[data-shown] {
+  width: 20rem;
+  opacity: 1;
+}
+.motion-inspector[data-shown] > * {
+  transform: none;
+}
+
+/* A bar that folds open and shut, so what is under it moves once. */
+.motion-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--dur-std) var(--ease-standard),
+    opacity var(--dur-std) var(--ease-standard);
+}
+.motion-fold > * {
+  min-height: 0;
+  overflow: hidden;
+}
+.motion-fold[data-shown] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/*
  * #36: one focus law, stated once for everything focusable. A 2px accent
  * ring, offset so it never eats the control's own border; --accent
  * clears the 3:1 non-text floor against every backdrop in both themes,
