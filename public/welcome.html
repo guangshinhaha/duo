@@ -240,6 +240,8 @@
   .js .reveal { opacity: 0; transform: translateY(12px); transition: opacity 500ms var(--ease-enter), transform 500ms var(--ease-enter); transition-delay: calc(var(--i, 0) * 60ms); }
   .js .reveal.in { opacity: 1; transform: none; }
   .js.no-reveal .reveal { opacity: 1; transform: none; transition: none; }
+  .js.no-reveal .loop .step .bar::before, .js.no-reveal .portrait .num::after { transform: scaleX(1); }
+  .js.no-reveal .loop .step .bar::after { opacity: 1; transform: none; }
 
   /* ---- sections ---- */
   section { padding-block: 96px; border-top: 1px solid var(--edge); }
@@ -287,7 +289,7 @@
   .portrait .num { font-variant-numeric: tabular-nums; color: var(--text); position: relative; }
   .portrait .num::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--accent); transform-origin: left; }
   .js .portrait .num::after { transform: scaleX(0); }
-  .js .in .portrait .num::after, .js .portrait.in .num::after { transform: scaleX(1); transition: transform 500ms var(--ease-enter) 500ms; }
+  .js .portrait.in .num::after { transform: scaleX(1); transition: transform 500ms var(--ease-enter) 500ms; }
   .js .portrait p { opacity: 0; transform: translateY(12px); transition: opacity 450ms var(--ease-enter), transform 450ms var(--ease-enter); transition-delay: calc(var(--i, 0) * 120ms); }
   .js .portrait.in p { opacity: 1; transform: none; }
   .js.no-reveal .portrait p { opacity: 1; transform: none; transition: none; }
@@ -325,7 +327,7 @@
   .lvl.none { color: var(--faint); }
   .lvl.none::before { border-style: dashed; }
   td.demoting { position: relative; }
-  td.demoting .lvl.fade-in { position: absolute; left: 14px; top: 12px; animation: fadein 300ms var(--ease-enter) both; }
+  td.demoting .lvl.fade-in { position: absolute; left: 14px; top: 50%; margin-top: -9px; animation: fadein 300ms var(--ease-enter) both; }
   td.demoting .lvl.fade-out { animation: fadeout 300ms var(--ease-exit) both; }
   @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
   @keyframes fadeout { from { opacity: 1; } to { opacity: 0; } }
@@ -373,6 +375,22 @@
   footer a { color: var(--muted); text-decoration: none; }
   footer a:hover { color: var(--text); }
 
+  /* A printed page shows everything: nothing waits on a scroll that will never happen. */
+  @media print {
+    .js .reveal, .js .portrait p, .js .enter, .js .enter-demo { opacity: 1 !important; transform: none !important; animation: none !important; transition: none !important; }
+    .js .loop .step .bar::before, .js .portrait .num::after { transform: scaleX(1) !important; }
+    .js .loop .step .bar::after { opacity: 1 !important; transform: none !important; }
+    .demo [style*="opacity"] { opacity: 1 !important; }
+  }
+
+  /* The demo's own pause control: moving content that lasts longer than five seconds can be stopped. */
+  .demo-pause {
+    margin-left: 8px; min-height: 24px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--edge);
+    background: transparent; color: var(--muted); font: 500 11px/1 var(--sans); cursor: pointer;
+  }
+  .demo-pause:hover { color: var(--text); }
+  .demo-pause[hidden] { display: none; }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
   }
@@ -406,7 +424,7 @@
       </div>
 
       <div class="demo enter-demo" aria-label="Example: a question arrives and your duo drafts a reply">
-        <div class="demo-top"><span class="dot" aria-hidden="true"></span>Review<span class="count" id="count">1 waiting</span></div>
+        <div class="demo-top"><span class="dot" aria-hidden="true"></span>Review<button class="demo-pause" id="demo-pause" type="button" aria-pressed="false" hidden>Pause</button><span class="count" id="count">1 waiting</span></div>
         <div class="demo-body">
           <div class="thread" id="thread">
             <div class="ask">
@@ -738,21 +756,29 @@
   function setHidden(hidden) {
     heldBack = hidden;
     // The draft's first-paint fade would otherwise outrank the inline hide.
-    if (hidden) draft.classList.remove("fade");
+    if (hidden) {
+      draft.classList.remove("fade"); outcome.classList.remove("fade");
+      document.querySelectorAll(".rail > div").forEach((el) => el.classList.remove("rail-in"));
+    }
     [draft, actions, outcome, ...document.querySelectorAll(".rail > div")].forEach((el) => { el.style.opacity = hidden ? "0" : ""; });
     demoMark.classList.toggle("working", hidden);
   }
 
-  // The demo's body is as tall as its tallest example from the start, so switching examples moves nothing around it.
+  // The demo's body is as tall as its tallest example (edited text included), so switching or editing moves nothing around it.
+  // It rewrites the demo while it measures, so it only runs when nothing is mid-sequence: at the start, and between cycles.
   function lockDemoHeight() {
     const keep = current, held = heldBack;
     const body = demo.querySelector(".demo-body");
     body.style.minHeight = "";
     let tallest = 0;
-    examples.forEach((_, i) => { fill(i, false); tallest = Math.max(tallest, body.offsetHeight); });
+    examples.forEach((ex, i) => {
+      fill(i, false); tallest = Math.max(tallest, body.offsetHeight);
+      if (ex.edited) { $("draft-text").innerHTML = ex.edited; tallest = Math.max(tallest, body.offsetHeight); }
+    });
     body.style.minHeight = tallest + "px";
     fill(keep, held);
   }
+  let relock = false;
 
   // L3: a chip cross-fades the words and eases the block's height; the hairline colour crosses over on its own.
   let swapTimer = 0;
@@ -777,15 +803,20 @@
   }
 
   // L2: the demo plays itself until the visitor touches it.
-  let auto = !reduce, run = 0, inView = !("IntersectionObserver" in window);
+  let auto = !reduce, run = 0, inView = !("IntersectionObserver" in window), paused = false;
   const waiting = [];
-  const wake = () => { if (inView && !document.hidden) waiting.splice(0).forEach((f) => f()); };
-  const gate = () => new Promise((r) => (inView && !document.hidden ? r() : waiting.push(r)));
+  const running = () => inView && !document.hidden && !paused;
+  const wake = () => { if (running()) waiting.splice(0).forEach((f) => f()); };
+  const gate = () => new Promise((r) => (running() ? r() : waiting.push(r)));
   const beat = async (id, ms) => { await new Promise((r) => setTimeout(r, ms)); await gate(); return id === run && auto; };
 
+  const live = outcome.getAttribute("aria-live");
+  const pauseBtn = $("demo-pause");
   function stopAuto() {
     if (!auto) return;
-    auto = false; run++;
+    auto = false; run++; paused = false;
+    outcome.setAttribute("aria-live", live);   // announcements return once the visitor is driving
+    pauseBtn.hidden = true;
     clearTimeout(swapTimer);
     // Leave a coherent demo behind: if it was mid-"drafting", finish the example instantly.
     if (demoMark.classList.contains("working")) fill(current, false);
@@ -795,6 +826,7 @@
   async function autoplay() {
     const id = ++run;
     while (await beat(id, 0)) {
+      if (relock) { relock = false; lockDemoHeight(); }   // between cycles, when nothing is mid-sequence
       const ex = examples[current];
       fill(current, true);                       // a question arrives; the duo is working
       $("ask-text").closest(".ask").classList.remove("fade"); replay($("ask-text").closest(".ask"), "fade");
@@ -815,16 +847,34 @@
   }
 
   document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => { stopAuto(); show(Number(c.dataset.ex)); }));
-  ["pointerdown", "keydown"].forEach((t) => demo.addEventListener(t, stopAuto));
+  // Any real use of the demo hands it to the visitor. The pause control is the one thing that does not; and a touch that
+  // starts a scroll is not use, only a tap is.
+  // Only a visitor counts: autoplay clicks Send itself, and that must not end autoplay.
+  const own = (e) => !e.isTrusted || (e.target.closest && e.target.closest(".demo-pause"));
+  demo.addEventListener("pointerdown", (e) => { if (!own(e) && e.pointerType !== "touch") stopAuto(); });
+  demo.addEventListener("click", (e) => { if (!own(e)) stopAuto(); });
+  demo.addEventListener("keydown", (e) => { if (!own(e)) stopAuto(); });
+  demo.addEventListener("focusin", (e) => { if (!own(e)) stopAuto(); });   // tabbing in must not have Send clicked under the visitor
+  pauseBtn.addEventListener("click", () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? "Play" : "Pause";
+    pauseBtn.setAttribute("aria-pressed", String(paused));
+    wake();
+  });
   document.addEventListener("visibilitychange", wake);
   if ("IntersectionObserver" in window) {
-    new IntersectionObserver((entries) => { inView = entries[0].isIntersecting; wake(); }, { threshold: 0.4 }).observe(demo);
+    // "In view" is 40% of the demo, or most of the viewport when the demo is taller than the viewport can ever show (a phone, or zoomed in).
+    new IntersectionObserver((entries) => {
+      const e = entries[0];
+      inView = e.isIntersecting && (e.intersectionRatio >= 0.4 || e.intersectionRect.height >= innerHeight * 0.6);
+      wake();
+    }, { threshold: [0, 0.2, 0.4, 0.6, 0.8, 1] }).observe(demo);
   }
   lockDemoHeight();
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (auto) lockDemoHeight(); });
-  let resizeTimer = 0;
-  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (auto) lockDemoHeight(); }, 150); });
-  if (auto) { fill(0, true); autoplay(); } else { fill(0, false); }
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { relock = true; });
+  window.addEventListener("resize", () => { relock = true; });
+  // The demo is only held back once autoplay actually begins, so if it never can (nothing ever counts as "in view") the draft is simply there.
+  if (auto) { outcome.setAttribute("aria-live", "off"); pauseBtn.hidden = false; autoplay(); } else { fill(0, false); }
 
   // L5-L7: sections reveal once as they come into view, in order.
   const units = document.querySelectorAll("section .head, .loop, .loop-foot, .sources, .caveat, .mirror > *, .trust > *, .principles, .who-for > *, .cta-box");
@@ -846,7 +896,7 @@
   if (reduce || !("IntersectionObserver" in window)) {
     targets.forEach(reveal);
   } else {
-    const io = new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { reveal(e.target); io.unobserve(e.target); } }), { threshold: 0.2, rootMargin: "0px 0px -8% 0px" });
+    const io = new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { reveal(e.target); io.unobserve(e.target); } }), { threshold: 0, rootMargin: "0px 0px -8% 0px" });
     targets.forEach((el) => io.observe(el));
   }
 
