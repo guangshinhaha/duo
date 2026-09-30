@@ -25,7 +25,7 @@ export function TickingCount({ value }: { value: number }) {
   }, [shown.previous, shown.current]);
 
   return (
-    <span className="tick">
+    <span className="tick" data-changing={shown.previous !== null ? "" : undefined}>
       {shown.previous !== null && (
         <span aria-hidden="true" className="tick-out">
           {shown.previous}
