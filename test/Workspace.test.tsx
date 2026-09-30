@@ -903,6 +903,25 @@ describe("#64 AC2 — editing and deleting are honest", () => {
     expect(within(row).getByTestId("room-message-edited")).toBeInTheDocument();
     expect(within(row).queryByText("what's our refund policy?")).toBeNull();
   });
+
+  it("only a message that arrives while the room is open rises in: history renders in place (#192)", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    for (const row of screen.getAllByTestId("room-message")) {
+      expect(row.className).not.toContain("motion-rise");
+    }
+
+    act(() => fake.deliver(messageFor({ eventId: "$live", senderId: "@bose:workspace.example", senderName: "Bose", body: "one more thing" })));
+    const arrived = await waitFor(() => messageRow("one more thing"));
+    expect(arrived.className).toContain("motion-rise");
+    // The ones that were already here still sit still.
+    expect(screen.getAllByTestId("room-message").filter((row) => row.className.includes("motion-rise"))).toHaveLength(1);
+  });
 });
 
 describe("#64 AC3 — threads and reactions work", () => {

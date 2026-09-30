@@ -186,6 +186,8 @@ export function Room({
   const heldDelete = useHeld(deleteTarget);
   // Opens at its end (the newest message, then any draft), unless opened at an older message.
   const scroller = useStickToEnd<HTMLDivElement>(timeline.data?.[timeline.data.length - 1]?.eventId ?? "", at === undefined);
+  // Which messages were already here when the room opened: only what arrives after that rises in (B7).
+  const seen = useRef<{ roomId: string; ids: Set<string> | null }>({ roomId, ids: null });
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -215,6 +217,10 @@ export function Room({
   // The main flow carries the roots; a thread's replies belong to the
   // thread, present here only as the root's summary of them.
   const mainFlow = timeline.data.filter((message) => message.threadRootEventId === null);
+  if (seen.current.roomId !== roomId || seen.current.ids === null) {
+    seen.current = { roomId, ids: new Set(timeline.data.map((message) => message.eventId)) };
+  }
+  const already = seen.current.ids;
 
   return (
     <div className="flex h-full flex-col">
@@ -250,6 +256,7 @@ export function Room({
               <RoomEntry
                 key={message.eventId}
                 focused={message.eventId === at}
+                live={already !== null && !already.has(message.eventId)}
                 message={message}
                 connection={connection}
                 roomId={roomId}
@@ -461,6 +468,7 @@ export function MessageBody({
 function RoomEntry({
   message,
   focused = false,
+  live = false,
   connection,
   roomId,
   refresh,
@@ -468,6 +476,8 @@ function RoomEntry({
   onDelete,
 }: {
   message: RoomMessage;
+  /** Arrived while the room was open: it rises in. History never animates. */
+  live?: boolean;
   /** #70: the message a search hit landed at — marked, and brought into view. */
   focused?: boolean;
   connection: WorkspaceConnection;
@@ -506,7 +516,7 @@ function RoomEntry({
   return (
     <div
       aria-current={focused ? "true" : undefined}
-      className={`flex flex-col gap-1 ${focused ? "rounded-[var(--r-md)] outline outline-2 outline-offset-4 outline-[var(--accent)]" : ""}`}
+      className={`flex flex-col gap-1 ${live ? "motion-rise" : ""} ${focused ? "rounded-[var(--r-md)] outline outline-2 outline-offset-4 outline-[var(--accent)]" : ""}`}
       data-focused={focused ? "true" : undefined}
       data-testid="room-message"
       ref={rowRef}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChevronLeft, X } from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
@@ -14,7 +14,10 @@ import type {
 import { ChatList } from "./ChatList.js";
 import { useWaitingCount } from "./waiting.js";
 import { DESKTOP_QUERY, useMediaQuery } from "./useMediaQuery.js";
+import { useHeld } from "../components/primitives/useHeld.js";
 import { InspectorBody, useInspectorTarget } from "./Inspector.js";
+import { paneKey } from "./routes.js";
+import { usePresence } from "./usePresence.js";
 import { InfoPanelProvider } from "./InspectorContext.js";
 import type { Route } from "./routes.js";
 
@@ -178,6 +181,14 @@ export function ChatShell({
   const target = useInspectorTarget(api, connection, route);
   const [inspectorOn, setInspectorOn] = useInspectorPreference();
   const showInspector = desktop && wide && target !== null && inspectorOn;
+  // The column eases in and out; while it leaves it keeps what it was showing.
+  const inspector = usePresence(showInspector);
+  const heldTarget = useHeld(target);
+  // On a phone the list is home and a pane is pushed onto it: the pane slides in, and going home slides the list back.
+  const leftHome = useRef(false);
+  if (!desktop && showPane) {
+    leftHome.current = true;
+  }
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (
@@ -209,7 +220,7 @@ export function ChatShell({
           {showList && (
             <ListTag
               aria-label="Chats"
-              className="flex min-h-0 w-full flex-col bg-[var(--surface)] md:w-80 md:shrink-0 md:border-r md:border-[var(--edge)]"
+              className={`flex min-h-0 w-full flex-col bg-[var(--surface)] md:w-80 md:shrink-0 md:border-r md:border-[var(--edge)] ${!desktop && leftHome.current ? "motion-back" : ""}`}
               data-testid="chat-list-column"
             >
               <ChatList
@@ -249,16 +260,16 @@ export function ChatShell({
                 className="relative min-h-0 flex-1 overflow-y-auto"
                 data-testid="pane"
               >
-                {route === "chats" ? <EmptyPane hasDuo={api !== null} /> : pane}
+                {/* The pane's content is what changes; the list and the chrome stay still. Keyed by surface, so a chat opening another chat is a new pane and a tab change inside one is not. */}
+                <div className={`h-full ${desktop ? "motion-pane" : "motion-push"}`} key={paneKey(route)}>
+                  {route === "chats" ? <EmptyPane hasDuo={api !== null} /> : pane}
+                </div>
               </main>
             </div>
           )}
-          {showInspector && target && (
-            <aside
-              aria-label="Info"
-              className="flex min-h-0 w-80 shrink-0 flex-col overflow-y-auto border-l border-[var(--edge)] bg-[var(--surface)]"
-              data-testid="inspector"
-            >
+          {inspector.mounted && heldTarget && (
+            <aside aria-label="Info" className="motion-inspector min-h-0 shrink-0 overflow-hidden" data-shown={inspector.shown ? "" : undefined} data-testid="inspector">
+             <div className="flex h-full w-80 flex-col overflow-y-auto border-l border-[var(--edge)] bg-[var(--surface)]">
               <div className="flex justify-end px-2 pt-2">
                 <button
                   aria-label="Hide info (⌘I)"
@@ -271,8 +282,9 @@ export function ChatShell({
                 </button>
               </div>
               <div className="p-4 pt-0">
-                <InspectorBody target={target} />
+                <InspectorBody target={heldTarget} />
               </div>
+             </div>
             </aside>
           )}
         </div>
