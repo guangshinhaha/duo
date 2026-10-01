@@ -375,9 +375,62 @@
   footer a { color: var(--muted); text-decoration: none; }
   footer a:hover { color: var(--text); }
 
+
+  /* =====================================================================
+     Cinematic layer. Editorial surface, so it may be bolder than the app:
+     blur-to-sharp reveals, a hairline that tracks the page, light that
+     follows the pointer, a draft that streams in, a signal that travels
+     the loop. Everything here is switched off by prefers-reduced-motion
+     (below) and none of it hides content without JS.
+     ===================================================================== */
+  /* the headline arrives word by word, blurred to sharp */
+  .js .w { display: inline-block; animation: word 900ms var(--ease-enter) backwards; animation-delay: calc(120ms + var(--w, 0) * 90ms); }
+  @keyframes word { from { opacity: 0; transform: translateY(22px); filter: blur(14px); } to { opacity: 1; transform: none; filter: blur(0); } }
+  .js .head h2 .w { display: inline-block; opacity: 0; transform: translateY(14px); filter: blur(10px); transition: opacity 700ms var(--ease-enter), transform 700ms var(--ease-enter), filter 700ms var(--ease-enter); transition-delay: calc(var(--w, 0) * 45ms); }
+  .js .head.in h2 .w { opacity: 1; transform: none; filter: blur(0); }
+  .js.no-reveal .head h2 .w { opacity: 1; transform: none; filter: none; transition: none; }
+
+  /* the page's own hairline: it fills as you read, with a glowing head */
+  .progress { position: fixed; left: 10px; top: 96px; bottom: 96px; width: 2px; z-index: 5; pointer-events: none; display: none; }
+  .js .progress { display: block; }
+  @media (max-width: 900px) { .js .progress { display: none; } }
+  .progress::before { content: ""; position: absolute; inset: 0; background: var(--edge); border-radius: 2px; }
+  .progress b { position: absolute; inset: 0; background: var(--accent); border-radius: 2px; transform-origin: top; transform: scaleY(var(--p, 0)); }
+  .progress i { position: absolute; left: -3px; top: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); transform: translateY(calc(var(--p, 0) * (100vh - 192px) - 4px)); box-shadow: 0 0 14px 3px var(--signal-glow), 0 0 4px var(--accent); }
+
+  /* light that follows the pointer */
+  .hero::after { content: ""; position: absolute; left: 0; top: 0; width: 520px; height: 520px; margin: -260px 0 0 -260px; pointer-events: none;
+    background: radial-gradient(closest-side, var(--signal-glow), transparent); opacity: var(--glow, 0); translate: var(--gx, 60vw) var(--gy, 200px); transition: opacity 500ms var(--ease-enter), translate 800ms var(--ease-enter); }
+  .spot { position: relative; isolation: isolate; }
+  .spot::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+    background: radial-gradient(380px circle at var(--mx, 50%) var(--my, 50%), var(--signal-glow), transparent 65%); opacity: 0; transition: opacity 350ms var(--ease-enter); }
+  .spot:hover::before { opacity: 1; }
+  /* depth: text and demo drift at different rates as you scroll (the standalone `translate` property composes with the entrance) */
+  .js .hero .wrap > div:first-child { translate: 0 calc(var(--sy, 0) * 0.05px); }
+  .js .hero .demo { translate: 0 calc(var(--sy, 0) * -0.035px); }
+  /* the primary buttons lean toward the pointer */
+  .js .btn.primary { translate: var(--bx, 0) var(--by, 0); transition: translate 200ms var(--ease-enter), background var(--t), border-color var(--t), transform var(--t), filter var(--t); }
+
+  /* the draft streams in word by word, and is sent with a launch */
+  .tok { animation: tok 260ms var(--ease-enter) both; }
+  @keyframes tok { from { opacity: 0; transform: translateY(4px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
+  .draft.launch { transition: opacity 420ms var(--ease-exit), transform 420ms var(--ease-exit), filter 420ms var(--ease-exit); opacity: 0.4; transform: translateY(-8px) scale(0.985); filter: blur(1.5px); }
+  .btn.pressed::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; border: 1px solid var(--accent); animation: ring 520ms var(--ease-enter) both; pointer-events: none; }
+  .btn { position: relative; }
+  @keyframes ring { from { opacity: 0.7; transform: scale(1); } to { opacity: 0; transform: scale(1.35, 1.7); } }
+  .outcome.fade b { animation: none; }
+
+  /* a signal travels the loop, segment to segment */
+  .step .bar { overflow: visible; }
+  .step .bar .pulse { position: absolute; left: 0; top: -1px; height: 3px; width: 30%; border-radius: 3px; opacity: 0; pointer-events: none;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent); filter: drop-shadow(0 0 6px var(--accent)); }
+  .js .loop.in .step .bar .pulse { animation: travel 4800ms cubic-bezier(0.4, 0, 0.2, 1) infinite; animation-delay: calc(1.4s + var(--i, 0) * 1.05s); }
+  @keyframes travel { 0% { opacity: 0; transform: translateX(-100%); } 6% { opacity: 1; } 22% { opacity: 1; } 26% { opacity: 0; transform: translateX(333%); } 100% { opacity: 0; transform: translateX(333%); } }
+
   /* A printed page shows everything: nothing waits on a scroll that will never happen. */
   @media print {
-    .js .reveal, .js .portrait p, .js .enter, .js .enter-demo { opacity: 1 !important; transform: none !important; animation: none !important; transition: none !important; }
+    .js .reveal, .js .portrait p, .js .enter, .js .enter-demo, .js .w { opacity: 1 !important; transform: none !important; filter: none !important; animation: none !important; transition: none !important; }
+    .progress, .hero::after { display: none !important; }
     .js .loop .step .bar::before, .js .portrait .num::after { transform: scaleX(1) !important; }
     .js .loop .step .bar::after { opacity: 1 !important; transform: none !important; }
     .demo [style*="opacity"] { opacity: 1 !important; }
@@ -397,6 +450,7 @@
 </style>
 </head>
 <body>
+<div class="progress" aria-hidden="true"><b></b><i></i></div>
 <header class="nav">
   <div class="wrap">
     <a class="brand" href="#top" aria-label="Digital Duo home"><span class="mark" aria-hidden="true"><i></i><i></i></span>duo</a>
@@ -414,7 +468,7 @@
     <div class="wrap">
       <div>
         <p class="eyebrow enter" style="--i:0">Digital Duo · invite-only pilot</p>
-        <h1><span class="ln enter" style="--i:1">Your duo drafts.</span> <em class="ln enter" style="--i:2">You decide.</em></h1>
+        <h1><span class="ln"><span class="w" style="--w:0">Your</span> <span class="w" style="--w:1">duo</span> <span class="w" style="--w:2">drafts.</span></span> <em class="ln"><span class="w" style="--w:3">You</span> <span class="w" style="--w:4">decide.</span></em></h1>
         <p class="lede enter" style="--i:3">Digital Duo learns how you answer from your own past conversations. When someone asks you something, it drafts a reply that only you can see. You send it, edit it, or ignore it, and every edit teaches it.</p>
         <div class="ctas enter" style="--i:4">
           <a class="btn primary" href="/#signin">Sign in to your duo</a>
@@ -698,6 +752,7 @@
     actions.replaceChildren();
     outcome.innerHTML = text;
     replay(outcome, "fade");
+    if (left === "0 waiting" && !reduce) draft.classList.add("launch");   // the decided draft lifts away
     setCount(left);
   }
 
@@ -729,6 +784,7 @@
   function fill(i, hidden) {
     const ex = examples[i];
     current = i;
+    draft.classList.remove("launch");
     $("ask-initial").textContent = ex.initial;
     $("ask-who").innerHTML = ex.who + " <span>" + ex.where + "</span>";
     $("ask-text").textContent = ex.ask;
@@ -819,8 +875,32 @@
     pauseBtn.hidden = true;
     clearTimeout(swapTimer);
     // Leave a coherent demo behind: if it was mid-"drafting", finish the example instantly.
-    if (demoMark.classList.contains("working")) fill(current, false);
+    if (demoMark.classList.contains("working") || streaming) { streaming = false; fill(current, false); }
     wake();
+  }
+
+  // The duo's draft arrives as it would be written: word by word, the hairline already standing beside it. The block's height
+  // was reserved up front, so nothing moves while it grows.
+  let streaming = false;
+  async function streamReveal(ex, id) {
+    streaming = true;
+    fill(current, false);
+    const textEl = $("draft-text"), full = ex.draft;
+    [actions, outcome, ...document.querySelectorAll(".rail > div")].forEach((el) => { el.style.opacity = "0"; });
+    textEl.textContent = "";
+    replay(draft, "fade");
+    const words = full.split(" ");
+    for (let i = 0; i < words.length; i++) {
+      const t = document.createElement("span");
+      t.className = "tok"; t.textContent = words[i] + (i < words.length - 1 ? " " : "");
+      textEl.append(t);
+      if (!(await beat(id, 34))) { streaming = false; return false; }
+    }
+    textEl.textContent = full;
+    [actions, outcome].forEach((el) => { el.style.opacity = ""; });
+    document.querySelectorAll(".rail > div").forEach((el, n) => { el.style.opacity = ""; el.style.setProperty("--i", n); replay(el, "rail-in"); });
+    streaming = false;
+    return true;
   }
 
   async function autoplay() {
@@ -831,10 +911,8 @@
       fill(current, true);                       // a question arrives; the duo is working
       $("ask-text").closest(".ask").classList.remove("fade"); replay($("ask-text").closest(".ask"), "fade");
       if (!(await beat(id, 900))) return;
-      fill(current, false);                      // the draft rises and its hairline draws
-      replay(draft, "fade");
-      document.querySelectorAll(".rail > div").forEach((el, n) => { el.style.setProperty("--i", n); replay(el, "rail-in"); });
-      if (!(await beat(id, 1700))) return;
+      if (!(await streamReveal(ex, id))) return;   // the draft streams in behind its hairline
+      if (!(await beat(id, 1400))) return;
       if (ex.actions === "draft") {              // it is sent, and the count ticks down
         const send = actions.querySelector(".btn.primary");
         if (send) send.classList.add("pressed");
@@ -958,6 +1036,61 @@
       }, 700);
     }, { threshold: 0.6 });
     gio.observe(grid);
+  }
+
+
+  // ---- The cinematic layer: none of it runs for someone who asked for less motion. ----
+  // Section headings arrive word by word (the words are real text nodes, so they read as one heading).
+  document.querySelectorAll(".head h2").forEach((h) => {
+    const words = h.textContent.trim().split(/\s+/);
+    h.textContent = "";
+    words.forEach((word, n) => {
+      const w = document.createElement("span");
+      w.className = "w"; w.style.setProperty("--w", Math.min(n, 12)); w.textContent = word;
+      h.append(w, document.createTextNode(n < words.length - 1 ? " " : ""));
+    });
+  });
+  // A signal travels each rule of the loop.
+  document.querySelectorAll(".step .bar").forEach((bar) => bar.append(Object.assign(document.createElement("i"), { className: "pulse" })));
+
+  if (!reduce) {
+    const rail = document.querySelector(".progress");
+    const hero = document.querySelector(".hero");
+    document.querySelectorAll(".demo, .rule-card, .source, .principle, .cta-box, .grid-scroll").forEach((el) => {
+      el.classList.add("spot");
+      el.addEventListener("pointermove", (e) => {
+        const r = el.getBoundingClientRect();
+        el.style.setProperty("--mx", e.clientX - r.left + "px"); el.style.setProperty("--my", e.clientY - r.top + "px");
+      });
+    });
+    // The page's hairline fills as you read; text and demo drift apart a little as you go.
+    let frame = 0;
+    const tick = () => {
+      frame = 0;
+      const max = document.documentElement.scrollHeight - innerHeight;
+      root.style.setProperty("--p", max > 0 ? Math.min(1, scrollY / max).toFixed(4) : 0);
+      root.style.setProperty("--sy", Math.min(scrollY, 900));
+    };
+    window.addEventListener("scroll", () => { if (!frame) frame = requestAnimationFrame(tick); }, { passive: true });
+    tick();
+    // Light follows the pointer across the hero.
+    if (hero) {
+      hero.addEventListener("pointermove", (e) => {
+        const r = hero.getBoundingClientRect();
+        hero.style.setProperty("--gx", e.clientX - r.left + "px"); hero.style.setProperty("--gy", e.clientY - r.top + "px"); hero.style.setProperty("--glow", 1);
+      });
+      hero.addEventListener("pointerleave", () => hero.style.setProperty("--glow", 0));
+    }
+    // The primary buttons lean toward the pointer when it is near.
+    const magnets = [...document.querySelectorAll(".btn.primary")];
+    window.addEventListener("pointermove", (e) => {
+      if (e.pointerType === "touch") return;
+      magnets.forEach((b) => {
+        const r = b.getBoundingClientRect(), dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+        const near = Math.hypot(dx, dy) < 110;
+        b.style.setProperty("--bx", near ? dx * 0.18 + "px" : "0px"); b.style.setProperty("--by", near ? dy * 0.3 + "px" : "0px");
+      });
+    });
   }
 
   // L11: the nav gains its edge only once the page has moved.

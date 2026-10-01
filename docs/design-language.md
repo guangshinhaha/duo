@@ -129,10 +129,12 @@ above.
   asymmetric shape in the product, and it belongs to the duo.
 - **Elevation**: none in operational UI. Surfaces separate by value (Ink → Graphite → Slate) and
   by Edge borders. The only shadow is on dialogs.
-- **Motion**: calm and certain. The archetype is Corporate leaning Premium: no bounce, no
-  overshoot, short durations, confident deceleration. Two rules sit above everything else here.
-  **Only `transform` and `opacity` animate** (a fold or a resize may ease a size, and the
-  Portrait's count-up animates a number, and those are the only exceptions). **Nothing moves
+- **Motion**: calm, certain, and now cinematic. The archetype is Premium: layered, smooth, with a
+  little life at the edges. Things settle with about 5% overshoot (`--ease-spring`) where they
+  arrive, blur into focus, and leave a trace (a glow, a lift) instead of just appearing and
+  vanishing. Two rules sit above everything else here.
+  **Only `transform`, `opacity` and `filter` (blur into focus) animate** (a fold or a resize may
+  ease a size, and the Portrait's count-up animates a number, and those are the only exceptions). **Nothing moves
   without a reason the owner can name**: where it came from, where it went, or that something
   changed. Everything respects `prefers-reduced-motion` by collapsing to instant.
 
@@ -148,8 +150,19 @@ above.
   | `--dur-std` | 200ms | entries arriving, dialogs, toasts, pane changes |
   | `--dur-slow` | 320ms | sheets, the hairline draw, a value that changes in place |
   | `--dur-exit` | 150ms | every exit, shorter than its entrance |
+  | `--ease-spring` | `cubic-bezier(0.34, 1.32, 0.64, 1)` | overlays, arrivals and press release: about 5% overshoot, then settle |
   | `--rise` | 8px | the one entrance: rise and fade in |
   | `--t` | quick + standard | state change; the original token, kept as an alias |
+
+  *The expressive tier* (2026-09-30): dialogs and sheets spring in over a blurred page; a live draft
+  arrives with a glow that washes across it in its own state colour; a decided draft lifts away as it
+  folds; the Waiting count bumps as it ticks; chat rows draw a hairline on hover and when selected;
+  a pane change resolves out of a slight blur. None of it loops (the working hairline is still the
+  only loop), and none of it moves without a cause. On the landing page the same idea goes further:
+  the headline and section headings resolve word by word out of blur, the draft in the demo streams
+  in behind its hairline and lifts away when sent, the page carries its own hairline that fills as
+  you read, light follows the pointer across the hero and into cards, the primary buttons lean toward
+  the pointer, and a signal travels the loop. Reduced motion turns all of it off.
 
   *State change* uses `--t`. *Arrivals* rise 8px and fade in. *Exits* are shorter than the
   entrance they undo. *Pressing* any button or chat row shrinks it to 0.98.

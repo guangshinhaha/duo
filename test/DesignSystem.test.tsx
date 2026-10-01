@@ -364,14 +364,14 @@ describe("motion comes from tokens", () => {
     expect(tokensCss).toContain("--t: var(--dur-quick) var(--ease-standard)");
   });
 
-  it("only transform and opacity animate", () => {
+  it("only transform, opacity and filter (blur into focus) animate", () => {
     const keyframes = [...tokensCss.matchAll(/@keyframes[^{]+\{([\s\S]*?)\n\}/g)].map((m) => m[1] ?? "");
     expect(keyframes.length).toBeGreaterThan(0);
     for (const body of keyframes) {
       const properties = [...body.matchAll(/([a-z-]+)\s*:/g)].map((m) => m[1]);
       for (const property of properties) {
         // A registered custom property (`--n`, the Portrait's count-up) animates a number, not a layout property.
-        expect(["opacity", "transform"].includes(property ?? "") || (property ?? "").startsWith("--")).toBe(true);
+        expect(["opacity", "transform", "filter"].includes(property ?? "") || (property ?? "").startsWith("--")).toBe(true);
       }
     }
   });
