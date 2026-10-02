@@ -121,6 +121,8 @@ interface FakeDaemon {
   embedPost?: () => Reply | Promise<Reply>;
   importPost?: (body: { transcript: string }) => Reply | Promise<Reply>;
   importClaudePost?: (body: { export: string }) => Reply | Promise<Reply>;
+  /** #239: the zip route. Takes the raw body text (whatever the test's fake "zip" `File` was constructed with) and the `Content-Type` header the client sent it under. */
+  importClaudeZipPost?: (bodyText: string, contentType: string | undefined) => Reply | Promise<Reply>;
   deriveGet?: () => DeriveJobStatus;
   derivePost?: () => Reply | Promise<Reply>;
   rules?: () => RuleReviewListing;
@@ -129,6 +131,7 @@ interface Call {
   method: string;
   path: string;
   body: unknown;
+  contentType?: string;
 }
 
 /** The daemon's wire as #176 shipped it, by URL and method. Every call is recorded, so a test can say what was — and was not — asked. */
@@ -137,8 +140,14 @@ function fakeDaemon(daemon: FakeDaemon) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
     const method = init?.method ?? "GET";
     const path = String(url).replace(api.baseUrl, "");
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    calls.push({ method, path, body });
+    // The zip route's body is a `File` (a `Blob`), not a JSON string — read
+    // its text instead of parsing it, and keep the `Content-Type` the
+    // client sent so a test can pin what the upload picked.
+    const isBlobBody = typeof Blob !== "undefined" && init?.body instanceof Blob;
+    const bodyText = isBlobBody ? await (init!.body as Blob).text() : undefined;
+    const contentType = (init?.headers as Record<string, string> | undefined)?.["Content-Type"];
+    const body = isBlobBody ? bodyText : init?.body ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ method, path, body, contentType });
     const reply = async (r: Reply | Promise<Reply>) => {
       const [status, payload] = await r;
       return new Response(JSON.stringify(payload), { status });
@@ -157,6 +166,9 @@ function fakeDaemon(daemon: FakeDaemon) {
     }
     if (method === "POST" && path === "/corpus/import-claude" && daemon.importClaudePost) {
       return reply(daemon.importClaudePost(body));
+    }
+    if (method === "POST" && path === "/corpus/import-claude-zip" && daemon.importClaudeZipPost) {
+      return reply(daemon.importClaudeZipPost(bodyText ?? "", contentType));
     }
     if (method === "GET" && path === "/corpus/derive") {
       return reply([200, daemon.deriveGet?.() ?? deriveIdle]);
@@ -611,5 +623,140 @@ describe("importing a Claude export", () => {
     const file = new File(["{}"], "conversations.json", { type: "application/json" });
     fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
     expect((await screen.findByTestId("mutation-error")).textContent).toBe("Not a Claude export: expected a JSON array of conversations.");
+  });
+});
+
+describe("#239 — uploading the Claude export zip directly", () => {
+  it("sends the zip's raw bytes to /corpus/import-claude-zip and shows the same summary the paste import gives", async () => {
+    const counted: ClaudeImportSummary = { conversationCount: 12, workRelevantConversationCount: 7, written: 30, skipped: 2, discardedAboveCeiling: 0 };
+    let resolveImport: (r: Reply) => void = () => {};
+    const daemon = fakeDaemon({
+      knowledge: emptyDuo,
+      embedGet: () => idle,
+      importClaudeZipPost: () => new Promise<Reply>((resolve) => (resolveImport = resolve)),
+    });
+    renderOnboarding();
+
+    const zipBytes = "pretend-this-is-zip-bytes";
+    const file = new File([zipBytes], "data-export.zip", { type: "application/zip" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
+
+    // While it runs: said, announced politely, and not re-submittable — the same progress affordance the text path gives.
+    const progress = await screen.findByTestId("claude-import-progress");
+    expect(progress).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("claude-export-file")).toBeDisabled();
+
+    await waitFor(() => expect(daemon.count("POST", "/corpus/import-claude-zip")).toBe(1));
+    resolveImport([200, counted]);
+    const call = daemon.calls.find((c) => c.path === "/corpus/import-claude-zip");
+    expect(call?.body).toBe(zipBytes);
+    expect(call?.contentType).toBe("application/zip");
+    // The daemon's own route (not FormData, no `export` field) — the raw zip IS the body.
+    expect(daemon.count("POST", "/corpus/import-claude")).toBe(0);
+
+    const said = await screen.findByTestId("claude-import-summary");
+    expect(said).toHaveTextContent("Read 12 conversations, 7 work-relevant. Imported 30 records. 2 already present.");
+  });
+
+  it("defaults to application/octet-stream when the browser gives the .zip file no useful MIME type", async () => {
+    const daemon = fakeDaemon({
+      knowledge: emptyDuo,
+      embedGet: () => idle,
+      importClaudeZipPost: () => [200, { conversationCount: 1, workRelevantConversationCount: 1, written: 1, skipped: 0, discardedAboveCeiling: 0 }],
+    });
+    renderOnboarding();
+
+    const file = new File(["bytes"], "data-export.zip", { type: "" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
+
+    await waitFor(() => expect(daemon.count("POST", "/corpus/import-claude-zip")).toBe(1));
+    expect(daemon.calls.find((c) => c.path === "/corpus/import-claude-zip")?.contentType).toBe("application/octet-stream");
+  });
+
+  it("a file that is not a zip shows the daemon's own refusal, naming what was expected, and imports nothing", async () => {
+    const message = "Expected a Claude data export: a zip file containing conversations.json. The uploaded file is not a valid zip (invalid zip data).";
+    fakeDaemon({
+      knowledge: emptyDuo,
+      embedGet: () => idle,
+      importClaudeZipPost: () => [400, { error: { code: "malformed_export", message } }],
+    });
+    renderOnboarding();
+
+    const file = new File(["not a zip at all"], "notes.txt", { type: "text/plain" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
+
+    expect((await screen.findByTestId("mutation-error")).textContent).toBe(message);
+    expect(screen.queryByTestId("claude-import-summary")).not.toBeInTheDocument();
+  });
+
+  it("a zip with no conversations.json shows the daemon's own refusal naming what it found", async () => {
+    const message = "Expected a Claude data export: a zip file containing conversations.json. Found: users.json, projects.json.";
+    fakeDaemon({
+      knowledge: emptyDuo,
+      embedGet: () => idle,
+      importClaudeZipPost: () => [400, { error: { code: "malformed_export", message } }],
+    });
+    renderOnboarding();
+
+    const file = new File(["zip-bytes-without-the-right-entry"], "export.zip", { type: "application/zip" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
+
+    expect((await screen.findByTestId("mutation-error")).textContent).toBe(message);
+    expect(screen.queryByTestId("claude-import-summary")).not.toBeInTheDocument();
+  });
+
+  it("a zip over the daemon's size limit is refused with the limit named, and nothing is imported", async () => {
+    const message = "This zip is too large: the limit is 100MB.";
+    fakeDaemon({
+      knowledge: emptyDuo,
+      embedGet: () => idle,
+      importClaudeZipPost: () => [413, { error: { code: "zip_too_large", message } }],
+    });
+    renderOnboarding();
+
+    const file = new File(["oversized-zip-stand-in"], "huge-export.zip", { type: "application/zip" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
+
+    const error = await screen.findByTestId("mutation-error");
+    expect(error).toHaveTextContent(/too large/i);
+    expect(error).toHaveTextContent(/100MB/);
+    expect(screen.queryByTestId("claude-import-summary")).not.toBeInTheDocument();
+  });
+
+  it("re-uploading the same zip reports the records as already present, and adds no copies", async () => {
+    const daemon = fakeDaemon({
+      knowledge: emptyDuo,
+      embedGet: () => idle,
+      importClaudeZipPost: () => [200, { conversationCount: 12, workRelevantConversationCount: 7, written: 0, skipped: 30, discardedAboveCeiling: 0 }],
+    });
+    renderOnboarding();
+
+    const file = new File(["zip-bytes"], "data-export.zip", { type: "application/zip" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [file] } });
+
+    const said = await screen.findByTestId("claude-import-summary");
+    expect(said).toHaveTextContent("Imported 0 records. 30 already present.");
+    expect(daemon.count("POST", "/corpus/import-claude-zip")).toBe(1);
+  });
+
+  it("a second pick clears a stale result from the first — a .json pick after a zip error doesn't keep showing the zip's refusal", async () => {
+    const summaryResult: ClaudeImportSummary = { conversationCount: 1, workRelevantConversationCount: 1, written: 1, skipped: 0, discardedAboveCeiling: 0 };
+    fakeDaemon({
+      knowledge: emptyDuo,
+      embedGet: () => idle,
+      importClaudeZipPost: () => [400, { error: { code: "malformed_export", message: "Expected a Claude data export: a zip file containing conversations.json." } }],
+      importClaudePost: () => [200, summaryResult],
+    });
+    renderOnboarding();
+
+    const badZip = new File(["not a zip"], "export.zip", { type: "application/zip" });
+    fireEvent.change(await screen.findByTestId("claude-export-file"), { target: { files: [badZip] } });
+    await screen.findByTestId("mutation-error");
+
+    const json = new File([JSON.stringify([{ uuid: "c1", name: "x", chat_messages: [] }])], "conversations.json", { type: "application/json" });
+    fireEvent.change(screen.getByTestId("claude-export-file"), { target: { files: [json] } });
+
+    expect(await screen.findByTestId("claude-import-summary")).toHaveTextContent("Imported 1 record. 0 already present.");
+    expect(screen.queryByTestId("mutation-error")).not.toBeInTheDocument();
   });
 });
