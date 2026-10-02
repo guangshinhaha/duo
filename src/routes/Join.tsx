@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import { ApiRequestError } from "../api/client.js";
-import { accountFor, fetchHostedConfig, parseJoinHash, signUp, type HostedAccount } from "../api/hosted.js";
+import { accountFor, configuredDaemonOrigin, fetchHostedConfig, parseJoinHash, signUp, type HostedAccount } from "../api/hosted.js";
 import { GoogleSignInButton } from "../components/GoogleSignInButton.js";
 
 /** The daemon's own words for a refused invite are kept, but the reason a person most needs is what to do next. */
@@ -31,26 +31,45 @@ function errorText(error: unknown): string {
  * the connection is `host + basePath` plus the first device token. Then it
  * lands on onboarding, where the duo gets built.
  *
+ * A link is anyone's to write, so `host` is honoured only when it is a
+ * daemon this app already trusts (`trustedOrigins` — the one this build was
+ * made for, or the one this browser is already paired to). Otherwise
+ * nothing is fetched and no Google sign-in or signup is offered: the ID
+ * token this page collects, and the invite code itself, are what
+ * `/hosted/signup` spends, so neither may go to an address a link alone
+ * chose. The one exception is a build with no configured daemon at all
+ * (the plain pair-with-your-Mac app) — it has no built-in origin to check
+ * against, so instead of refusing outright it shows the host from the link
+ * and asks the owner to confirm it before anything is sent.
+ *
  * A browser already paired to a duo is told that joining replaces that
  * pairing on this browser (the other duo itself is untouched).
  */
 export function Join({
   hash,
   alreadyPaired,
+  trustedOrigins,
   onJoined,
 }: {
   hash: string;
   alreadyPaired: boolean;
+  trustedOrigins: readonly string[];
   onJoined: (config: DuoApiConfig, account: HostedAccount) => void;
 }) {
   const invite = parseJoinHash(hash);
+  const knownOrigin = invite !== null && trustedOrigins.includes(invite.host);
+  // No daemon this build is pinned to: there is no fixed origin to check the link against, so the
+  // owner is asked to confirm it themselves instead of the link being trusted outright.
+  const confirmable = invite !== null && !knownOrigin && configuredDaemonOrigin() === null;
+  const [hostConfirmed, setHostConfirmed] = useState(false);
+  const trusted = invite !== null && (knownOrigin || (confirmable && hostConfirmed));
   const [name, setName] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [alreadyHasDuo, setAlreadyHasDuo] = useState(false);
   // undefined while asking the server; null when it has no sign-in (the name form).
   const [clientId, setClientId] = useState<string | null | undefined>(undefined);
-  const host = invite?.host;
+  const host = trusted && invite ? invite.host : undefined;
 
   useEffect(() => {
     if (!host) {
@@ -67,7 +86,7 @@ export function Join({
   }, [host]);
 
   const join = (who: { name: string } | { credential: string }) => {
-    if (!invite || pending) {
+    if (!invite || !trusted || pending) {
       return;
     }
     setPending(true);
@@ -90,6 +109,26 @@ export function Join({
           <p className="type-body text-[var(--refused)]" data-testid="join-invalid" role="status">
             This invite link is incomplete — it needs both the server address and the invite code. Ask whoever sent it to send it again.
           </p>
+        ) : !knownOrigin && !confirmable ? (
+          <p className="type-body text-[var(--refused)]" data-testid="join-untrusted" role="status">
+            This link points to {new URL(invite.host).host}, which isn&apos;t a server this app is set up to use, so nothing was sent to it.
+            Ask whoever invited you to send the invite your duo&apos;s app itself would give out.
+          </p>
+        ) : !trusted ? (
+          <div className="flex flex-col gap-3" data-testid="join-confirm-host">
+            <p className="type-body text-[var(--muted)]">
+              This invite points to <span className="type-identifier">{new URL(invite.host).host}</span>. This app isn&apos;t set up to use a
+              particular server, so make sure you trust this one before continuing — whoever runs it can read what you put in your duo.
+            </p>
+            <button
+              className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)]"
+              data-testid="join-confirm-host-button"
+              onClick={() => setHostConfirmed(true)}
+              type="button"
+            >
+              Continue to {new URL(invite.host).host}
+            </button>
+          </div>
         ) : (
           <>
             <p className="type-body text-[var(--muted)]">

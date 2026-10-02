@@ -205,7 +205,7 @@ describe("Join with Google", () => {
       "POST /hosted/signup": () => json({ tenantId: "abc123", basePath: "/t/abc123", token: "first-tok", ownerName: "Sam", isAdmin: false }, 201),
     });
     const onJoined = vi.fn();
-    render(<Join alreadyPaired={false} hash={hash} onJoined={onJoined} />);
+    render(<Join alreadyPaired={false} hash={hash} onJoined={onJoined} trustedOrigins={[ORIGIN]} />);
     const googleButton = await screen.findByRole("button", { name: "Sign in with Google" });
     expect(screen.queryByRole("textbox", { name: /your name/i })).not.toBeInTheDocument();
     fireEvent.click(googleButton);
@@ -223,7 +223,7 @@ describe("Join with Google", () => {
       "GET /hosted/config": () => json({ googleClientId: CLIENT_ID }),
       "POST /hosted/signup": () => json({ error: { code: "already_has_duo", message: "x" } }, 409),
     });
-    render(<Join alreadyPaired={false} hash={hash} onJoined={vi.fn()} />);
+    render(<Join alreadyPaired={false} hash={hash} onJoined={vi.fn()} trustedOrigins={[ORIGIN]} />);
     fireEvent.click(await screen.findByRole("button", { name: "Sign in with Google" }));
     expect(await screen.findByTestId("join-error")).toHaveTextContent(/already has a duo/i);
     expect(screen.getByTestId("join-sign-in-instead")).toHaveAttribute("href", "#");
@@ -236,14 +236,14 @@ describe("Join with Google", () => {
       "POST /hosted/signup": () =>
         json({ error: { code: "invite_wrong_account", message: "This invite is for sam@example.com. Sign in with that Google account." } }, 403),
     });
-    render(<Join alreadyPaired={false} hash={hash} onJoined={vi.fn()} />);
+    render(<Join alreadyPaired={false} hash={hash} onJoined={vi.fn()} trustedOrigins={[ORIGIN]} />);
     fireEvent.click(await screen.findByRole("button", { name: "Sign in with Google" }));
     expect(await screen.findByTestId("join-error")).toHaveTextContent("This invite is for sam@example.com.");
   });
 
   it("keeps the typed-name form against a server without sign-in", async () => {
     routeFetch({ "GET /hosted/config": () => json({ googleClientId: null }) });
-    render(<Join alreadyPaired={false} hash={hash} onJoined={vi.fn()} />);
+    render(<Join alreadyPaired={false} hash={hash} onJoined={vi.fn()} trustedOrigins={[ORIGIN]} />);
     expect(await screen.findByRole("textbox", { name: /your name/i })).toBeInTheDocument();
   });
 });

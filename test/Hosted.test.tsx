@@ -50,14 +50,28 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("parseJoinHash", () => {
-  it("reads the daemon origin and invite code, trailing slash dropped", () => {
+  it("reads the daemon origin and invite code, trailing slash and path dropped", () => {
     expect(parseJoinHash(joinHash(`${ORIGIN}/`, "abc"))).toEqual({ host: ORIGIN, invite: "abc" });
+    expect(parseJoinHash(`#join?host=${encodeURIComponent(`${ORIGIN}/some/path?x=1`)}&invite=abc`)).toEqual({ host: ORIGIN, invite: "abc" });
   });
 
-  it("is null for a link missing either half, a non-join hash, or a non-http host", () => {
+  it("accepts plain http only for loopback, refusing it elsewhere", () => {
+    expect(parseJoinHash(`#join?host=${encodeURIComponent("http://localhost:7717")}&invite=x`)).toEqual({
+      host: "http://localhost:7717",
+      invite: "x",
+    });
+    expect(parseJoinHash(`#join?host=${encodeURIComponent("http://127.0.0.1:7717")}&invite=x`)).toEqual({
+      host: "http://127.0.0.1:7717",
+      invite: "x",
+    });
+    expect(parseJoinHash(`#join?host=${encodeURIComponent("http://daemon.example.org")}&invite=x`)).toBeNull();
+  });
+
+  it("is null for a link missing either half, a non-join hash, or a non-http(s) host", () => {
     expect(parseJoinHash(`#join?host=${encodeURIComponent(ORIGIN)}`)).toBeNull();
     expect(parseJoinHash("#join?invite=abc")).toBeNull();
     expect(parseJoinHash("#review")).toBeNull();
@@ -72,7 +86,7 @@ describe("Join — spending an invite", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const onJoined = vi.fn();
-    render(<Join alreadyPaired={false} hash={joinHash()} onJoined={onJoined} />);
+    render(<Join alreadyPaired={false} hash={joinHash()} onJoined={onJoined} trustedOrigins={[ORIGIN]} />);
 
     fireEvent.change(await screen.findByRole("textbox", { name: /your name/i }), { target: { value: "  Sam  " } });
     fireEvent.click(screen.getByRole("button", { name: "Create my duo" }));
@@ -95,7 +109,7 @@ describe("Join — spending an invite", () => {
       vi.fn(async () => new Response(JSON.stringify({ error: { code: "invite_invalid", message: "invite unknown, used, or expired" } }), { status: 403 })),
     );
     const onJoined = vi.fn();
-    render(<Join alreadyPaired={false} hash={joinHash()} onJoined={onJoined} />);
+    render(<Join alreadyPaired={false} hash={joinHash()} onJoined={onJoined} trustedOrigins={[ORIGIN]} />);
     fireEvent.change(await screen.findByRole("textbox", { name: /your name/i }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create my duo" }));
 
@@ -111,22 +125,69 @@ describe("Join — spending an invite", () => {
         throw new TypeError("Failed to fetch");
       }),
     );
-    render(<Join alreadyPaired={false} hash={joinHash()} onJoined={vi.fn()} />);
+    render(<Join alreadyPaired={false} hash={joinHash()} onJoined={vi.fn()} trustedOrigins={[ORIGIN]} />);
     fireEvent.change(await screen.findByRole("textbox", { name: /your name/i }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create my duo" }));
     expect(await screen.findByTestId("join-error")).toHaveTextContent(/Couldn't reach the duo server/);
   });
 
   it("an incomplete link offers no form at all", () => {
-    render(<Join alreadyPaired={false} hash="#join?invite=x" onJoined={vi.fn()} />);
+    render(<Join alreadyPaired={false} hash="#join?invite=x" onJoined={vi.fn()} trustedOrigins={[ORIGIN]} />);
     expect(screen.getByTestId("join-invalid")).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("tells a browser already paired that joining replaces its pairing, and names who runs the server", () => {
-    render(<Join alreadyPaired hash={joinHash()} onJoined={vi.fn()} />);
+    render(<Join alreadyPaired hash={joinHash()} onJoined={vi.fn()} trustedOrigins={[ORIGIN]} />);
     expect(screen.getByTestId("join-replaces")).toBeInTheDocument();
     expect(screen.getByTestId("join-host")).toHaveTextContent("duo-daemon.example.org");
+  });
+
+  it("sends nothing to a server the link names but this app doesn't trust (a build pinned to a daemon)", async () => {
+    vi.stubEnv("VITE_DUO_DAEMON_URL", ORIGIN);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const evil = joinHash("https://evil.example", "x");
+    render(<Join alreadyPaired={false} hash={evil} onJoined={vi.fn()} trustedOrigins={[ORIGIN]} />);
+
+    expect(screen.getByTestId("join-untrusted")).toHaveTextContent("evil.example");
+    expect(screen.queryByTestId("join-confirm-host")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("the daemon this build was made for is trusted even when the browser isn't paired to anything yet", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ googleClientId: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Join alreadyPaired={false} hash={joinHash()} onJoined={vi.fn()} trustedOrigins={[ORIGIN]} />);
+    expect(await screen.findByTestId("join-host")).toBeInTheDocument();
+    expect(screen.queryByTestId("join-confirm-host")).toBeNull();
+  });
+
+  it("a daemon this browser is already paired to is trusted, by origin alone", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ googleClientId: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const pairedOrigin = "https://paired-daemon.example.org";
+    render(<Join alreadyPaired hash={joinHash(pairedOrigin)} onJoined={vi.fn()} trustedOrigins={[pairedOrigin]} />);
+    expect(await screen.findByTestId("join-host")).toHaveTextContent("paired-daemon.example.org");
+    expect(screen.queryByTestId("join-confirm-host")).toBeNull();
+  });
+
+  it("a build with no configured daemon shows the host and waits for confirmation before sending anything", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const link = joinHash("https://some-daemon.example.org", "inv-code");
+    render(<Join alreadyPaired={false} hash={link} onJoined={vi.fn()} trustedOrigins={[]} />);
+
+    expect(screen.getByTestId("join-confirm-host")).toHaveTextContent("some-daemon.example.org");
+    expect(screen.queryByTestId("join-host")).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("join-confirm-host-button"));
+    expect(await screen.findByTestId("join-host")).toHaveTextContent("some-daemon.example.org");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`https://some-daemon.example.org/hosted/config`));
   });
 });
 
@@ -161,6 +222,11 @@ describe("Join in the app", () => {
 
     expect(await screen.findByTestId("join")).toBeInTheDocument();
     expect(screen.queryByText(/Sign in to your workspace/)).toBeNull();
+
+    // This build has no configured daemon (no VITE_DUO_DAEMON_URL) and the browser isn't paired
+    // to anything yet, so the host from the link is confirmed explicitly before anything is sent.
+    expect(screen.getByTestId("join-confirm-host")).toHaveTextContent("duo-daemon.example.org");
+    fireEvent.click(screen.getByTestId("join-confirm-host-button"));
 
     fireEvent.change(await screen.findByRole("textbox", { name: /your name/i }), { target: { value: "Sam" } });
     fireEvent.click(screen.getByRole("button", { name: "Create my duo" }));

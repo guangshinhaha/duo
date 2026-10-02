@@ -18,27 +18,40 @@ export interface JoinInvite {
   readonly invite: string;
 }
 
-/** Reads `#join?host=…&invite=…`; null when the hash isn't a join link or lacks either half. */
+/** Loopback is the one place plain http is accepted: a local daemon in development. */
+function isLoopback(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+/**
+ * Reads `#join?host=…&invite=…`; null when the hash isn't a join link or lacks either half.
+ * The host is reduced to its origin, and only https (or loopback http, for a local daemon in
+ * development) is accepted. Whether that origin is one this app trusts is a separate question
+ * (`Join` checks it against `trustedDaemonOrigins`, or against the owner's own confirmation when
+ * the build has no configured daemon): a link is anyone's to write, and the Google ID token this
+ * page collects is what the daemon accepts for a device token, so it must never go to an address
+ * a link alone chose (digital-duo#178, the same weakness #177 fixed on `#connect`).
+ */
 export function parseJoinHash(hash: string): JoinInvite | null {
   if (!hash.startsWith("#join")) {
     return null;
   }
   const query = hash.slice("#join".length).replace(/^\?/, "");
   const params = new URLSearchParams(query);
-  const host = params.get("host")?.trim().replace(/\/+$/, "");
+  const host = params.get("host")?.trim();
   const invite = params.get("invite")?.trim();
   if (!host || !invite) {
     return null;
   }
   try {
     const parsed = new URL(host);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopback(parsed.hostname))) {
       return null;
     }
+    return { host: parsed.origin, invite };
   } catch {
     return null;
   }
-  return { host, invite };
 }
 
 // The invite shapes live here, not in types.ts: they carry a Google
@@ -193,11 +206,6 @@ export function configuredDaemonOrigin(): string | null {
 export interface ConnectRequest {
   readonly host: string;
   readonly request: string;
-}
-
-/** Loopback is the one place plain http is accepted: a local daemon in development. */
-function isLoopback(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
 /**
