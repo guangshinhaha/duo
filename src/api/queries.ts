@@ -594,6 +594,30 @@ export function useImportClaude(api: DuoApiConfig) {
   });
 }
 
+/**
+ * `POST /corpus/import-claude-zip` (#239): the zip claude.ai hands an owner
+ * straight from its export, uploaded whole — the daemon unzips it, finds
+ * `conversations.json`, and imports exactly as `/corpus/import-claude` does
+ * (`ClaudeImportSummary`, the same shape either way). The body is the raw
+ * zip bytes, not JSON — `apiRequest`'s default `Content-Type:
+ * application/json` is overridden by the caller's own header, matching the
+ * daemon's route-local content-type parsers (digital-duo's owner-routes.ts).
+ */
+export function useImportClaudeZip(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ file, contentType }: { file: Blob; contentType: string }) =>
+      apiRequest<ClaudeImportSummary>(api, "/corpus/import-claude-zip", {
+        method: "POST",
+        body: file,
+        headers: { "Content-Type": contentType },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.knowledge });
+    },
+  });
+}
+
 /** The derive job's status, polled only while the daemon says "running" — the embed job's shape. */
 export function useDeriveJob(api: DuoApiConfig, pollMs: number) {
   return useQuery({

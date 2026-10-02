@@ -6,6 +6,7 @@ import {
   useDeriveJob,
   useEmbedJob,
   useImportClaude,
+  useImportClaudeZip,
   useImportPaste,
   useKnowledge,
   useStartDerive,
@@ -149,23 +150,50 @@ function ImportStep({ api, state }: { api: DuoApiConfig; state: StepState }) {
   );
 }
 
+/** Content types the daemon's `/corpus/import-claude-zip` route accepts verbatim (owner-routes.ts) — anything else still goes, but relabelled, since a browser's own guess for a `.zip` file is unreliable across platforms. */
+const ZIP_CONTENT_TYPES = ["application/zip", "application/x-zip-compressed", "application/octet-stream"];
+
+/** The daemon tells a zip from `conversations.json` apart by content, not by this — this only decides which route the client tries first. A `.json` file keeps going through the text path unchanged; anything else is sent as a zip, including a file that turns out not to be one, so the daemon's own "expected a zip" refusal is what the owner sees. */
+function isJsonFile(file: File): boolean {
+  return file.type === "application/json" || file.name.toLowerCase().endsWith(".json");
+}
+
+/** The zip's own `Content-Type` when the browser gave one the daemon recognises; `application/octet-stream` otherwise (the daemon accepts that too) — `.zip` picked on Windows routinely arrives with no usable MIME type at all. */
+function zipContentType(file: File): string {
+  return ZIP_CONTENT_TYPES.includes(file.type) ? file.type : "application/octet-stream";
+}
+
 /**
- * A Claude data export, uploaded whole: the file is read in the browser and
- * its text sent to `POST /corpus/import-claude`, which parses it exactly as
- * `duo import claude` does. Non-work conversations are dropped by the
+ * A Claude data export, uploaded whole — either shape claude.ai's export
+ * flow hands an owner:
+ *
+ *  - `conversations.json` alone, read as text in the browser and sent to
+ *    `POST /corpus/import-claude`, exactly as `duo import claude` does;
+ *  - the zip claude.ai actually sends (#239), uploaded unopened — raw bytes
+ *    as the request body, not FormData — to `POST /corpus/import-claude-zip`,
+ *    which unzips it and reads `conversations.json` itself.
+ *
+ * One file input covers both; the response either route gives back is the
+ * same `ClaudeImportSummary`, so one progress line, one summary sentence,
+ * and one error slot serve them both. Whichever mutation last ran is reset
+ * before the other starts, so picking a second file never shows a result
+ * left over from the first. Non-work conversations are dropped by the
  * daemon's own work-relevance gate, not here.
  */
 function ClaudeExportUpload({ api }: { api: DuoApiConfig }) {
   const importClaude = useImportClaude(api);
+  const importClaudeZip = useImportClaudeZip(api);
   const [readError, setReadError] = useState<string | null>(null);
-  const pending = importClaude.isPending;
+  const pending = importClaude.isPending || importClaudeZip.isPending;
+  const data = importClaude.data ?? importClaudeZip.data;
+  const error = importClaude.error ?? importClaudeZip.error;
 
   return (
     <div className="flex flex-col gap-2" data-testid="claude-export">
       <label className="flex flex-col gap-1 type-body">
-        Claude export (conversations.json)
+        Claude export (conversations.json or the export .zip)
         <input
-          accept=".json,application/json"
+          accept=".json,.zip,application/json,application/zip,application/x-zip-compressed,application/octet-stream"
           className="min-h-11 type-provenance"
           data-testid="claude-export-file"
           disabled={pending}
@@ -176,26 +204,32 @@ function ClaudeExportUpload({ api }: { api: DuoApiConfig }) {
               return;
             }
             setReadError(null);
-            file
-              .text()
-              .then((text) => importClaude.mutate(text))
-              .catch(() => setReadError("Couldn't read that file. Pick the conversations.json from your export."));
+            importClaude.reset();
+            importClaudeZip.reset();
+            if (isJsonFile(file)) {
+              file
+                .text()
+                .then((text) => importClaude.mutate(text))
+                .catch(() => setReadError("Couldn't read that file. Pick the conversations.json from your export."));
+              return;
+            }
+            importClaudeZip.mutate({ file, contentType: zipContentType(file) });
           }}
           type="file"
         />
       </label>
       <p className="type-provenance text-[var(--muted)]">
-        Get it from claude.ai: Settings → Privacy → Export data. Unzip the download it sends you and pick <code>conversations.json</code>.
-        Only work conversations are kept.
+        Get it from claude.ai: Settings → Privacy → Export data. Upload the zip it sends you directly, or unzip it yourself and pick{" "}
+        <code>conversations.json</code>. Only work conversations are kept.
       </p>
       {pending && (
         <p aria-busy="true" className="type-provenance text-[var(--muted)]" data-testid="claude-import-progress" role="status">
           Importing — your daemon is reading the export.
         </p>
       )}
-      {importClaude.data && (
+      {data && (
         <p className="type-body" data-testid="claude-import-summary">
-          {claudeImportSentence(importClaude.data)}
+          {claudeImportSentence(data)}
         </p>
       )}
       {readError && (
@@ -203,7 +237,7 @@ function ClaudeExportUpload({ api }: { api: DuoApiConfig }) {
           {readError}
         </p>
       )}
-      <MutationError error={importClaude.error} />
+      <MutationError error={error} />
     </div>
   );
 }

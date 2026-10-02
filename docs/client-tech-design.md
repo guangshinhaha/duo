@@ -135,6 +135,7 @@ domain types.
 | `POST` | `/corpus/embed` | `EmbedJobStatus` — 202 (starts the one job); 409 `embed_already_running` (#176) | `serve/embed-job` |
 | `GET` | `/corpus/embed` | `EmbedJobStatus` — the running job's progress (#176) | `serve/embed-job` |
 | `POST` | `/corpus/import-claude` | `ClaudeImportSummary` — a Claude export's `conversations.json` text in the body (`{ export }`), down `duo import claude`'s own path (hosted mode) | `ingest/claude` |
+| `POST` | `/corpus/import-claude-zip` | `ClaudeImportSummary` — the same shape, from the zip claude.ai hands out: raw zip bytes as the whole body (`Content-Type: application/zip`, `application/x-zip-compressed`, or `application/octet-stream`), unzipped server-side (digital-duo #239). 400 `malformed_export` for a non-zip or a zip with no `conversations.json`; 413 `zip_too_large` naming the limit | `ingest/claude` |
 | `POST` | `/corpus/derive` | `DeriveJobStatus` — 202 (starts the one derive job: pairs → topics → rules → voice); 409 `derive_already_running` (hosted mode) | `serve/derive-job` |
 | `GET` | `/corpus/derive` | `DeriveJobStatus` — the running job's stage, or its error verbatim (hosted mode) | `serve/derive-job` |
 | `GET` | `/ask-links` | `AskLinkRow[]` — never a token (hosted mode) | `serve/tokens` |
