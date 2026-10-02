@@ -701,6 +701,8 @@ function AppShell() {
       <Join
         alreadyPaired={!!api}
         hash={joinHash}
+        key={joinHash}
+        trustedOrigins={trustedDaemonOrigins(api)}
         onJoined={(config, account) => {
           setRevoked(false);
           setEnded(null);
