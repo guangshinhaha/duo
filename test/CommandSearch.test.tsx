@@ -171,6 +171,21 @@ describe("#207 — people come from the directory, debounced", () => {
     expect(row).toHaveTextContent("carol's duo");
     expect(row).not.toHaveTextContent("Totally A Person");
   });
+
+  it("#247: when both carol and her duo match, only carol's row shows — her duo belongs to her, not a second result", async () => {
+    const fake = fakeConnection({
+      people: [
+        { userId: "@carol:workspace.example", name: "Carol" },
+        { userId: "@duo-carol:workspace.example", name: "duo-carol" },
+      ],
+    });
+    renderCommandSearch({ connection: fake.connection });
+
+    fireEvent.change(input(), { target: { value: "carol" } });
+
+    const rows = await screen.findAllByTestId("command-search-person");
+    expect(rows.map((row) => row.textContent)).toEqual(["Carol"]);
+  });
 });
 
 describe("#207 — a person who already has a DM reads as that conversation, not twice", () => {

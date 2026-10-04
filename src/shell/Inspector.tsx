@@ -7,9 +7,11 @@ import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { Mark } from "../components/Mark.js";
 import { ProvenanceLine } from "../components/ProvenanceLine.js";
 import { Timestamp } from "../components/Timestamp.js";
-import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
+import { duoUserIdFor, localpartOf } from "../workspace/identity.js";
+import type { RoomMemberRef, RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
+import { roomHref } from "../workspace/links.js";
 import { avatarRefusalOf, stageFile } from "../workspace/sharing.js";
-import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
+import { groupRoomMembers, roomTitle, soleDuoLabel } from "./roomTitle.js";
 import { PROFILE_TABS, type ProfileTab, type Route } from "./routes.js";
 import { useHeldRooms } from "./waiting.js";
 
@@ -416,11 +418,77 @@ function GroupSettings({ room, connection }: { room: RoomSummary; connection: Wo
   );
 }
 
+/**
+ * A person's own row (#247): one row per PERSON, never a duo listed beside
+ * them as if it were a second member. When their duo also rides in the
+ * room, a quiet badge says so and "Ask their duo" opens straight into it —
+ * one click, no detour through a second row that could be mistaken for a
+ * colleague.
+ */
+function MemberRow({ member, duoHere, connection }: { member: RoomMemberRef; duoHere: boolean; connection: WorkspaceConnection | null }) {
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const name = member.name ?? localpartOf(member.userId);
+  const theirDuoId = duoHere ? duoUserIdFor(member.userId) : null;
+
+  const askTheirDuo = (): void => {
+    if (!connection || !theirDuoId || starting) {
+      return;
+    }
+    setStarting(true);
+    setError(null);
+    connection
+      .startDirect(theirDuoId)
+      .then((roomId) => {
+        window.location.hash = roomHref(roomId);
+      })
+      .catch(() => setError("The workspace didn't take that — try again."))
+      .finally(() => setStarting(false));
+  };
+
+  return (
+    <li className="flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-2">
+        <span>{name}</span>
+        {theirDuoId && (
+          <span className="flex items-center gap-2" data-testid="room-info-member-duo-badge">
+            <span
+              aria-label={`${name}'s duo is also here`}
+              className="inline-flex items-center gap-1 rounded-full border border-[var(--edge)] px-2 type-provenance text-[var(--faint)]"
+            >
+              <Mark /> duo here
+            </span>
+            {connection && (
+              <button
+                className="underline type-provenance text-[var(--muted)] disabled:opacity-40"
+                data-testid="room-info-ask-their-duo"
+                disabled={starting}
+                onClick={askTheirDuo}
+                type="button"
+              >
+                {starting ? "Opening…" : "Ask their duo"}
+              </button>
+            )}
+          </span>
+        )}
+      </div>
+      {error && (
+        <p className="type-body text-[var(--refused)]" data-testid="room-info-ask-their-duo-error">
+          {error}
+        </p>
+      )}
+    </li>
+  );
+}
+
 /** A conversation with nothing waiting in it: who is in it, what your duo does here, and (a group's) its own name, topic and picture (#223). */
 export function RoomInfo({ room, connection = null }: { room: RoomSummary; connection?: WorkspaceConnection | null }) {
   const sole = soleDuoLabel(room);
   const title = sole ?? roomTitle(room);
-  const duos = sole ? [] : roomDuoLabels(room);
+  // #247: one row per person, a duo attached to its owner's row when the
+  // owner is here, and grouped separately — quietly, never equal footing —
+  // when it isn't (the owner DMed a duo directly, or left since).
+  const { people, duos } = sole ? { people: [], duos: [] } : groupRoomMembers(room, connection?.userId ?? null);
   return (
     <div className="flex flex-col gap-4" data-testid="room-info">
       <h2 className="type-heading">{title}</h2>
@@ -432,17 +500,26 @@ export function RoomInfo({ room, connection = null }: { room: RoomSummary; conne
           <p className="type-body text-[var(--muted)]" data-testid="room-info-duo">
             Your duo drafts a reply when someone here asks you something. Nothing is sent without you.
           </p>
-          {room.members.length > 0 && (
+          {people.length > 0 && (
             <div className="flex flex-col gap-1">
               <p className="type-identifier uppercase text-[var(--faint)]">In this conversation</p>
-              <ul className="flex flex-col gap-1 type-body text-[var(--muted)]" data-testid="room-info-members">
-                {room.members.map((member) => (
-                  <li key={member.userId}>{roomDuoLabels({ ...room, members: [member] })[0] ?? member.name ?? member.userId}</li>
+              <ul className="flex flex-col gap-2 type-body text-[var(--muted)]" data-testid="room-info-members">
+                {people.map(({ member, duoHere }) => (
+                  <MemberRow connection={connection} duoHere={duoHere} key={member.userId} member={member} />
                 ))}
               </ul>
             </div>
           )}
-          {duos.length > 0 && <p className="type-provenance text-[var(--muted)]">{duos.join(", ")} {duos.length === 1 ? "is" : "are"} here.</p>}
+          {duos.length > 0 && (
+            <div className="flex flex-col gap-1 opacity-80" data-testid="room-info-duos-group">
+              <p className="type-identifier uppercase text-[var(--faint)]">Duos</p>
+              <ul className="flex flex-col gap-1 type-body text-[var(--faint)]" data-testid="room-info-duos">
+                {duos.map(({ member, label }) => (
+                  <li key={member.userId}>{label}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {room.kind !== "direct" && connection && <GroupSettings connection={connection} room={room} />}
         </>
       )}

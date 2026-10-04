@@ -112,13 +112,41 @@ describe("WhyPanel — the reasons, in the daemon's own words", () => {
 });
 
 describe("RoomInfo and DuoInfo — when nothing is waiting", () => {
-  it("names who is in a conversation by the id grammar, never a name a duo chose", () => {
+  it("#247: one row per person — a duo whose owner isn't in the room reads in its own quiet 'Duos' group, never mixed in as a second member", () => {
     mount(<RoomInfo room={room()} />);
     expect(screen.getByTestId("room-info")).toHaveTextContent("project-x");
+    // carol (the duo's owner) isn't a member of this room — carol's duo
+    // belongs under "Duos", never beside Bose as if it were a colleague.
     const members = within(screen.getByTestId("room-info-members")).getAllByRole("listitem").map((li) => li.textContent);
-    expect(members).toEqual(["Bose", "carol's duo"]);
+    expect(members).toEqual(["Bose"]);
+    const duos = within(screen.getByTestId("room-info-duos")).getAllByRole("listitem").map((li) => li.textContent);
+    expect(duos).toEqual(["carol's duo"]);
     expect(screen.getByTestId("room-info").textContent).not.toContain("Not Carol");
     expect(screen.getByTestId("room-info-duo")).toHaveTextContent("Nothing is sent without you.");
+  });
+
+  it("#247: a duo whose owner IS in the room attaches to the owner's own row — a badge and 'Ask their duo', not a second row", async () => {
+    const connection = { userId: "@ana:w", startDirect: vi.fn(async () => "!fresh:w") } as unknown as WorkspaceConnection;
+    mount(
+      <RoomInfo
+        connection={connection}
+        room={room({
+          members: [
+            { userId: "@carol:w", name: "Carol" },
+            { userId: "@duo-carol:w", name: "duo-carol", ownerName: "Carol" },
+          ],
+        })}
+      />,
+    );
+    const members = within(screen.getByTestId("room-info-members")).getAllByRole("listitem").map((li) => li.textContent);
+    expect(members).toHaveLength(1);
+    expect(members[0]).toContain("Carol");
+    expect(members[0]).toContain("duo here");
+    expect(screen.queryByTestId("room-info-duos-group")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("room-info-ask-their-duo"));
+    await waitFor(() => expect(connection.startDirect).toHaveBeenCalledWith("@duo-carol:w"));
+    await waitFor(() => expect(window.location.hash).toBe("#chat/!fresh%3Aw"));
   });
 
   it("a colleague's duo is said to be theirs, never them", () => {

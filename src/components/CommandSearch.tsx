@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { MessageSearchResults } from "./ConversationSearch.js";
 import { PersonProfile } from "./PersonProfile.js";
-import { directoryEntryLabel } from "../workspace/identity.js";
+import { directoryEntryLabel, duoOwnerUserIdOf, isDuoUserId } from "../workspace/identity.js";
 import { roomHref } from "../workspace/links.js";
 import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
 
@@ -127,7 +127,23 @@ export function CommandSearch({
     () => new Set(rooms.filter((room) => room.kind === "direct" && room.members.length === 1).map((room) => room.members[0]!.userId)),
     [rooms],
   );
-  const visiblePeople = useMemo(() => peopleMatches.filter((person) => !directPartnerIds.has(person.userId)), [peopleMatches, directPartnerIds]);
+  // #247: a colleague's duo belongs to that colleague, not a second result —
+  // when the owner's own row is also among the matches, the duo's hit is
+  // redundant (their row's "Ask their duo", from `PersonProfile`, already
+  // reaches it); a duo found with no matching owner row stays, so a search
+  // that only turned up the duo's own id doesn't go dark.
+  const ownerIdsFound = useMemo(() => new Set(peopleMatches.filter((person) => !isDuoUserId(person.userId)).map((person) => person.userId)), [peopleMatches]);
+  const visiblePeople = useMemo(
+    () =>
+      peopleMatches.filter((person) => {
+        if (directPartnerIds.has(person.userId)) {
+          return false;
+        }
+        const ownerId = duoOwnerUserIdOf(person.userId);
+        return ownerId === null || !ownerIdsFound.has(ownerId);
+      }),
+    [peopleMatches, directPartnerIds, ownerIdsFound],
+  );
 
   const items: readonly Item[] = useMemo(() => {
     const list: Item[] = roomMatches.map((room) => ({ kind: "room", room }) as const);

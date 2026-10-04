@@ -22,7 +22,7 @@ import { plainPreview } from "../workspace/duoAnswer.js";
 import { roomHref } from "../workspace/links.js";
 import type { NotificationMode, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
 import type { Route } from "./routes.js";
-import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
+import { latestMessageDuoLabel, roomTitle, soleDuoLabel } from "./roomTitle.js";
 import { bridgedHref, bridgedTitle, useBridgedChats, type BridgedChat } from "./bridged.js";
 import { SourceBadge } from "./BridgedChat.js";
 import { useWaitingItems, waitingWords, swipeActionsOf, type WaitingItem } from "./waiting.js";
@@ -576,7 +576,10 @@ export function ChatList({
     const renderRoomRow = (room: RoomSummary): ReactNode => {
       const sole = soleDuoLabel(room);
       const title = sole ?? roomTitle(room);
-      const duoLabels = sole ? [] : roomDuoLabels(room);
+      // #247: a duo riding in the room says nothing here unless it actually
+      // sent the latest word — a colleague's duo belongs to that colleague,
+      // never a second speaker in the preview line.
+      const duoSpoke = sole ? null : latestMessageDuoLabel(room);
       // #208: the icon is the projection's own `kind`, never a guess from
       // whether the room happened to have a name — a named group and an
       // unnamed one must read the same way, and only `kind` agrees with
@@ -642,13 +645,15 @@ export function ChatList({
               </>
             ) : (
               <>
-                {/* #208: a duo riding in the room is named on the secondary
-                    line, not beside the title — the title is what must
-                    never be cut to a letter. */}
-                {duoLabels.length > 0 && (
+                {/* #247: the preview attributes the latest word to the
+                    duo's OWNER, with a marker, only when the duo actually
+                    sent it — never a standing announcement that a duo is
+                    merely present, which is what let a duo read as a
+                    second speaker in the list. */}
+                {duoSpoke !== null && (
                   <>
-                    <span data-testid="room-duo">{duoLabels.join(", ")}</span>
-                    {" · "}
+                    <span data-testid="room-duo">{duoSpoke}</span>
+                    {": "}
                   </>
                 )}
                 {room.latest ? plainPreview(room.latest.body) : "No messages yet."}

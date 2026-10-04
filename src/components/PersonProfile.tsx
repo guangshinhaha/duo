@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./primitives/Dialog.js";
 import { Mark } from "./Mark.js";
-import { directoryEntryLabel, duoUserIdFor, isDuoUserId, localpartOf, serverNameOf } from "../workspace/identity.js";
+import { directoryEntryLabel, duoUserIdFor, isDuoUserId, serverNameOf } from "../workspace/identity.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 
 /** Two letters from a name, for a person's avatar fallback — a duo never gets this (docs/design-language.md §3.1: it gets the mark, always). */
@@ -151,7 +151,7 @@ function PersonProfileBody({
             onClick={() => message(theirDuoId)}
             type="button"
           >
-            Ask {localpartOf(person.userId)}&apos;s duo
+            Ask {label}&apos;s duo
           </button>
         )}
       </div>
