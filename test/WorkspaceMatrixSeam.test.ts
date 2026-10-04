@@ -876,6 +876,12 @@ describe("the pills half of the mention wire (#65)", () => {
         replyToEventId: null,
         // The anchor words "@Carol" aren't in the body: degrade to plain.
         parts: null,
+        // #213: the formatted half still carries through (and still
+        // resolves a label for its anchor) even when the plain-text pills
+        // degrade — the formatted-HTML renderer reads it directly and
+        // doesn't need the anchor's words to occur in `body`.
+        formattedBody: '<a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>?',
+        mentionLabels: { "@carol:workspace.example": "Carol" },
       },
     ]);
     // The pre-edit projection, pinned apart from the fold above: the pills
@@ -920,6 +926,12 @@ describe("the pills half of the mention wire (#65)", () => {
         { kind: "mention", userId: "@duo-carol:workspace.example", label: "carol's duo" },
         { kind: "text", text: " — what's our refund policy?" },
       ],
+      // #213: the same event's formatted half, carried alongside `parts` —
+      // both are read off the one `formatted_body`.
+      formattedBody:
+        '<a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>, ' +
+        '<a href="https://matrix.to/#/@duo-carol:workspace.example">@carol</a> — what\'s our refund policy?',
+      mentionLabels: { "@carol:workspace.example": "Carol", "@duo-carol:workspace.example": "carol's duo" },
     });
   });
 });
