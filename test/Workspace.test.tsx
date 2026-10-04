@@ -185,6 +185,11 @@ function fakeConnection(state: {
     }),
     sendFile: vi.fn(async () => {}),
     loadMedia: vi.fn(async (url: string): Promise<Blob | null> => new Blob([`bytes of ${url}`], { type: "application/octet-stream" })),
+    // #219: no fixture in this file posts a link a card should render —
+    // LinkPreview.test.tsx pins the preview itself — so this fake simply
+    // has nothing to answer, the same honest "nothing to show" a homeserver
+    // with previews off would give back.
+    getUrlPreview: vi.fn(async () => null),
     subscribe: vi.fn((handler: (roomId: string, arrival?: LiveArrival) => void) => {
       listeners.add(handler);
       return () => {

@@ -21,6 +21,7 @@ import { AskLinks } from "../components/AskLinks.js";
 import { InvitePeople } from "../components/InvitePeople.js";
 import { readHostedAccount, type AdminAccess } from "../api/hosted.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
+import { readUrlPreviewPref, writeUrlPreviewPref } from "../urlPreviewPrefs.js";
 import {
   clearMissed,
   isDndActive,
@@ -86,6 +87,9 @@ export function Settings({
   const [addressInput, setAddressInput] = useState(api?.baseUrl ?? "");
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
+  // #219: this member's own opt-in, off until they turn it on — never a
+  // default this app chose for them (see urlPreviewPrefs.ts for why).
+  const [urlPreviews, setUrlPreviews] = useState<boolean>(readUrlPreviewPref);
   // #69: this device's own rule. State read on mount (the route mounts
   // fresh per visit), written through — the log's read is the same story.
   const [dnd, setDnd] = useState<DndPrefs>(readDndPrefs);
@@ -211,6 +215,35 @@ export function Settings({
           <option value="light">Light</option>
           <option value="dark">Dark</option>
         </select>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-link-previews">
+        <h2 className="type-heading">Link previews</h2>
+        {/* #219: off unless this member turns it on, and nowhere else to
+            turn it on — not per room, not for everyone. A preview card
+            means the homeserver itself fetches whatever link was posted,
+            server-side, before this member ever sees a card: every link
+            anyone posts becomes a request the org's infrastructure makes,
+            timed to the message. This app's gov member base can't have
+            that default to on, so it doesn't — this is each member's own
+            call, and it stays off until they make it. */}
+        <p className="type-provenance text-[var(--muted)]">
+          Shows a title, description and image under a link, when the one you&apos;re signed in to has them. Building one means the
+          workspace itself fetches the page you were sent — so this is off until you turn it on, and it only ever applies to you.
+        </p>
+        <button
+          aria-pressed={urlPreviews}
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+          data-testid="settings-link-previews-toggle"
+          onClick={() => {
+            const next = !urlPreviews;
+            writeUrlPreviewPref(next);
+            setUrlPreviews(next);
+          }}
+          type="button"
+        >
+          {urlPreviews ? "Turn off link previews" : "Turn on link previews"}
+        </button>
       </section>
 
       <section className="shape-container flex flex-col gap-3 p-4">

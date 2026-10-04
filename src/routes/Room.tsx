@@ -5,6 +5,7 @@ import { Paperclip, X } from "lucide-react";
 import { RoomDuoAnswer } from "../components/RoomDuoAnswer.js";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
+import { LinkPreviewCard } from "../components/LinkPreviewCard.js";
 import { InfoButton } from "../shell/InfoButton.js";
 import { useStickToEnd } from "../shell/stickToEnd.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -17,6 +18,8 @@ import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswe
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
 import { roomHref, threadHref } from "../workspace/links.js";
+import { firstLinkOf } from "../workspace/linkPreview.js";
+import { readUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
 
@@ -372,12 +375,15 @@ export function Room({
 export function MessageBody({
   message,
   loadMedia,
+  getUrlPreview,
   conversation = [],
   onToggleReaction,
 }: {
   message: RoomMessage;
   /** The member's own authenticated fetch of a shared file's bytes — the connection's, passed down so this stays a pure render. */
   loadMedia: (url: string) => Promise<Blob | null>;
+  /** #219: the connection's own link-preview fetch — passed down for the same reason `loadMedia` is: this stays a pure render, never its own door to the SDK. */
+  getUrlPreview: WorkspaceConnection["getUrlPreview"];
   /** The room's timeline, in order — what a passed-on question reads to see whether its owner has answered (#67). */
   conversation?: readonly RoomMessage[];
   onToggleReaction?: (message: RoomMessage, key: string, mine: boolean) => void;
@@ -388,6 +394,16 @@ export function MessageBody({
   // (a person typing the same composition gets plain words). Words that
   // carry mention pills stay as they are: the daemon composes plain text.
   const duoReading = fromDuo && message.parts === null ? readDuoAnswer(message.body) : null;
+  // #219: a preview rides below the plain words of a text message (never a
+  // duo's composed answer, which already carries its own trust scaffolding,
+  // and never a struck or shared-file row) — and only when the viewing
+  // member opted in; readUrlPreviewPref() is checked here so a member who
+  // hasn't opted in never even reaches LinkPreviewCard, which is where the
+  // homeserver fetch would actually be asked for.
+  const previewUrl =
+    !message.redacted && message.file === undefined && duoReading === null && readUrlPreviewPref()
+      ? firstLinkOf(message.body)
+      : null;
   if (message.redacted) {
     // A struck message keeps its place and says so — the timeline never
     // reshuffles to hide that something was said.
@@ -414,7 +430,10 @@ export function MessageBody({
           reading={duoReading}
         />
       ) : (
-        messageWords(message)
+        <>
+          {messageWords(message)}
+          {previewUrl !== null && <LinkPreviewCard getUrlPreview={getUrlPreview} loadMedia={loadMedia} url={previewUrl} />}
+        </>
       )
     ) : (
       <SharedFileCard file={message.file} loadMedia={loadMedia} />
@@ -526,6 +545,7 @@ function RoomEntry({
       <MessageBody
         message={message}
         loadMedia={connection.loadMedia}
+        getUrlPreview={connection.getUrlPreview}
         conversation={conversation}
         onToggleReaction={(target, key, mine) =>
           run(mine ? connection.unreact(roomId, target.eventId, key) : connection.react(roomId, target.eventId, key))

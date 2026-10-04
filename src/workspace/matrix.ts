@@ -125,6 +125,21 @@ export interface RoomInvite {
   readonly inviterName: string | null;
 }
 
+/**
+ * #219: a link's title, description and image, as the homeserver's own
+ * `/preview_url` returned them (Open Graph-ish fields; absent ones read as
+ * null, never as an empty string a card would render as blank space). The
+ * image, when there is one, is almost always an `mxc://` reference — Synapse
+ * re-hosts the page's image through its own media store rather than handing
+ * the client a raw third-party URL — so it resolves through `loadMedia`
+ * exactly like a shared file's thumbnail does, never fetched directly.
+ */
+export interface UrlPreview {
+  readonly title: string | null;
+  readonly description: string | null;
+  readonly image: string | null;
+}
+
 /** One aggregated reaction under a message: the emoji, how many, and whether this member is among them. */
 export interface ReactionSummary {
   readonly key: string;
@@ -341,6 +356,16 @@ export interface WorkspaceConnection {
    * and says so; nothing is faked.
    */
   loadMedia(url: string): Promise<Blob | null>;
+  /**
+   * #219: a link's preview metadata, when the homeserver has it — called
+   * only when the viewing member opted in (urlPreviewPrefs.ts), because the
+   * homeserver fetches the linked page itself to build this answer. Null
+   * covers every way there is nothing to show: the link has no
+   * preview-able metadata, the homeserver refuses to preview it, or the
+   * request fails outright — a caller never needs to tell these apart, and
+   * nothing here throws for the member to see as an error.
+   */
+  getUrlPreview(url: string): Promise<UrlPreview | null>;
   /**
    * Amends this member's own message (#64): a replacement event — the new
    * words ride `m.new_content`, the relation points back at the base, and
@@ -1057,6 +1082,22 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       try {
         const response = await fetch(href, { headers: { Authorization: `Bearer ${session.accessToken}` } });
         return response.ok ? await response.blob() : null;
+      } catch {
+        return null;
+      }
+    },
+    getUrlPreview: async (url) => {
+      // Not every link has preview-able metadata, and a homeserver may
+      // refuse outright (previews turned off there, or a page it won't
+      // fetch) — every one of those is the same answer to a caller that
+      // only ever wants a card or nothing, never a visible error for a
+      // member who asked for a quiet preview.
+      try {
+        const response = await client.getUrlPreview(url, Date.now());
+        const title = typeof response["og:title"] === "string" ? response["og:title"] : null;
+        const description = typeof response["og:description"] === "string" ? response["og:description"] : null;
+        const image = typeof response["og:image"] === "string" ? response["og:image"] : null;
+        return title === null && description === null && image === null ? null : { title, description, image };
       } catch {
         return null;
       }
