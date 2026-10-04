@@ -1154,7 +1154,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         topic: null, // #223: no m.room.topic state in this fixture's events
         avatarUrl: null,
         members: [{ userId: "@bose:workspace.example", name: "Bose" }], // this member's own id never lists
-        latest: { at: 3_000, body: "lunch?" },
+        latest: { at: 3_000, body: "lunch?", senderId: "@bose:workspace.example" }, // #247: who sent it — the preview reads this to attribute a duo's own word to its owner
         lastActiveAt: 3_000,
         unread: { notifications: 0, mentions: 0 },
         muted: false,
@@ -1171,7 +1171,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
           { userId: "@bose:workspace.example", name: "Bose" },
           { userId: "@duo-carol:workspace.example", name: "duo-carol" },
         ],
-        latest: { at: 2_000, body: "ship it" },
+        latest: { at: 2_000, body: "ship it", senderId: "@bose:workspace.example" },
         lastActiveAt: 2_000,
         unread: { notifications: 3, mentions: 0 },
         muted: false,
@@ -1188,7 +1188,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
           { userId: "@dee:workspace.example", name: "Dee" },
           { userId: "@eeyore:workspace.example", name: "eeyore" }, // no name on record: the localpart, never a blank
         ],
-        latest: { at: 1_500, body: "all-hands friday" },
+        latest: { at: 1_500, body: "all-hands friday", senderId: "@dee:workspace.example" },
         lastActiveAt: 1_500,
         unread: { notifications: 9, mentions: 9 },
         muted: true, // the server's own push rule — true on every device

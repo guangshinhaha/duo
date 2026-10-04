@@ -1,5 +1,5 @@
-import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
-import type { RoomSummary } from "../workspace/matrix.js";
+import { duoOwnerLabel, duoOwnerUserIdOf, isDuoUserId, localpartOf } from "../workspace/identity.js";
+import type { RoomMemberRef, RoomSummary } from "../workspace/matrix.js";
 
 /**
  * The title a room reads under: its name when it has one, its members when
@@ -35,4 +35,64 @@ export function soleDuoLabel(room: RoomSummary): string | null {
     return null;
   }
   return roomDuoLabels(room).join(", ");
+}
+
+/**
+ * #247: a duo must never be listed as a second speaker beside the person it
+ * belongs to — a sidebar preview attributes its latest word to the OWNER,
+ * with a marker, only when the duo actually sent it. Null whenever the
+ * latest message wasn't from a duo (including when `latest` carries no
+ * `senderId` at all — a hand-built fixture, never the live projection), so
+ * a caller never has to re-derive "was this a duo" itself.
+ */
+export function latestMessageDuoLabel(room: RoomSummary): string | null {
+  const senderId = room.latest?.senderId;
+  if (senderId === undefined || !isDuoUserId(senderId)) {
+    return null;
+  }
+  const sender = room.members.find((member) => member.userId === senderId);
+  return `${sender?.ownerName ?? duoOwnerLabel(senderId) ?? localpartOf(senderId)}'s duo`;
+}
+
+/** One row of a room's member list, grouped the way #247 reads them (below). */
+export interface AttachedMember {
+  readonly member: RoomMemberRef;
+  /** This member's own duo is also riding in the room — show the badge and the "Ask their duo" action on their row. */
+  readonly duoHere: boolean;
+}
+
+/** A duo riding in a room whose owner ISN'T a member of it — the quiet "Duos" group at the bottom. */
+export interface UnattachedDuo {
+  readonly member: RoomMemberRef;
+  /** "{owner}'s duo", or "Your duo" when this member themself owns it (they never appear in `room.members`, which lists everyone BUT the viewer). */
+  readonly label: string;
+}
+
+/**
+ * #247: a room's member list read as one row per PERSON, a duo attached to
+ * its owner's row when the owner is also here, and grouped separately,
+ * quietly, when it isn't — "a colleague's duo belongs to that colleague,
+ * not a second person in the list." `selfId` is the viewing member's own id
+ * (never itself a member of `room.members` — #63's own rule), so their own
+ * duo riding alongside them in a group still reads as "Your duo" rather
+ * than by a display name nobody set for this purpose.
+ */
+export function groupRoomMembers(room: RoomSummary, selfId: string | null): { people: readonly AttachedMember[]; duos: readonly UnattachedDuo[] } {
+  const duoMembers = room.members.filter((member) => isDuoUserId(member.userId));
+  const ownersWithDuoHere = new Set(duoMembers.map((duo) => duoOwnerUserIdOf(duo.userId)).filter((owner): owner is string => owner !== null));
+  const people = room.members
+    .filter((member) => !isDuoUserId(member.userId))
+    .map((member): AttachedMember => ({ member, duoHere: ownersWithDuoHere.has(member.userId) }));
+  const peopleIds = new Set(people.map((entry) => entry.member.userId));
+  const duos = duoMembers
+    .filter((duo) => {
+      const ownerId = duoOwnerUserIdOf(duo.userId);
+      return ownerId === null || !peopleIds.has(ownerId);
+    })
+    .map((member): UnattachedDuo => {
+      const ownerId = duoOwnerUserIdOf(member.userId);
+      const label = ownerId !== null && ownerId === selfId ? "Your duo" : `${member.ownerName ?? duoOwnerLabel(member.userId) ?? localpartOf(member.userId)}'s duo`;
+      return { member, label };
+    });
+  return { people, duos };
 }

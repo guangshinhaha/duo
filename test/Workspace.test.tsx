@@ -960,16 +960,34 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
     fireEvent.change(await screen.findByLabelText("Search people"), { target: { value: "carol" } });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
 
-    // The directory answers people AND duos; a duo is addressed by what its
-    // id says it is, structurally — never by the display name it chose.
+    // #247: the directory answers people AND duos, but carol's duo belongs
+    // to carol — one row for her, with "Ask Carol's duo" beside "Message"
+    // on it, never a second result of its own.
     const results = await screen.findAllByTestId("new-conversation-person");
-    expect(results.map((result) => result.textContent)).toEqual(["Carol", "carol's duo"]);
+    expect(results.map((result) => result.textContent)).toEqual(["Carol"]);
+    expect(screen.getByTestId("new-conversation-ask-duo")).toHaveTextContent("Ask Carol's duo");
     fireEvent.click(screen.getByRole("button", { name: /^Carol/ }));
 
     await waitFor(() => expect(fake.connection.startDirect).toHaveBeenCalledWith("@carol:workspace.example"));
     // The conversation opens: the new room is the surface, not a closed dialog.
     expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
     expect(screen.queryByTestId("new-conversation-dialog")).toBeNull();
+  });
+
+  it("#247: 'Ask their duo' on the person's own row reaches the duo directly, from the id grammar — no second result needed to find it", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new"));
+    fireEvent.change(await screen.findByLabelText("Search people"), { target: { value: "carol" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    fireEvent.click(await screen.findByTestId("new-conversation-ask-duo"));
+
+    await waitFor(() => expect(fake.connection.startDirect).toHaveBeenCalledWith("@duo-carol:workspace.example"));
+    expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
   });
 
   it("the notification setting is the server's fact — nothing mutes as before, both directions read back (#69 AC1)", async () => {
@@ -1174,10 +1192,16 @@ describe("#214 — creating a group conversation and inviting people", () => {
   });
 });
 
-describe("#63 AC4 — a duo in a conversation is visible from the list", () => {
-  it("a conversation carrying a colleague's duo says so before it's opened", async () => {
+describe("#247 — a duo's latest word in a conversation is attributed to its owner, never listed as a second speaker", () => {
+  it("a conversation whose latest word is a colleague's duo says so, attributed to the owner, before it's opened", async () => {
     seedSession();
-    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    const rooms = roomsFixture();
+    const withDuoLatest = rooms.map((candidate) =>
+      candidate.roomId === "!project-x:workspace.example"
+        ? { ...candidate, latest: { ...candidate.latest!, senderId: "@duo-carol:workspace.example" } }
+        : candidate,
+    );
+    const fake = fakeConnection({ rooms: withDuoLatest, timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
 
     await renderApp();
@@ -1186,6 +1210,20 @@ describe("#63 AC4 — a duo in a conversation is visible from the list", () => {
     // Whose duo it is comes from the member id's grammar, not a name.
     expect(within(entryFor("project-x")).getAllByTestId("room-duo").map((chip) => chip.textContent)).toEqual(["carol's duo"]);
     expect(within(entryFor("Bose")).queryByTestId("room-duo")).toBeNull();
+  });
+
+  it("a duo merely riding in the room — not the latest sender — never appears in the preview", async () => {
+    seedSession();
+    // `roomsFixture`'s project-x carries carol's duo as a member, but its
+    // `latest` has no `senderId` (never a duo's own word) — the preview
+    // must say nothing about the duo at all.
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    expect(within(entryFor("project-x")).queryByTestId("room-duo")).toBeNull();
   });
 });
 

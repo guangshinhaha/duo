@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./primitives/Dialog.js";
-import { directoryEntryLabel } from "../workspace/identity.js";
+import { directoryEntryLabel, duoOwnerUserIdOf, duoUserIdFor, isDuoUserId } from "../workspace/identity.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 
 /**
@@ -45,6 +45,18 @@ function NewConversationBody({ connection, onStarted }: { connection: WorkspaceC
   const [searching, setSearching] = useState(false);
   const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // #247: a duo result whose owner's own row is also among the results is
+  // redundant — "Ask {owner}'s duo" on the owner's row already reaches it.
+  // A duo found with no matching owner row stays, so a search that only
+  // turned up the duo's own id doesn't go dark.
+  const visibleResults = useMemo(() => {
+    const ownerIdsFound = new Set((results ?? []).filter((person) => !isDuoUserId(person.userId)).map((person) => person.userId));
+    return (results ?? []).filter((person) => {
+      const ownerId = duoOwnerUserIdOf(person.userId);
+      return ownerId === null || !ownerIdsFound.has(ownerId);
+    });
+  }, [results]);
 
   const search = (event: FormEvent): void => {
     event.preventDefault();
@@ -107,20 +119,39 @@ function NewConversationBody({ connection, onStarted }: { connection: WorkspaceC
           No one found.
         </p>
       )}
-      {results !== null && results.length > 0 && (
+      {results !== null && visibleResults.length > 0 && (
         <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
-          {results.map((person) => (
-            <button
-              className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-left type-body text-[var(--text)] disabled:opacity-40"
-              data-testid="new-conversation-person"
-              disabled={starting !== null}
-              key={person.userId}
-              onClick={() => start(person.userId)}
-              type="button"
-            >
-              {directoryEntryLabel(person)}
-            </button>
-          ))}
+          {visibleResults.map((person) => {
+            // #247: a colleague's duo belongs to that colleague — offered as
+            // a second action on the person's own row, never a separate
+            // result of its own.
+            const theirDuoId = isDuoUserId(person.userId) ? null : duoUserIdFor(person.userId);
+            const label = directoryEntryLabel(person);
+            return (
+              <div className="flex items-center gap-2" data-testid="new-conversation-row" key={person.userId}>
+                <button
+                  className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-left type-body text-[var(--text)] disabled:opacity-40"
+                  data-testid="new-conversation-person"
+                  disabled={starting !== null}
+                  onClick={() => start(person.userId)}
+                  type="button"
+                >
+                  {label}
+                </button>
+                {theirDuoId && (
+                  <button
+                    className="inline-flex min-h-11 shrink-0 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)] disabled:opacity-40"
+                    data-testid="new-conversation-ask-duo"
+                    disabled={starting !== null}
+                    onClick={() => start(theirDuoId)}
+                    type="button"
+                  >
+                    Ask {label}&apos;s duo
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
       <DialogClose asChild>

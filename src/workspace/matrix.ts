@@ -156,8 +156,16 @@ export interface RoomSummary {
   readonly avatarUrl: string | null;
   /** The other joined members; the member's own id never lists. */
   readonly members: readonly RoomMemberRef[];
-  /** The latest text message, by homeserver time — null when the room has never said anything. */
-  readonly latest: { readonly at: number; readonly body: string } | null;
+  /**
+   * The latest text message, by homeserver time — null when the room has
+   * never said anything. `senderId` is who sent it, by the id grammar
+   * (#247): a sidebar preview reads it to decide whether to attribute the
+   * line to a duo's owner rather than list the duo as a second speaker.
+   * Optional only so a hand-built fixture elsewhere in this codebase (one
+   * that predates this field) still satisfies the type; the live
+   * projection always sets it.
+   */
+  readonly latest: { readonly at: number; readonly body: string; readonly senderId?: string } | null;
   /**
    * The room's own last-activity clock (`room.getLastActiveTimestamp()`) —
    * what the sidebar sorts by within a section. Usually tracks `latest.at`
@@ -1491,7 +1499,9 @@ async function projectRoom(
     topic: typeof topicContent?.topic === "string" && topicContent.topic !== "" ? topicContent.topic : null,
     avatarUrl: typeof avatarContent?.url === "string" && avatarContent.url !== "" ? avatarContent.url : null,
     members,
-    latest: latestText ? { at: latestText.getTs(), body: String(latestText.getContent()?.body ?? "") } : null,
+    latest: latestText
+      ? { at: latestText.getTs(), body: String(latestText.getContent()?.body ?? ""), senderId: latestText.getSender() ?? undefined }
+      : null,
     lastActiveAt: room.getLastActiveTimestamp(),
     unread: {
       notifications: room.getUnreadNotificationCount(NotificationCountType.Total),
