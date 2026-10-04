@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Paperclip, X } from "lucide-react";
 import { RoomDuoAnswer } from "../components/RoomDuoAnswer.js";
@@ -14,7 +14,7 @@ import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { roomTitle } from "../shell/roomTitle.js";
 import { addressed, mentionLabelOf, mentionPillClassName, type MessageMention } from "../workspace/mentions.js";
-import type { RoomMemberRef, RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
+import type { RoomMemberRef, RoomMessage, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
@@ -61,6 +61,15 @@ const REACTION_CHOICES = ["👍", "❤️", "😂", "🎉", "👀", "✅"] as co
 /** The quiet per-row action idiom — present for a keyboard, unloud for an eye. */
 const rowActionClass =
   "inline-flex min-h-9 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance text-[var(--muted)]";
+
+/** #211: how near the scroll container's own top counts as "scrolled to the top" — close enough that the member doesn't have to hit the exact pixel. */
+const SCROLLBACK_TRIGGER_PX = 80;
+
+/** #212: how long the "New messages" line has to sit in view before the member's read marker actually advances past it (AC3) — long enough that flying past it while scrolling doesn't count as having read it. */
+const UNREAD_DWELL_MS = 900;
+
+/** #211/#212: how many pages "Jump to first unread" may page backward looking for an off-screen read-marker anchor before falling back to "jump to the top" — bounded, so a very old marker never turns into loading a room's whole history. */
+const UNREAD_SEARCH_PAGE_CAP = 10;
 
 export { roomHref, threadHref };
 
@@ -128,6 +137,68 @@ function messageWords(message: RoomMessage): ReactNode {
   }
   return message.parts.map((part, index) =>
     part.kind === "mention" ? <MentionPill key={index} label={part.label} userId={part.userId} /> : part.text,
+  );
+}
+
+/**
+ * #212: the "New messages" divider — drawn once, above the first unread row,
+ * and watched against the scroll container it sits in. A dwell, not a
+ * glance: the member's read marker only moves once this has sat IN VIEW for
+ * a beat (`onRead`, after `UNREAD_DWELL_MS`), never just because the
+ * conversation was opened (AC3) — and `onVisibilityChange` is the other
+ * half of AC2, telling the room whether "Jump to first unread" belongs on
+ * screen right now. happy-dom (this app's test environment) stubs
+ * `IntersectionObserver` without ever calling back, and a very old browser
+ * may have none at all — either way the line just sits there, inert, rather
+ * than throwing: a caller that wants the dwell behaviour pinned supplies its
+ * own observer in tests.
+ */
+function UnreadLine({
+  scrollerRef,
+  onVisibilityChange,
+  onRead,
+}: {
+  scrollerRef: RefObject<HTMLElement | null>;
+  onVisibilityChange: (visible: boolean) => void;
+  onRead: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+    let dwell: ReturnType<typeof setTimeout> | null = null;
+    const clearDwell = (): void => {
+      if (dwell !== null) {
+        clearTimeout(dwell);
+        dwell = null;
+      }
+    };
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries[0]?.isIntersecting ?? false;
+        onVisibilityChange(visible);
+        clearDwell();
+        if (visible) {
+          dwell = setTimeout(onRead, UNREAD_DWELL_MS);
+        }
+      },
+      { root: scrollerRef.current, threshold: 0.5 },
+    );
+    observer.observe(el);
+    return () => {
+      clearDwell();
+      observer.disconnect();
+    };
+  }, [scrollerRef, onVisibilityChange, onRead]);
+
+  return (
+    <div className="flex items-center gap-2 py-1" data-testid="room-unread-line" ref={ref}>
+      <span className="h-px flex-1 bg-[var(--accent)]" />
+      <span className="type-provenance uppercase text-[var(--accent)]">New messages</span>
+      <span className="h-px flex-1 bg-[var(--accent)]" />
+    </div>
   );
 }
 
@@ -242,6 +313,77 @@ export function Room({
     window.setTimeout(() => setJumpedTo((current) => (current === eventId ? null : current)), 1500);
   };
 
+  // #211: a scroll to the top extends the window backward one page at a
+  // time; `atStart` is the homeserver's own word that there's nothing
+  // further back, read once a page comes back saying so and held until the
+  // room changes.
+  const [olderState, setOlderState] = useState<{ loading: boolean; atStart: boolean }>({ loading: false, atStart: false });
+  // The scroll container's own height and offset just before a backward
+  // page lands — what a caller restores against once the new rows render,
+  // so loading older history never jumps the member's place (#211 AC1).
+  const prependAdjust = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  // #212: this member's read-marker anchor, frozen the moment this room is
+  // opened (`connection.readMarker`, read once — see its own doc for why).
+  const unreadAnchor = useRef<{ roomId: string; eventId: string | null } | null>(null);
+  // Whether the dwell on the "New messages" line has already fired this
+  // open — once true, the line itself stops rendering (#212's own "the line
+  // disappears… once actually viewed").
+  const [markedRead, setMarkedRead] = useState(false);
+  // Whether the line is currently in the scroll container's own view —
+  // "Jump to first unread" is for when it ISN'T (#212 AC2).
+  const [dividerVisible, setDividerVisible] = useState(true);
+  // The room opens at its very end (#183) by default; when there's a known
+  // unread line, this lands there instead, once, so "where I stopped
+  // reading" (#212) is what the member actually sees first.
+  const landedOnUnread = useRef<string | null>(null);
+
+  useEffect(() => {
+    setOlderState({ loading: false, atStart: false });
+    setMarkedRead(false);
+    setDividerVisible(true);
+  }, [roomId, at]);
+
+  // The scroll position this effect restores is a DOM fact, not a React
+  // one — it has to run after the new rows are in the document but before
+  // the browser paints, which is exactly what useLayoutEffect is for.
+  useLayoutEffect(() => {
+    const adjust = prependAdjust.current;
+    const el = scroller.current;
+    if (adjust && el) {
+      el.scrollTop = el.scrollHeight - adjust.scrollHeight + adjust.scrollTop;
+      prependAdjust.current = null;
+    }
+  }, [timeline.data]);
+
+  // #212: freezing the anchor the moment this room is opened — re-reading
+  // `readMarker` every render would drift as this device's own receipt send
+  // (`markRead`, above) and its own marker advances (`handleRead`, below)
+  // land, which is exactly the "not just by opening it" AC3 rules out.
+  // Never for a search window (#70): no marker is kept for where a
+  // permalink opened, so there is nothing to compare against. Reads
+  // straight off the SDK's already-synced state — no network wait, so this
+  // runs even while `timeline`'s own query is still loading.
+  if (connection && at === undefined && (unreadAnchor.current === null || unreadAnchor.current.roomId !== roomId)) {
+    unreadAnchor.current = { roomId, eventId: connection.readMarker(roomId) };
+  }
+  const anchorEventId = connection && at === undefined && unreadAnchor.current?.roomId === roomId ? unreadAnchor.current.eventId : null;
+  const boundary: UnreadBoundary =
+    connection && anchorEventId !== null ? connection.unreadBoundaryFrom(roomId, anchorEventId) : { kind: "none" };
+  const unreadFoundEventId = !markedRead && boundary.kind === "found" ? boundary.eventId : null;
+
+  // The room opens at its very end by default (#183) — once there's a known
+  // unread line, this lands there instead, so "where I stopped reading"
+  // (#212) is what the member actually sees first, not whatever arrived
+  // since. Once per room-open: `landedOnUnread` holds the roomId this
+  // already ran for.
+  useEffect(() => {
+    if (at !== undefined || unreadFoundEventId === null || timeline.isLoading || landedOnUnread.current === roomId) {
+      return;
+    }
+    landedOnUnread.current = roomId;
+    scroller.current?.querySelector('[data-testid="room-unread-line"]')?.scrollIntoView?.({ block: "center" });
+  }, [roomId, at, unreadFoundEventId, timeline.isLoading, scroller]);
+
   if (!connection || timeline.isLoading) {
     return (
       <div className="p-6">
@@ -296,13 +438,95 @@ export function Room({
   }
   const already = seen.current.ids;
 
+  // #211: a scroll near the top of the loaded window extends it backward one
+  // page — never for a search window (#70: there's no "further back" to a
+  // fixed context window) or while a page is already on its way.
+  const handleScroll = (): void => {
+    if (at !== undefined || olderState.loading || olderState.atStart) {
+      return;
+    }
+    const el = scroller.current;
+    if (!el || el.scrollTop > SCROLLBACK_TRIGGER_PX) {
+      return;
+    }
+    prependAdjust.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
+    setOlderState((state) => ({ ...state, loading: true }));
+    void connection
+      .loadOlder(roomId)
+      .then(async (result) => {
+        if (result.loadedMore) {
+          await timeline.refetch();
+        } else {
+          // Nothing new to render against — the adjustment staged above
+          // would otherwise wrongly apply to some LATER prepend.
+          prependAdjust.current = null;
+        }
+        setOlderState({ loading: false, atStart: result.atStart });
+      })
+      .catch(() => {
+        prependAdjust.current = null;
+        setOlderState((state) => ({ ...state, loading: false }));
+      });
+  };
+
+  // #212: the dwell already confirmed the member actually saw the line
+  // (`UnreadLine`'s own timer) — this is the one call that moves the
+  // homeserver's marker past it, and the one place the line stops rendering.
+  const handleRead = (eventId: string): void => {
+    setMarkedRead(true);
+    void connection.advanceReadMarker(roomId, eventId).catch(() => undefined);
+  };
+
+  const scrollDividerIntoView = (): void => {
+    scroller.current?.querySelector('[data-testid="room-unread-line"]')?.scrollIntoView?.({ block: "center" });
+  };
+
+  // #212's AC3 note and #211's own dependency: when the anchor is already on
+  // screen, jumping is just scrolling to it; when it's older than anything
+  // loaded (`unknown`), this pages backward looking for it — bounded — and
+  // falls back to the top if it doesn't turn up quickly, same as #211 AC2's
+  // own honest "this is the beginning" landing.
+  const jumpToUnread = (): void => {
+    if (boundary.kind === "found") {
+      scrollDividerIntoView();
+      return;
+    }
+    if (boundary.kind !== "unknown" || olderState.loading || anchorEventId === null) {
+      return;
+    }
+    setOlderState((state) => ({ ...state, loading: true }));
+    void (async () => {
+      for (let page = 0; page < UNREAD_SEARCH_PAGE_CAP; page++) {
+        const result = await connection.loadOlder(roomId);
+        if (result.loadedMore) {
+          await timeline.refetch();
+        }
+        const found = connection.unreadBoundaryFrom(roomId, anchorEventId).kind === "found";
+        if (found || result.atStart) {
+          setOlderState({ loading: false, atStart: result.atStart });
+          if (found) {
+            requestAnimationFrame(scrollDividerIntoView);
+          } else {
+            scroller.current?.scrollTo({ top: 0 });
+          }
+          return;
+        }
+      }
+      setOlderState((state) => ({ ...state, loading: false }));
+      scroller.current?.scrollTo({ top: 0 });
+    })();
+  };
+
+  const showJumpToUnread =
+    at === undefined && !markedRead && ((boundary.kind === "found" && !dividerVisible) || boundary.kind === "unknown");
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-[var(--edge)] px-4 py-2" data-testid="room-header">
         <h1 className="min-w-0 truncate type-heading">{roomName}</h1>
         <InfoButton />
       </header>
-      <div className="flex-1 overflow-y-auto p-6" ref={scroller}>
+      <div className="flex-1 overflow-y-auto p-6" ref={scroller} onScroll={handleScroll}>
         <a
           className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
           data-testid="back-to-conversations"
@@ -310,6 +534,18 @@ export function Room({
         >
           All conversations
         </a>
+        {/* #211: a page on its way up top, or — the homeserver's own word —
+            nothing further back than what's already loaded. */}
+        {at === undefined && olderState.loading && (
+          <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-loading-older">
+            Loading older messages…
+          </p>
+        )}
+        {at === undefined && !olderState.loading && olderState.atStart && mainFlow.length > 0 && (
+          <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-beginning">
+            This is the beginning of the conversation.
+          </p>
+        )}
         <section className="mt-2 flex flex-col gap-5" data-testid="room-timeline">
           {at !== undefined && !timeline.data.some((message) => message.eventId === at) && (
             // The workspace's window didn't hold the message this address
@@ -327,32 +563,39 @@ export function Room({
             )
           ) : (
             mainFlow.map((message) => (
-              <RoomEntry
-                key={message.eventId}
-                // #215: a search landing and a reply's own jump share one
-                // outline — whichever brought this row into view.
-                focused={message.eventId === at || message.eventId === jumpedTo}
-                // Only what someone else says rises in: the owner's own words already appeared where they typed them, and their echo id changing must not play it twice.
-                live={already !== null && !already.has(message.eventId) && message.senderId !== connection.userId}
-                message={message}
-                connection={connection}
-                roomId={roomId}
-                refresh={refresh}
-                conversation={timeline.data}
-                onDelete={(message) => {
-                  setDeleteError(null);
-                  setDeleteTarget(message);
-                }}
-                onReply={at === undefined ? setReplyTarget : undefined}
-                onJumpToReply={jumpToMessage}
-                registerRow={(eventId, element) => {
-                  if (element) {
-                    rowElements.current.set(eventId, element);
-                  } else {
-                    rowElements.current.delete(eventId);
-                  }
-                }}
-              />
+              <Fragment key={message.eventId}>
+                {/* #212: drawn once, right above the first row this member
+                    hasn't seen yet — gone as soon as the dwell below
+                    confirms they actually have. */}
+                {unreadFoundEventId === message.eventId && (
+                  <UnreadLine scrollerRef={scroller} onVisibilityChange={setDividerVisible} onRead={() => handleRead(message.eventId)} />
+                )}
+                <RoomEntry
+                  // #215: a search landing and a reply's own jump share one
+                  // outline — whichever brought this row into view.
+                  focused={message.eventId === at || message.eventId === jumpedTo}
+                  // Only what someone else says rises in: the owner's own words already appeared where they typed them, and their echo id changing must not play it twice.
+                  live={already !== null && !already.has(message.eventId) && message.senderId !== connection.userId}
+                  message={message}
+                  connection={connection}
+                  roomId={roomId}
+                  refresh={refresh}
+                  conversation={timeline.data}
+                  onDelete={(message) => {
+                    setDeleteError(null);
+                    setDeleteTarget(message);
+                  }}
+                  onReply={at === undefined ? setReplyTarget : undefined}
+                  onJumpToReply={jumpToMessage}
+                  registerRow={(eventId, element) => {
+                    if (element) {
+                      rowElements.current.set(eventId, element);
+                    } else {
+                      rowElements.current.delete(eventId);
+                    }
+                  }}
+                />
+              </Fragment>
             ))
           )}
         </section>
@@ -362,6 +605,19 @@ export function Room({
             end: a view opened at an older message has newer ones after it. */}
         {at === undefined && drafts}
       </div>
+      {/* #212 AC2: the line itself is where it is; this is for when it isn't on screen. */}
+      {showJumpToUnread && (
+        <div className="border-t border-[var(--edge)] px-4 py-2">
+          <button
+            className="inline-flex min-h-9 items-center rounded-[var(--r-sm)] border border-[var(--accent)] px-3 type-provenance text-[var(--accent)]"
+            data-testid="jump-to-unread"
+            type="button"
+            onClick={jumpToUnread}
+          >
+            Jump to first unread
+          </button>
+        </div>
+      )}
       {at === undefined ? (
         <RoomComposer
           connection={connection}

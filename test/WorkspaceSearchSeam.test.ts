@@ -15,6 +15,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("matrix-js-sdk", () => ({
   createClient: vi.fn(),
   ClientEvent: { Sync: "sync" },
+  // #211: backward-pagination token checks (`loadOlder`) read this.
+  Direction: { Backward: "b", Forward: "f" },
   RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated" },
   SyncState: { Prepared: "PREPARED" },
   MsgType: { Text: "m.text" },

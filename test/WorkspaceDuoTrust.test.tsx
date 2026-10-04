@@ -106,6 +106,13 @@ function fakeConnection(timeline: RoomMessage[], roomList: RoomSummary[] = rooms
     rooms: vi.fn(async () => roomList.map((room) => ({ ...room }))),
     timeline: vi.fn(async () => [...timeline]),
     timelineAt: vi.fn(async () => [...timeline]),
+    // #211/#212: this file's ACs don't exercise scroll-back or the unread
+    // line — RoomScrollback.test.tsx pins those. A fixed "already caught up"
+    // answer keeps this a whole connection without inventing history.
+    loadOlder: vi.fn(async () => ({ loadedMore: false, atStart: true })),
+    readMarker: vi.fn(() => null),
+    unreadBoundaryFrom: vi.fn(() => ({ kind: "none" as const })),
+    advanceReadMarker: vi.fn(async () => {}),
     searchMessages: vi.fn(async () => ({ hits: [], next: null })),
     mentions: vi.fn(async () => []),
     send: vi.fn(async () => {}),

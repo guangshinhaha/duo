@@ -412,6 +412,13 @@ function fakeConnection(state: {
     // #222: mentions are pinned by Mentions.test.tsx; this fake only has to be a whole connection.
     mentions: vi.fn(async () => []),
     timelineAt: vi.fn(async (roomId: string) => [...(state.timelines[roomId] ?? [])]),
+    // #211/#212: this file's ACs don't exercise scroll-back or the unread
+    // line — RoomScrollback.test.tsx pins those. A fixed "already caught up"
+    // answer keeps this a whole connection without inventing history.
+    loadOlder: vi.fn(async () => ({ loadedMore: false, atStart: true })),
+    readMarker: vi.fn(() => null),
+    unreadBoundaryFrom: vi.fn(() => ({ kind: "none" as const })),
+    advanceReadMarker: vi.fn(async () => {}),
     // #64's message verbs — each one moves the timeline the way the
     // homeserver's own state would move under the same op, so the
     // surface's reflection is always the server's next answer.
