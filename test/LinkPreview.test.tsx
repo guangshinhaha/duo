@@ -80,6 +80,7 @@ function fakeConnection(
     unreact: vi.fn(async () => {}),
     replyInThread: vi.fn(async () => {}),
     markRead: vi.fn(async () => {}),
+    markUnread: vi.fn(async () => {}),
     startDirect: vi.fn(async () => "!x:workspace.example"),
     createRoom: vi.fn(async () => "!x:workspace.example"),
     invite: vi.fn(async () => {}),

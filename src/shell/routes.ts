@@ -10,6 +10,11 @@
  * stale link renders the right surface on its first paint. `canonicalHash`
  * says what the address bar should read afterwards; the shell rewrites it in
  * place (no history entry) so the bar never keeps teaching the retired names.
+ *
+ * #225: a `matrix.to` permalink's own fragment (`#/!room:server/$event`) is
+ * read the same way — a foreign grammar, not a retired one, but resolved to
+ * `#chat/<room>/<event>` by the same door, and rewritten the same way once
+ * resolved.
  */
 
 /** Plain addresses (`#name`) that are one surface each. */
@@ -113,6 +118,22 @@ export function routeFromHash(hash: string, fallback: Route = "chats"): Route {
     const at = decode(parts[1]);
     return { chat: roomId, ...(at ? { at } : {}) };
   }
+  // #225: a `matrix.to` permalink's own fragment — `#/!room:server/$event`,
+  // optionally `?via=…` — landing here directly when a copied link (one
+  // this app's own "Copy link" hands out, or another client's) opens
+  // against this app. Only a room id names a conversation unambiguously
+  // (never an alias): the same rule `workspace/drafts.ts`'s `conversationOf`
+  // already holds for a draft's own provenance permalink.
+  if (hash.startsWith("#/!")) {
+    const address = hash.slice("#/".length).split("?")[0] ?? "";
+    const [room, event] = address.split("/");
+    const roomId = decode(room);
+    if (!roomId.startsWith("!")) {
+      return "chats";
+    }
+    const at = event === undefined ? "" : decode(event);
+    return at.startsWith("$") ? { chat: roomId, at } : { chat: roomId };
+  }
   // Legacy: `#room/<room>[/<event>]` and `#thread/<room>/<root>[/<at>]`.
   if (hash.startsWith("#room/")) {
     const parts = hash.slice("#room/".length).split("/");
@@ -174,6 +195,7 @@ export function isLegacyHash(hash: string): boolean {
   return (
     hash.startsWith("#room/") ||
     hash.startsWith("#thread/") ||
+    hash.startsWith("#/!") || // #225: a matrix.to permalink's own fragment
     Object.keys(LEGACY_ROUTES).some((name) => hash === `#${name}`)
   );
 }

@@ -80,6 +80,20 @@ describe("the chat-first address grammar (#141)", () => {
     expect(isLegacyHash("#chat/x")).toBe(false);
     expect(isLegacyHash("#chats")).toBe(false);
     expect(isLegacyHash("#draft/x")).toBe(false);
+    expect(isLegacyHash("#/!r:w.example/$ev")).toBe(true);
+  });
+
+  it("#225: a matrix.to permalink's own fragment resolves to the conversation, at the event when one is named", () => {
+    expect(routeFromHash("#/!r:w.example/$ev1")).toEqual({ chat: "!r:w.example", at: "$ev1" });
+    // The current revision's own routing hint — ignored for resolving, same
+    // as a search hit's address carries none.
+    expect(routeFromHash("#/!r:w.example/$ev1?via=w.example")).toEqual({ chat: "!r:w.example", at: "$ev1" });
+    expect(routeFromHash("#/!r:w.example?via=w.example")).toEqual({ chat: "!r:w.example" });
+    expect(routeFromHash("#/!r:w.example")).toEqual({ chat: "!r:w.example" });
+    // Only a room id names a conversation unambiguously — an alias does
+    // not (the same rule `workspace/drafts.ts`'s `conversationOf` holds).
+    expect(routeFromHash("#/#room-alias:w.example")).toBe("chats");
+    expect(isLegacyHash("#/!r:w.example")).toBe(true);
   });
 
   it("names the room a route is about, and none for the rest", () => {

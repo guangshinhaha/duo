@@ -17,7 +17,7 @@ import type { RoomMemberRef, RoomMessage, WorkspaceConnection } from "../workspa
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
-import { roomHref, threadHref } from "../workspace/links.js";
+import { messagePermalink, roomHref, threadHref } from "../workspace/links.js";
 import { firstLinkOf } from "../workspace/linkPreview.js";
 import { readUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
@@ -218,6 +218,28 @@ export function Room({
         >
           Try again
         </button>
+      </div>
+    );
+  }
+  // #225: an address naming a room this account isn't in — wrong org, never
+  // joined, or left since (a copied link's whole reason for AC3) — says so
+  // plainly, rather than an empty room with a composer that could only fail
+  // to send. `rooms()` already lists only joined rooms (#214), so "not
+  // among them" is the one honest way to read "not accessible" here.
+  if (rooms.isSuccess && room === undefined) {
+    return (
+      <div className="p-6">
+        <h1 className="type-heading sr-only">{roomName}</h1>
+        <p className="type-body text-[var(--escalate)]" data-testid="room-not-accessible">
+          You can&apos;t see this conversation — it may be in a different organisation, or you may not be a member.
+        </p>
+        <a
+          className="mt-3 inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body"
+          data-testid="room-not-accessible-back"
+          href="#chats"
+        >
+          Back to conversations
+        </a>
       </div>
     );
   }
@@ -548,6 +570,10 @@ function RoomEntry({
   const [draft, setDraft] = useState(message.body);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #225: entirely local — a permalink is built from facts already in hand,
+  // no daemon or homeserver round-trip, so copying one never waits on
+  // either and never competes with `busy`.
+  const [linkState, setLinkState] = useState<"idle" | "copied" | "failed">("idle");
   const own = message.senderId === connection.userId;
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -612,6 +638,30 @@ function RoomEntry({
         <a className={rowActionClass} href={threadHref(roomId, message.eventId)}>
           Reply in thread
         </a>
+        {/* #225: a pending or failed send's id is a local echo, not yet the
+            homeserver's own — there is nothing stable to point at until it
+            lands. */}
+        {!message.pending && !message.failed && (
+          <button
+            className={rowActionClass}
+            disabled={busy}
+            data-testid="room-message-copy-link"
+            onClick={() => {
+              const link = messagePermalink(roomId, message.eventId);
+              const clipboard: Clipboard | undefined = navigator.clipboard;
+              if (!clipboard) {
+                setLinkState("failed");
+                return;
+              }
+              clipboard
+                .writeText(link)
+                .then(() => setLinkState("copied"))
+                .catch(() => setLinkState("failed"));
+            }}
+          >
+            {linkState === "copied" ? "Copied" : linkState === "failed" ? "Copy failed" : "Copy link"}
+          </button>
+        )}
         {own && !message.redacted && message.file === undefined && (
           <button
             className={rowActionClass}
