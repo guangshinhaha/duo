@@ -2751,6 +2751,82 @@ describe("#66 — sharing files and images in a conversation", () => {
   });
 });
 
+describe("#217 — paste or drop a screenshot or file into the composer", () => {
+  async function openRoom() {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    return fake;
+  }
+
+  it("pasting an image from the clipboard attaches it, the same door the file picker uses", async () => {
+    await openRoom();
+    const file = new File([new Uint8Array([1, 2, 3])], "screenshot.png", { type: "image/png" });
+
+    fireEvent.paste(screen.getByLabelText("Message project-x"), { clipboardData: { files: [file] } });
+
+    await waitFor(() => expect(screen.getByTestId("attachment-chip")).toHaveTextContent("screenshot.png"));
+  });
+
+  it("a paste with no files (ordinary text) attaches nothing", async () => {
+    await openRoom();
+
+    fireEvent.paste(screen.getByLabelText("Message project-x"), { clipboardData: { files: [] } });
+
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+  });
+
+  it("dropping a file attaches it with the existing upload flow, and a drop-target shows only while dragging", async () => {
+    const fake = await openRoom();
+    const composer = screen.getByTestId("room-composer");
+    const file = new File([new Uint8Array(10)], "notes.txt", { type: "text/plain" });
+
+    expect(screen.queryByTestId("composer-drop-target")).toBeNull();
+    fireEvent.dragEnter(composer, { dataTransfer: { files: [] } });
+    expect(screen.getByTestId("composer-drop-target")).toBeInTheDocument();
+
+    fireEvent.drop(composer, { dataTransfer: { files: [file] } });
+    expect(screen.queryByTestId("composer-drop-target")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("attachment-chip")).toHaveTextContent("notes.txt"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(fake.connection.sendFile).toHaveBeenCalledWith("!project-x:workspace.example", {
+        name: "notes.txt",
+        mimeType: "text/plain",
+        size: 10,
+        url: "mxc://workspace.example/notes.txt",
+        image: false,
+      }),
+    );
+  });
+
+  it("the existing upload limits and errors apply to a dropped file too — nothing bypasses the picker's own refusal", async () => {
+    await openRoom();
+    const composer = screen.getByTestId("room-composer");
+    const tooBig = new File([new Uint8Array(17 * 1024 * 1024)], "deck.pdf", { type: "application/pdf" });
+
+    fireEvent.drop(composer, { dataTransfer: { files: [tooBig] } });
+
+    await waitFor(() => expect(screen.getByTestId("room-composer-error")).toHaveTextContent("deck.pdf"));
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+  });
+
+  it("a drag that leaves without dropping clears the indicator", async () => {
+    await openRoom();
+    const composer = screen.getByTestId("room-composer");
+
+    fireEvent.dragEnter(composer, { dataTransfer: { files: [] } });
+    expect(screen.getByTestId("composer-drop-target")).toBeInTheDocument();
+    fireEvent.dragLeave(composer, { dataTransfer: { files: [] } });
+
+    expect(screen.queryByTestId("composer-drop-target")).toBeNull();
+  });
+});
+
 /*
  * #127 (hide-the-form half): a hosted build (VITE_DUO_DAEMON_URL set) never
  * shows the homeserver form — its workspace is the operator's, not something

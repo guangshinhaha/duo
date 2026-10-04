@@ -951,9 +951,21 @@ function RoomComposer({
   const trimmed = text.trim();
   const disabled = (trimmed.length === 0 && attachments.length === 0) || pending;
   const duos = members.filter((member) => isDuoUserId(member.userId));
+  // #217: a drag that enters a child element fires its own dragenter/
+  // dragleave — a plain boolean would flicker the indicator every time the
+  // pointer crosses an inner element's edge. The counter only reaches zero
+  // once the drag has actually left every element of the composer.
+  const dragDepth = useRef(0);
+  const [dragActive, setDragActive] = useState(false);
 
-  /** Stages what this app will share and says why about what it won't — the refusal names the limit and keeps everything. */
-  const stage = (files: FileList): void => {
+  /**
+   * Stages what this app will share and says why about what it won't — the
+   * refusal names the limit and keeps everything. #217: the exact same
+   * door the file picker's input already used — a pasted image and a
+   * dropped file are just a different SOURCE of the same `File` objects,
+   * never a second validation path to keep in step with this one.
+   */
+  const stage = (files: Iterable<File>): void => {
     // Snapshot before the first await: resetting the input's value after
     // handing its FileList over empties the live list, and the member's
     // pick must not depend on that timing.
@@ -995,8 +1007,34 @@ function RoomComposer({
 
   return (
     <form
-      className="border-t border-[var(--edge)] p-4"
+      className="relative border-t border-[var(--edge)] p-4"
       data-testid="room-composer"
+      // #217: drag-and-drop onto the composer area feeds the exact same
+      // `stage` door the file picker uses — one validation path, two ways
+      // in. `onDragOver` must still preventDefault even though this app
+      // does nothing else there: without it the browser's own "this isn't
+      // a drop target" refusal wins and `onDrop` never fires.
+      onDragEnter={(e) => {
+        e.preventDefault();
+        dragDepth.current += 1;
+        setDragActive(true);
+      }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) {
+          setDragActive(false);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        dragDepth.current = 0;
+        setDragActive(false);
+        if (e.dataTransfer.files.length > 0) {
+          stage(e.dataTransfer.files);
+        }
+      }}
       onSubmit={(e) => {
         e.preventDefault();
         if (disabled) {
@@ -1071,6 +1109,17 @@ function RoomComposer({
         })();
       }}
     >
+      {dragActive && (
+        // #217: the visible drop-target — covers the composer for as long
+        // as the drag sits over it, pointer-events off so the drop itself
+        // still lands on the form underneath.
+        <div
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[var(--r-sm)] border-2 border-dashed border-[var(--accent)] bg-[var(--surface-2)]"
+          data-testid="composer-drop-target"
+        >
+          <p className="type-body text-[var(--text)]">Drop to attach</p>
+        </div>
+      )}
       {replyTarget !== null && (
         // #215: what Send is about to quote — the words at hand, not a
         // second fetch, and a cancel that leaves the composer's own text
@@ -1153,6 +1202,15 @@ function RoomComposer({
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
               e.preventDefault();
               e.currentTarget.form?.requestSubmit();
+            }
+          }}
+          onPaste={(e) => {
+            // #217: a pasted screenshot arrives as a clipboard file, the
+            // same shape the picker and a drop both hand to `stage` — a
+            // paste that's just words (the ordinary case) has none, and
+            // nothing here changes.
+            if (e.clipboardData.files.length > 0) {
+              stage(e.clipboardData.files);
             }
           }}
         />
