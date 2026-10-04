@@ -46,6 +46,7 @@ import { RoomDrafts } from "./components/RoomDrafts.js";
 import { ThreadView } from "./routes/Thread.js";
 import { Duo } from "./routes/Duo.js";
 import { Confirmations } from "./routes/Confirmations.js";
+import { Mentions } from "./routes/Mentions.js";
 import { SearchOverlay } from "./components/SearchOverlay.js";
 import { NoDuoPanel } from "./components/NoDuoPanel.js";
 import { PairDuoDialog } from "./components/PairDuoDialog.js";
@@ -311,8 +312,10 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       <NoDuoPanel onPairDuo={shell.onPairDuo} />
     );
   }
-  // The routes below this line are the duo's own surfaces (Settings and the chat list are not).
-  if (route !== "chats" && route !== "settings" && !shell.api) {
+  // The routes below this line are the duo's own surfaces (Settings, the
+  // chat list, and Mentions are not — #222's mentions are the member's own
+  // workspace, not a thing their duo does).
+  if (route !== "chats" && route !== "settings" && route !== "mentions" && !shell.api) {
     return <NoDuoPanel onPairDuo={shell.onPairDuo} />;
   }
   switch (route) {
@@ -320,6 +323,8 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       return null;
     case "settings":
       return settingsSurface("index", shell);
+    case "mentions":
+      return <Mentions connection={shell.connection} />;
     case "admin":
       return <Admin api={shell.api!} origin={shell.admin.origin} orgId={null} role={shell.admin.role} />;
     case "confirmations":

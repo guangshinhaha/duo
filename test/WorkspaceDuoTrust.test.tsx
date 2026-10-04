@@ -103,6 +103,7 @@ function fakeConnection(timeline: RoomMessage[], roomList: RoomSummary[] = rooms
     timeline: vi.fn(async () => [...timeline]),
     timelineAt: vi.fn(async () => [...timeline]),
     searchMessages: vi.fn(async () => ({ hits: [], next: null })),
+    mentions: vi.fn(async () => []),
     send: vi.fn(async () => {}),
     edit: vi.fn(async () => {}),
     delete: vi.fn(async () => {}),

@@ -280,6 +280,8 @@ function fakeConnection(state: {
     // #70: search and landing at a hit are pinned by WorkspaceSearch.test.tsx;
     // this fake only has to be a whole connection.
     searchMessages: vi.fn(async () => ({ hits: [], next: null })),
+    // #222: mentions are pinned by Mentions.test.tsx; this fake only has to be a whole connection.
+    mentions: vi.fn(async () => []),
     timelineAt: vi.fn(async (roomId: string) => [...(state.timelines[roomId] ?? [])]),
     // #64's message verbs — each one moves the timeline the way the
     // homeserver's own state would move under the same op, so the
