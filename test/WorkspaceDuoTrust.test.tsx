@@ -67,6 +67,8 @@ function rooms(): RoomSummary[] {
       roomId: ROOM_ID,
       kind: "group",
       name: "project-x",
+      topic: null,
+      avatarUrl: null,
       members: [
         { userId: CAROL, name: "Carol" },
         { userId: DUO, name: "duo-carol" },
@@ -75,6 +77,7 @@ function rooms(): RoomSummary[] {
       unread: { notifications: 0, mentions: 0 },
       muted: false,
       notifications: "all",
+      canEdit: { name: false, topic: false, avatar: false },
     },
   ];
 }
@@ -117,6 +120,9 @@ function fakeConnection(timeline: RoomMessage[], roomList: RoomSummary[] = rooms
     joinRoom: vi.fn(async () => {}),
     leave: vi.fn(async () => {}),
     setNotificationMode: vi.fn(async () => {}),
+    setRoomName: vi.fn(async () => {}),
+    setRoomTopic: vi.fn(async () => {}),
+    setRoomAvatar: vi.fn(async () => {}),
     uploadFile: vi.fn(async () => {
       throw new Error("not used here");
     }),

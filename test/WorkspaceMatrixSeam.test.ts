@@ -27,7 +27,15 @@ vi.mock("matrix-js-sdk", () => ({
   NotificationCountType: { Highlight: "highlight", Total: "total" },
   Preset: { PrivateChat: "private_chat", TrustedPrivateChat: "trusted_private_chat", PublicChat: "public_chat" },
   PushRuleKind: { Override: "override", ContentSpecific: "content", RoomSpecific: "room", SenderSpecific: "sender", Underride: "underride" },
-  EventType: { RoomMessage: "m.room.message", Reaction: "m.reaction", RoomRedaction: "m.room.redaction" },
+  EventType: {
+    RoomMessage: "m.room.message",
+    Reaction: "m.reaction",
+    RoomRedaction: "m.room.redaction",
+    RoomName: "m.room.name",
+    RoomTopic: "m.room.topic",
+    RoomAvatar: "m.room.avatar",
+    RoomPowerLevels: "m.room.power_levels",
+  },
   RelationType: { Annotation: "m.annotation", Replace: "m.replace", Thread: "m.thread", Reference: "m.reference" },
   MatrixError: class MatrixError extends Error {
     errcode?: string;
@@ -147,6 +155,9 @@ type FakeClient = MatrixClient & {
   uploadContent: ReturnType<typeof vi.fn>;
   mxcUrlToHttp: ReturnType<typeof vi.fn>;
   getUrlPreview: ReturnType<typeof vi.fn>;
+  setRoomName: ReturnType<typeof vi.fn>;
+  setRoomTopic: ReturnType<typeof vi.fn>;
+  sendStateEvent: ReturnType<typeof vi.fn>;
 };
 
 /**
@@ -203,6 +214,9 @@ function fakeClient(
       "og:description": "An example page.",
       "og:image": "mxc://workspace.example/preview1",
     })),
+    setRoomName: vi.fn(async () => ({})),
+    setRoomTopic: vi.fn(async () => ({})),
+    sendStateEvent: vi.fn(async () => ({})),
   };
   return client as unknown as FakeClient;
 }
@@ -216,7 +230,7 @@ function summaryRoom(shape: {
   roomId: string;
   name: string | null;
   joinRule: string;
-  members: Array<{ userId: string; name: string | null }>;
+  members: Array<{ userId: string; name: string | null; powerLevel?: number }>;
   notificationCount: number;
   highlightCount: number;
   events: MatrixEvent[];
@@ -224,6 +238,11 @@ function summaryRoom(shape: {
   accountDataMode?: "mentions";
   /** #214: `rooms()` reads only joined rooms now — "join" unless a test says otherwise. */
   membership?: "join" | "invite";
+  /** #223: the room's own topic and picture, as `m.room.topic`/`m.room.avatar` state would carry them — absent when the room has none. */
+  topic?: string;
+  avatarUrl?: string;
+  /** #223: `m.room.power_levels`' content — absent models a room with no such state at all (the spec's own defaults apply). */
+  powerLevels?: { events?: Record<string, number>; state_default?: number };
 }): Room {
   return {
     roomId: shape.roomId,
@@ -237,12 +256,29 @@ function summaryRoom(shape: {
     // the timeline projection resolves sender names through this door.
     getMember: (userId: string) => {
       const member = shape.members.find((candidate) => candidate.userId === userId);
-      return member ? ({ name: member.name ?? null } as RoomMember) : null;
+      return member ? ({ name: member.name ?? null, powerLevel: member.powerLevel ?? 0 } as RoomMember) : null;
     },
     getAccountData: (type: string) =>
       type === "duo.notifications" && shape.accountDataMode
         ? ({ getContent: () => ({ mode: shape.accountDataMode }) } as MatrixEvent)
         : undefined,
+    // #223: the three state events a group's name, topic and picture ride
+    // on, read the way the SDK's RoomState does — a stateKey of "" and
+    // null when the room has never carried that event.
+    currentState: {
+      getStateEvents: (type: string) => {
+        if (type === "m.room.topic") {
+          return shape.topic === undefined ? null : ({ getContent: () => ({ topic: shape.topic }) } as MatrixEvent);
+        }
+        if (type === "m.room.avatar") {
+          return shape.avatarUrl === undefined ? null : ({ getContent: () => ({ url: shape.avatarUrl }) } as MatrixEvent);
+        }
+        if (type === "m.room.power_levels") {
+          return shape.powerLevels === undefined ? null : ({ getContent: () => shape.powerLevels } as MatrixEvent);
+        }
+        return null;
+      },
+    },
   } as unknown as Room;
 }
 
@@ -851,16 +887,21 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         roomId: "!direct:workspace.example",
         kind: "direct", // the m.direct account data says so, not the member count
         name: null,
+        topic: null, // #223: no m.room.topic state in this fixture's events
+        avatarUrl: null,
         members: [{ userId: "@bose:workspace.example", name: "Bose" }], // this member's own id never lists
         latest: { at: 3_000, body: "lunch?" },
         unread: { notifications: 0, mentions: 0 },
         muted: false,
         notifications: "all", // nothing muted, nothing scoped — the default
+        canEdit: { name: false, topic: false, avatar: false }, // #223: no power_levels state — fails closed
       },
       {
         roomId: "!project-x:workspace.example",
         kind: "group", // named, joined by invitation
         name: "project-x",
+        topic: null,
+        avatarUrl: null,
         members: [
           { userId: "@bose:workspace.example", name: "Bose" },
           { userId: "@duo-carol:workspace.example", name: "duo-carol" },
@@ -869,11 +910,14 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         unread: { notifications: 3, mentions: 0 },
         muted: false,
         notifications: "all",
+        canEdit: { name: false, topic: false, avatar: false },
       },
       {
         roomId: "!announce:workspace.example",
         kind: "channel", // named, public join rule
         name: "announce",
+        topic: null,
+        avatarUrl: null,
         members: [
           { userId: "@dee:workspace.example", name: "Dee" },
           { userId: "@eeyore:workspace.example", name: "eeyore" }, // no name on record: the localpart, never a blank
@@ -882,6 +926,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         unread: { notifications: 9, mentions: 9 },
         muted: true, // the server's own push rule — true on every device
         notifications: "nothing", // the same rule, read as the mode it is (#69)
+        canEdit: { name: false, topic: false, avatar: false },
       },
     ]);
   });
@@ -969,6 +1014,163 @@ describe("the rooms projection the conversation list reads (#63)", () => {
       { userId: "@carol:workspace.example", name: "Carol" },
       { userId: "@duo-carol:workspace.example", name: "duo-carol" }, // display name absent: the localpart, never a blank
     ]);
+  });
+
+  it("names, topics and pictures a conversation — #223's three verbs, each its own homeserver call", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.setRoomName("!r:workspace.example", "project-x");
+    expect(client.setRoomName).toHaveBeenCalledWith("!r:workspace.example", "project-x");
+
+    await connection.setRoomTopic("!r:workspace.example", "refunds");
+    expect(client.setRoomTopic).toHaveBeenCalledWith("!r:workspace.example", "refunds");
+
+    // The picture is a state event pointing at an upload already on the
+    // homeserver — this verb never uploads itself (uploadFile, #66, already
+    // does that door), it only states the result as the room's own.
+    await connection.setRoomAvatar("!r:workspace.example", "mxc://workspace.example/pic1");
+    expect(client.sendStateEvent).toHaveBeenCalledWith("!r:workspace.example", "m.room.avatar", { url: "mxc://workspace.example/pic1" }, "");
+  });
+});
+
+describe("a group conversation's name, topic, picture and edit permissions (#223)", () => {
+  it("reads the room's own topic and picture from state, honestly absent when the room has neither", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          topic: "refunds and billing",
+          avatarUrl: "mxc://workspace.example/pic1",
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [withBoth] = await connection.rooms();
+    expect(withBoth?.topic).toBe("refunds and billing");
+    expect(withBoth?.avatarUrl).toBe("mxc://workspace.example/pic1");
+
+    const bareClient = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!bare:workspace.example",
+          name: "bare",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(bareClient);
+    const bare = await connectPrepared(bareClient);
+    const [withNeither] = await bare.rooms();
+    expect(withNeither?.topic).toBeNull();
+    expect(withNeither?.avatarUrl).toBeNull();
+  });
+
+  it("grants edit permission exactly where this member's power level clears each field's own gate", async () => {
+    const client = fakeClient({
+      rooms: [
+        // A moderator (level 50): clears the state default (50) that the
+        // room's power levels leave for name and topic, but not the
+        // avatar's own higher-than-default gate (100).
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana", powerLevel: 50 }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          powerLevels: { events: { "m.room.avatar": 100 }, state_default: 50 },
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const [moderator] = await connection.rooms();
+    expect(moderator?.canEdit).toEqual({ name: true, topic: true, avatar: false });
+
+    // An ordinary member (level 0, the spec's default for an unlisted
+    // user) clears none of it — the same room, read from a plain member's
+    // own level.
+    const plainClient = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana", powerLevel: 0 }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          powerLevels: { events: { "m.room.avatar": 100 }, state_default: 50 },
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(plainClient);
+    const plain = await connectPrepared(plainClient);
+    const [member] = await plain.rooms();
+    expect(member?.canEdit).toEqual({ name: false, topic: false, avatar: false });
+  });
+
+  it("fails closed when this member's own level is unknown — never guessed as editable", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          // "ana" (the connection's own user) isn't even in the member
+          // list the fake returns from getMember: room.getMember(selfId)
+          // answers null, same as a membership record the projection
+          // hasn't synced yet would. The spec's own 0 default for an
+          // unlisted user applies — never a guessed level that would
+          // read as editable.
+          members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          // No powerLevels state either: state_default falls back to the
+          // spec's own 50 — still well above the 0 a missing member reads as.
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const [room] = await connection.rooms();
+    expect(room?.canEdit).toEqual({ name: false, topic: false, avatar: false });
+  });
+
+  it("a name/topic/picture change arrives at every subscriber as room news — no arrival, just the roomId (AC2: shows for everyone)", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const handler = vi.fn();
+    connection.subscribe(handler);
+
+    const timelineListener = client.on.mock.calls.find(([event]) => event === RoomEvent.Timeline)?.[1] as (
+      event: MatrixEvent,
+      room: Room,
+    ) => void;
+    const room = fakeRoom();
+    timelineListener(
+      fakeEvent({ type: "m.room.name", sender: "@bose:workspace.example", body: "", ts: 9_000 }),
+      room,
+    );
+
+    expect(handler).toHaveBeenCalledWith(room.roomId);
   });
 });
 
@@ -1280,10 +1482,17 @@ describe("the timeline projection the message surface reads (#64)", () => {
     at(fakeEvent({ type: "m.reaction", sender: "@bose:workspace.example", ts: 1, relatesTo: { rel_type: "m.annotation", event_id: "$1", key: "👍" } }));
     at(fakeEvent({ type: "m.room.redaction", sender: "@bose:workspace.example", ts: 2 }));
     at(fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "np", ts: 3 }));
-    // A topic change is not a message fact — the surface doesn't re-read for it.
+    // A topic change isn't a message fact, but it IS room news (#223 AC2):
+    // the roomId still arrives, so a group's name/topic/picture refreshes
+    // for every subscriber the same door a new message uses.
     at(fakeEvent({ type: "m.room.topic", sender: "@bose:workspace.example", body: "refunds", ts: 4 }));
 
-    expect(arrivals).toEqual(["!project-x:workspace.example", "!project-x:workspace.example", "!project-x:workspace.example"]);
+    expect(arrivals).toEqual([
+      "!project-x:workspace.example",
+      "!project-x:workspace.example",
+      "!project-x:workspace.example",
+      "!project-x:workspace.example",
+    ]);
   });
 });
 

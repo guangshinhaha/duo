@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { DuoApiConfig } from "../api/client.js";
 import type { DraftRecord } from "../api/types.js";
 import { hairlineState, type HairlineState } from "../components/ConfidenceHairline.js";
@@ -7,6 +8,7 @@ import { Mark } from "../components/Mark.js";
 import { ProvenanceLine } from "../components/ProvenanceLine.js";
 import { Timestamp } from "../components/Timestamp.js";
 import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
+import { avatarRefusalOf, stageFile } from "../workspace/sharing.js";
 import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
 import { PROFILE_TABS, type ProfileTab, type Route } from "./routes.js";
 import { useHeldRooms } from "./waiting.js";
@@ -117,8 +119,305 @@ export function WhyPanel({ draft }: { draft: DraftRecord }) {
 
 const KIND_WORDS: Record<RoomSummary["kind"], string> = { direct: "Person", group: "Group", channel: "Channel" };
 
-/** A conversation with nothing waiting in it: who is in it, and what your duo does here. */
-export function RoomInfo({ room }: { room: RoomSummary }) {
+/**
+ * One editable fact of a group conversation (#223): its name or its topic.
+ * Read-only when this member's power level doesn't clear the room's own
+ * gate for that field (`RoomSummary.canEdit`, read client-side so this never
+ * has to guess from a failed call) — the value still shows, per AC3, just
+ * with no way to change it. Editing is its own small form so saving the
+ * name never touches the topic and a refusal from one never blocks the
+ * other.
+ */
+function EditableField({
+  label,
+  testId,
+  value,
+  placeholder,
+  canEdit,
+  onSave,
+}: {
+  label: string;
+  testId: string;
+  value: string | null;
+  placeholder: string;
+  canEdit: boolean;
+  onSave: (next: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The homeserver's own value always wins once editing isn't in the way —
+  // another device's change (or this one landing) replaces the draft.
+  useEffect(() => {
+    if (!editing) {
+      setDraft(value ?? "");
+    }
+  }, [value, editing]);
+
+  if (!canEdit) {
+    return (
+      <Field label={label} testId={testId}>
+        {value ?? placeholder}
+      </Field>
+    );
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex flex-col gap-1" data-testid={testId}>
+        <dt className="type-identifier uppercase text-[var(--faint)]">{label}</dt>
+        <dd className="flex items-center justify-between gap-2 type-body text-[var(--muted)]">
+          <span className="min-w-0 truncate" data-testid={`${testId}-value`}>
+            {value ?? placeholder}
+          </span>
+          <button
+            className="inline-flex min-h-9 shrink-0 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance"
+            data-testid={`${testId}-edit`}
+            onClick={() => setEditing(true)}
+            type="button"
+          >
+            Edit
+          </button>
+        </dd>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1" data-testid={testId}>
+      <dt className="type-identifier uppercase text-[var(--faint)]">
+        <label htmlFor={`${testId}-input`}>{label}</label>
+      </dt>
+      <dd className="flex flex-col gap-2">
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setBusy(true);
+            setError(null);
+            onSave(draft.trim())
+              .then(() => setEditing(false))
+              .catch(() => setError("The workspace didn't take that — try again."))
+              .finally(() => setBusy(false));
+          }}
+        >
+          <input
+            className="min-w-0 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 type-body"
+            data-testid={`${testId}-input`}
+            id={`${testId}-input`}
+            onChange={(event) => setDraft(event.target.value)}
+            value={draft}
+          />
+          <button
+            className="inline-flex min-h-9 shrink-0 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance disabled:opacity-60"
+            data-testid={`${testId}-save`}
+            disabled={busy}
+            type="submit"
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+          <button
+            className="inline-flex min-h-9 shrink-0 items-center rounded-[var(--r-sm)] px-2 type-provenance text-[var(--muted)]"
+            data-testid={`${testId}-cancel`}
+            onClick={() => {
+              setEditing(false);
+              setError(null);
+            }}
+            type="button"
+          >
+            Cancel
+          </button>
+        </form>
+        {error && (
+          <p className="type-body text-[var(--refused)]" data-testid={`${testId}-error`}>
+            {error}
+          </p>
+        )}
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * A group conversation's picture (#223): the current image, fetched through
+ * the member's own authenticated media door (#66's `loadMedia` — the same
+ * one a shared image renders through, since an `<img src="mxc://…">` could
+ * never load), or an honest placeholder when it has none. A read-only
+ * member sees this and nothing else; a member with `canEdit.avatar` also
+ * sees a picker, gated by the identical size and type rules a shared image
+ * runs against (`avatarRefusalOf`) before the bytes ever reach `uploadFile`.
+ */
+function PictureField({
+  avatarUrl,
+  canEdit,
+  connection,
+  onSave,
+}: {
+  avatarUrl: string | null;
+  canEdit: boolean;
+  connection: WorkspaceConnection;
+  onSave: (mxcUrl: string) => Promise<void>;
+}) {
+  const [thumbnail, setThumbnail] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (avatarUrl === null) {
+      setThumbnail(null);
+      return;
+    }
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    void connection.loadMedia(avatarUrl).then((blob) => {
+      if (cancelled || blob === null) {
+        return;
+      }
+      objectUrl = URL.createObjectURL(blob);
+      setThumbnail(objectUrl);
+    });
+    return () => {
+      cancelled = true;
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [avatarUrl, connection]);
+
+  const pick = async (file: File): Promise<void> => {
+    const staged = await stageFile(file);
+    const refusal = avatarRefusalOf(staged);
+    if (refusal !== null) {
+      setError(refusal);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const uploaded = await connection.uploadFile(staged);
+      await onSave(uploaded.url);
+    } catch {
+      setError("The workspace didn't take that picture — try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2" data-testid="room-settings-picture">
+      <p className="type-identifier uppercase text-[var(--faint)]">Picture</p>
+      <div className="flex items-center gap-3">
+        {thumbnail !== null ? (
+          <img
+            alt=""
+            className="size-14 rounded-[var(--r-md)] border border-[var(--edge)] object-cover"
+            data-testid="room-picture-image"
+            src={thumbnail}
+          />
+        ) : (
+          <div
+            aria-hidden="true"
+            className="flex size-14 items-center justify-center rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface-2)] type-identifier text-[var(--faint)]"
+            data-testid="room-picture-placeholder"
+          >
+            None
+          </div>
+        )}
+        {canEdit && (
+          <>
+            <input
+              accept="image/*"
+              className="hidden"
+              data-testid="room-picture-input"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) {
+                  void pick(file);
+                }
+              }}
+              ref={inputRef}
+              type="file"
+            />
+            <button
+              className="inline-flex min-h-9 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance disabled:opacity-60"
+              data-testid="room-picture-pick"
+              disabled={busy}
+              onClick={() => inputRef.current?.click()}
+              type="button"
+            >
+              {busy ? "Uploading…" : "Change picture"}
+            </button>
+          </>
+        )}
+      </div>
+      {error && (
+        <p className="type-body text-[var(--refused)]" data-testid="room-picture-error">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * #223: a group conversation's name, topic and picture — editable inline by
+ * whoever's power level the room grants it, read-only for everyone else
+ * (AC3). A direct conversation never renders this (RoomInfo gates it out):
+ * a DM has no name of its own to give, and Matrix's own convention leaves
+ * these three state events to rooms, not 1:1s. Saving any one field is its
+ * own call; the homeserver's next answer — synced back through #63's
+ * projection — is what every device (this one's sidebar and header
+ * included, once their own `rooms` read is invalidated) reads afterwards.
+ * Nothing here renders a local guess of the new value.
+ */
+function GroupSettings({ room, connection }: { room: RoomSummary; connection: WorkspaceConnection }) {
+  const queryClient = useQueryClient();
+  const refresh = (): void => {
+    void queryClient.invalidateQueries({ queryKey: ["workspace", "rooms"] });
+  };
+  return (
+    <dl className="flex flex-col gap-4 border-t border-[var(--edge)] pt-4" data-testid="room-settings">
+      <EditableField
+        canEdit={room.canEdit.name}
+        label="Name"
+        onSave={async (next) => {
+          await connection.setRoomName(room.roomId, next);
+          refresh();
+        }}
+        placeholder="No name"
+        testId="room-settings-name"
+        value={room.name}
+      />
+      <EditableField
+        canEdit={room.canEdit.topic}
+        label="Topic"
+        onSave={async (next) => {
+          await connection.setRoomTopic(room.roomId, next);
+          refresh();
+        }}
+        placeholder="No topic"
+        testId="room-settings-topic"
+        value={room.topic}
+      />
+      <PictureField
+        avatarUrl={room.avatarUrl}
+        canEdit={room.canEdit.avatar}
+        connection={connection}
+        onSave={async (mxcUrl) => {
+          await connection.setRoomAvatar(room.roomId, mxcUrl);
+          refresh();
+        }}
+      />
+    </dl>
+  );
+}
+
+/** A conversation with nothing waiting in it: who is in it, what your duo does here, and (a group's) its own name, topic and picture (#223). */
+export function RoomInfo({ room, connection = null }: { room: RoomSummary; connection?: WorkspaceConnection | null }) {
   const sole = soleDuoLabel(room);
   const title = sole ?? roomTitle(room);
   const duos = sole ? [] : roomDuoLabels(room);
@@ -144,6 +443,7 @@ export function RoomInfo({ room }: { room: RoomSummary }) {
             </div>
           )}
           {duos.length > 0 && <p className="type-provenance text-[var(--muted)]">{duos.join(", ")} {duos.length === 1 ? "is" : "are"} here.</p>}
+          {room.kind !== "direct" && connection && <GroupSettings connection={connection} room={room} />}
         </>
       )}
     </div>
@@ -196,6 +496,6 @@ export function useInspectorTarget(api: DuoApiConfig | null, connection: Workspa
 }
 
 /** The Info panel's content for a target. */
-export function InspectorBody({ target }: { target: InspectorTarget }) {
-  return target.kind === "room" ? <RoomInfo room={target.room} /> : <DuoInfo />;
+export function InspectorBody({ target, connection = null }: { target: InspectorTarget; connection?: WorkspaceConnection | null }) {
+  return target.kind === "room" ? <RoomInfo connection={connection} room={target.room} /> : <DuoInfo />;
 }

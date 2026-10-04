@@ -88,3 +88,18 @@ export function shareRefusalOf(file: { name: string; size: number; mimeType: str
   }
   return null;
 }
+
+/**
+ * The honest refusal for a picture this app will not set as a group
+ * conversation's own (#223) — the same file-upload path a shared image
+ * runs through (the browser's own type claim, the image share limit), plus
+ * one rule a shared image doesn't need: a conversation's picture must
+ * itself be an image, never a generic file. Null when the picture may
+ * upload.
+ */
+export function avatarRefusalOf(file: { name: string; size: number; mimeType: string }): string | null {
+  if (!isImageType(file.mimeType)) {
+    return `${file.name} isn't a picture — a conversation picture must be an image.`;
+  }
+  return shareRefusalOf(file, 0);
+}

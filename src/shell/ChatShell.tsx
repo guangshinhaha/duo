@@ -289,7 +289,7 @@ export function ChatShell({
                 </button>
               </div>
               <div className="p-4 pt-0">
-                <InspectorBody target={heldTarget} />
+                <InspectorBody connection={connection} target={heldTarget} />
               </div>
              </div>
             </aside>

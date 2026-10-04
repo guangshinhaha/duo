@@ -29,11 +29,14 @@ function room(overrides: Partial<RoomSummary> = {}): RoomSummary {
     roomId: ROOM_ID,
     kind: "group",
     name: "project-x",
+    topic: null,
+    avatarUrl: null,
     members: [],
     latest: null,
     unread: { notifications: 0, mentions: 0 },
     muted: false,
     notifications: "all",
+    canEdit: { name: false, topic: false, avatar: false },
     ...overrides,
   };
 }

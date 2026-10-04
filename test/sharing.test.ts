@@ -3,6 +3,7 @@ import {
   SHARE_ATTACHMENTS_LIMIT,
   SHARE_FILE_LIMIT_BYTES,
   SHARE_IMAGE_LIMIT_BYTES,
+  avatarRefusalOf,
   formatBytes,
   isImageType,
   shareRefusalOf,
@@ -60,6 +61,24 @@ describe("share refusals name the limit they broke", () => {
     // A file above the duo's 32 KiB reading cap still shares — the duo's
     // door is the duo's, and a refusal here would conflate the two.
     expect(shareRefusalOf({ name: "big.txt", size: 100_000, mimeType: "text/plain" }, 0)).toBeNull();
+  });
+});
+
+describe("a conversation's picture (#223) reuses the share path's own rules, plus its own image-only one", () => {
+  it("refuses a non-image outright, never reaching the size check", () => {
+    expect(avatarRefusalOf({ name: "notes.txt", size: 100, mimeType: "text/plain" })).toBe(
+      "notes.txt isn't a picture — a conversation picture must be an image.",
+    );
+  });
+
+  it("an oversized image still names the same image limit a shared image would", () => {
+    expect(avatarRefusalOf({ name: "team.png", size: 9 * 1024 * 1024, mimeType: "image/png" })).toBe(
+      "team.png is 9 MiB — conversation image shares cap at 8 MiB.",
+    );
+  });
+
+  it("an image within the limit uploads without a word", () => {
+    expect(avatarRefusalOf({ name: "team.png", size: 100_000, mimeType: "image/png" })).toBeNull();
   });
 });
 
