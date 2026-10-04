@@ -21,7 +21,7 @@ import {
   type MatrixEvent,
   type Room as MatrixRoom,
 } from "matrix-js-sdk";
-import { localpartOf } from "./identity.js";
+import { duoOwnerUserIdOf, localpartOf } from "./identity.js";
 import { normalizeHomeserverUrl } from "../homeserver.js";
 import {
   formattedBodyWithMentions,
@@ -86,6 +86,15 @@ export type NotificationMode = "all" | "mentions" | "nothing";
 export interface RoomMemberRef {
   readonly userId: string;
   readonly name: string | null;
+  /**
+   * For a duo-shaped member id, the human owner's own display name — from
+   * this room's membership when the owner is in it, else the workspace's
+   * profile for them. Absent when neither answered: the caller falls back
+   * to the id grammar's own label ("carol's duo") rather than show nothing.
+   * Never present for a person: a duo's chip is attributed structurally
+   * (identity.ts), never by a name anyone chose for themselves.
+   */
+  readonly ownerName?: string;
 }
 
 /**
@@ -124,6 +133,15 @@ export interface RoomSummary {
   readonly members: readonly RoomMemberRef[];
   /** The latest text message, by homeserver time — null when the room has never said anything. */
   readonly latest: { readonly at: number; readonly body: string } | null;
+  /**
+   * The room's own last-activity clock (`room.getLastActiveTimestamp()`) —
+   * what the sidebar sorts by within a section. Usually tracks `latest.at`
+   * but isn't the same fact: a room can stir (a join, a name change) with no
+   * new word said. Optional only so a hand-built fixture elsewhere in this
+   * codebase (one that predates this field) still satisfies the type; the
+   * live projection always sets it.
+   */
+  readonly lastActiveAt?: number;
   /** The server's unread accounting: total notifications, and how many of them mention the member. */
   readonly unread: { readonly notifications: number; readonly mentions: number };
   /** The member's own mute rule for this room, held by the account — not a preference of this device. */
@@ -736,7 +754,10 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
   // — a context window never carries them, there being nothing "in flight"
   // about history.
   const events = around ?? [...room.getLiveTimeline().getEvents(), ...pendingEventsOf(room)];
-  const nameOf = (senderId: string): string => room.getMember(senderId)?.name || localpartOf(senderId);
+  const nameOf = (senderId: string): string => {
+    const member = room.getMember(senderId);
+    return nonIdName(member?.rawDisplayName ?? member?.name, senderId) ?? localpartOf(senderId);
+  };
   // #65: the pills the message was sent with, read from its formatted
   // body's matrix.to user anchors. A person's label prefers the room's own
   // record of their name (membership), else the anchor's text minus its
@@ -747,7 +768,10 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     return partsFromBody(
       body,
       mentionAnchorsFrom(typeof content?.formatted_body === "string" ? content.formatted_body : undefined),
-      (anchor) => mentionLabelOf(anchor.userId, room.getMember(anchor.userId)?.name || anchor.text.replace(/^@/, "")),
+      (anchor) => {
+        const member = room.getMember(anchor.userId);
+        return mentionLabelOf(anchor.userId, nonIdName(member?.rawDisplayName ?? member?.name, anchor.userId) ?? anchor.text.replace(/^@/, ""));
+      },
     );
   };
 
@@ -999,6 +1023,116 @@ function editPermissionsOf(room: MatrixRoom, selfId: string): RoomEditPermission
 }
 
 /**
+ * Records a room as direct with the other person, under the account's own
+ * `m.direct` data — merged with whatever is already there (another device's
+ * DMs, or this one's earlier ones), never overwritten. Idempotent: calling
+ * it again for a pairing already on record costs nothing.
+ */
+async function writeDirectRoom(client: MatrixClient, otherUserId: string, roomId: string): Promise<void> {
+  const content = (client.getAccountData("m.direct")?.getContent() as Record<string, readonly string[]> | undefined) ?? {};
+  const existing = content[otherUserId] ?? [];
+  if (existing.includes(roomId)) {
+    return;
+  }
+  await client.setAccountData("m.direct", { ...content, [otherUserId]: [...existing, roomId] });
+}
+
+/**
+ * #208: `m.direct` isn't written for us by the SDK or the homeserver — a
+ * room this account was invited to as a direct conversation (the invite's
+ * own `is_direct` flag, which is what `getDMInviter()` reads back) stays
+ * off the account's `m.direct` record even once joined, unless something
+ * writes it. This backfills that record for every joined room the SDK can
+ * still tell was such an invite, so a DM reads as one from the first list
+ * read after joining — no second device, no second sync, needed.
+ */
+async function backfillMissingDirectRecords(client: MatrixClient, rooms: readonly MatrixRoom[]): Promise<Set<string>> {
+  const directIds = directRoomIdsOf(client);
+  for (const room of rooms) {
+    if (directIds.has(room.roomId) || room.getMyMembership() !== "join") {
+      continue;
+    }
+    const inviter = room.getDMInviter();
+    if (!inviter) {
+      continue;
+    }
+    await writeDirectRoom(client, inviter, room.roomId);
+    directIds.add(room.roomId);
+  }
+  return directIds;
+}
+
+/**
+ * Asks the SDK to load this room's membership if `lazyLoadMembers` (this
+ * seam's `connect()`) left it unfetched — best-effort: a room whose
+ * membership can't be loaded (offline, an older server) still renders with
+ * whatever names are already known, never a blocked list.
+ */
+async function ensureMembersLoaded(room: MatrixRoom): Promise<void> {
+  try {
+    await room.loadMembersIfNeeded();
+  } catch {
+    // Best-effort: the names this call would have improved just stay
+    // whatever they already were.
+  }
+}
+
+/**
+ * A member's own claimed name — never the user id itself. `lazyLoadMembers`
+ * (this seam's `connect()`) means a membership event can be missing when
+ * this is read, which is exactly what the SDK hands back as a "name": the
+ * id, unchanged. Treating that as "no name" and falling back the same way a
+ * truly blank record would is what keeps a raw id off the screen.
+ */
+function nonIdName(candidate: string | null | undefined, userId: string): string | null {
+  return candidate && candidate !== userId ? candidate : null;
+}
+
+/** The room's own explicit name — null when none was set. Never `room.name`: the SDK always fills that in (a generated name from members when there's no `m.room.name`), which is exactly the fact the sidebar needs told apart from a real one (#208). */
+function realRoomNameOf(room: MatrixRoom): string | null {
+  const content = room.currentState.getStateEvents("m.room.name", "")?.getContent() as { name?: unknown } | undefined;
+  const name = typeof content?.name === "string" ? content.name.trim() : "";
+  return name.length > 0 ? name : null;
+}
+
+/**
+ * The human owner's own display name behind a duo's user id (#208): this
+ * room's membership when the owner happens to be in it (a group with both
+ * the colleague and their duo), else the workspace's profile for them (a
+ * 1:1 "colleague's duo" room the owner themselves never joined). Null when
+ * neither answers — the caller falls back to the id grammar's own label
+ * rather than show nothing. Cached per `rooms()` call: the same owner can
+ * answer for several rooms (their duo can be in more than one), and this
+ * asks the workspace for their profile at most once.
+ */
+async function ownerDisplayNameOf(
+  client: MatrixClient,
+  room: MatrixRoom,
+  ownerId: string,
+  cache: Map<string, string | null>,
+): Promise<string | null> {
+  const cached = cache.get(ownerId);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const member = room.getMember(ownerId);
+  const fromRoom = nonIdName(member?.rawDisplayName ?? member?.name, ownerId);
+  if (fromRoom !== null) {
+    cache.set(ownerId, fromRoom);
+    return fromRoom;
+  }
+  let name: string | null = null;
+  try {
+    const profile = await client.getProfileInfo(ownerId);
+    name = nonIdName(typeof profile?.displayname === "string" ? profile.displayname : null, ownerId);
+  } catch {
+    name = null;
+  }
+  cache.set(ownerId, name);
+  return name;
+}
+
+/**
  * One room as the conversations list reads it (#63). Every field is the
  * homeserver's own state: membership, notification accounting (and its
  * highlight half — mentions), the join rule behind group-vs-channel, the
@@ -1008,23 +1142,43 @@ function editPermissionsOf(room: MatrixRoom, selfId: string): RoomEditPermission
  * the whole of "reflected across their devices" — the list renders the same
  * server answer everywhere.
  */
-function projectRoom(room: MatrixRoom, selfId: string, direct: boolean, mode: NotificationMode): RoomSummary {
+async function projectRoom(
+  client: MatrixClient,
+  room: MatrixRoom,
+  selfId: string,
+  direct: boolean,
+  mode: NotificationMode,
+  ownerNameCache: Map<string, string | null>,
+): Promise<RoomSummary> {
   const latestText = [...room.getLiveTimeline().getEvents()]
     .reverse()
     .find((event) => event.getType() === "m.room.message" && event.getContent()?.msgtype === MsgType.Text);
   const topicContent = room.currentState?.getStateEvents(EventType.RoomTopic, "")?.getContent() as { topic?: unknown } | undefined;
   const avatarContent = room.currentState?.getStateEvents(EventType.RoomAvatar, "")?.getContent() as { url?: unknown } | undefined;
+  const members = await Promise.all(
+    room
+      .getMembers()
+      .filter((member) => member.membership === "join" && member.userId !== selfId)
+      .map(async (member): Promise<RoomMemberRef> => {
+        const name = nonIdName(member.rawDisplayName ?? member.name, member.userId) ?? localpartOf(member.userId);
+        const ownerId = duoOwnerUserIdOf(member.userId);
+        const ownerName = ownerId === null ? null : await ownerDisplayNameOf(client, room, ownerId, ownerNameCache);
+        return ownerName === null ? { userId: member.userId, name } : { userId: member.userId, name, ownerName };
+      }),
+  );
   return {
     roomId: room.roomId,
     kind: direct ? "direct" : room.getJoinRule() === "public" ? "channel" : "group",
-    name: room.name || null,
+    // The real name only — never the SDK's auto-generated fill-in. A room
+    // with no `m.room.name` reads as having none here, so the sidebar's
+    // icon (driven by `kind`, not by this) and its member-names fallback
+    // (roomTitle.ts) are the ones that ever stand in for it (#208).
+    name: realRoomNameOf(room),
     topic: typeof topicContent?.topic === "string" && topicContent.topic !== "" ? topicContent.topic : null,
     avatarUrl: typeof avatarContent?.url === "string" && avatarContent.url !== "" ? avatarContent.url : null,
-    members: room
-      .getMembers()
-      .filter((member) => member.membership === "join" && member.userId !== selfId)
-      .map((member) => ({ userId: member.userId, name: member.name || localpartOf(member.userId) })),
+    members,
     latest: latestText ? { at: latestText.getTs(), body: String(latestText.getContent()?.body ?? "") } : null,
+    lastActiveAt: room.getLastActiveTimestamp(),
     unread: {
       notifications: room.getUnreadNotificationCount(NotificationCountType.Total),
       mentions: room.getUnreadNotificationCount(NotificationCountType.Highlight),
@@ -1163,23 +1317,38 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
           .filter((rule) => rule.enabled && rule.actions.length === 0)
           .map((rule) => rule.rule_id),
       );
-      const directIds = directRoomIdsOf(client);
-      return client
+      const rooms = client
         .getRooms()
         // #214: a room this member has been invited to but not joined is not
         // a conversation yet — it has no timeline, no member list the server
         // will hand over, nothing this projection can honestly fill in. It
         // surfaces through `invites()` instead, until accepted.
-        .filter((room) => room.getMyMembership() === "join")
-        .map((room) => projectRoom(room, session.userId, directIds.has(room.roomId), notificationModeOf(room, mutedIds.has(room.roomId))))
-        .sort((a, b) => (b.latest?.at ?? Number.MIN_SAFE_INTEGER) - (a.latest?.at ?? Number.MIN_SAFE_INTEGER));
+        .filter((room) => room.getMyMembership() === "join");
+      // #208: lazy loading (this seam's `connect()`) means membership — and
+      // so a real name — can still be unfetched the first time the list
+      // reads a room. Asking for it here, before the names and avatars are
+      // read off it, is what keeps a raw id from ever reaching the screen.
+      await Promise.all(rooms.map((room) => ensureMembersLoaded(room)));
+      const directIds = await backfillMissingDirectRecords(client, rooms);
+      const ownerNameCache = new Map<string, string | null>();
+      const projected = await Promise.all(
+        rooms.map((room) => projectRoom(client, room, session.userId, directIds.has(room.roomId), notificationModeOf(room, mutedIds.has(room.roomId)), ownerNameCache)),
+      );
+      return projected.sort((a, b) => (b.lastActiveAt ?? b.latest?.at ?? Number.MIN_SAFE_INTEGER) - (a.lastActiveAt ?? a.latest?.at ?? Number.MIN_SAFE_INTEGER));
     },
-    timeline: async (roomId) => timelineOf(client, roomId),
+    timeline: async (roomId) => {
+      const room = client.getRoom(roomId);
+      if (room) {
+        await ensureMembersLoaded(room);
+      }
+      return timelineOf(client, roomId);
+    },
     timelineAt: async (roomId, eventId) => {
       const room = client.getRoom(roomId);
       if (!room || room.getMyMembership() !== "join") {
         return [];
       }
+      await ensureMembersLoaded(room);
       // The homeserver's /context, through the SDK: the event's window, or
       // the live timeline itself when the event is recent enough to be in it.
       const window = await client.getEventTimeline(room.getUnfilteredTimelineSet(), eventId);
@@ -1218,8 +1387,14 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
           continue;
         }
         const room = client.getRoom(result.room_id);
-        const nameOf = (senderId: string): string =>
-          room?.getMember(senderId)?.name || context?.profile_info?.[senderId]?.displayname || localpartOf(senderId);
+        const nameOf = (senderId: string): string => {
+          const member = room?.getMember(senderId);
+          return (
+            nonIdName(member?.rawDisplayName ?? member?.name, senderId) ??
+            nonIdName(context?.profile_info?.[senderId]?.displayname, senderId) ??
+            localpartOf(senderId)
+          );
+        };
         // The listing order of events_before isn't fixed by the spec, so the
         // lines are read in the order they were said — by the server's time.
         const linesOf = (events: readonly SearchWireEvent[] | undefined): SearchContextLine[] =>
@@ -1474,6 +1649,10 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
     },
     startDirect: async (userId) => {
       const { room_id } = await client.createRoom({ is_direct: true, invite: [userId] });
+      // #208: the homeserver doesn't infer DM-ness from `is_direct` on
+      // create — only this account's own `m.direct` record says so, and
+      // nothing writes it unless this does.
+      await writeDirectRoom(client, userId, room_id);
       return room_id;
     },
     createRoom: async (name, topic) => {
@@ -1542,7 +1721,7 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       const { results } = await client.searchUserDirectory({ term: query.trim(), limit: PEOPLE_SEARCH_LIMIT });
       return results
         .filter((result) => result.user_id !== session.userId)
-        .map((result) => ({ userId: result.user_id, name: result.display_name || localpartOf(result.user_id) }));
+        .map((result) => ({ userId: result.user_id, name: nonIdName(result.display_name, result.user_id) ?? localpartOf(result.user_id) }));
     },
     subscribe: (handler) => {
       const listener = (event: MatrixEvent, room: MatrixRoom | undefined): void => {
@@ -1576,9 +1755,11 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
           content.msgtype === MsgType.Text &&
           content["m.relates_to"]?.rel_type !== RelationType.Replace
         ) {
+          const senderId = event.getSender() ?? "";
+          const sender = room.getMember(senderId);
           arrival = {
-            senderId: event.getSender() ?? "",
-            senderName: room.getMember(event.getSender() ?? "")?.name || localpartOf(event.getSender() ?? ""),
+            senderId,
+            senderName: nonIdName(sender?.rawDisplayName ?? sender?.name, senderId) ?? localpartOf(senderId),
             body: String(content.body ?? ""),
             mentionsMe: content["m.mentions"]?.user_ids?.includes(session.userId) ?? false,
           };

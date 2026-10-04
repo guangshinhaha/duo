@@ -845,8 +845,10 @@ describe("#63 AC1 — the list triages without opening anything", () => {
     await renderApp();
     await screen.findByTestId("conversations-list");
 
-    // Recency order: the room that spoke last leads, whatever kind it is.
-    expect(screen.getAllByTestId("room-title").map((title) => title.textContent)).toEqual(["Bose", "project-x", "announce"]);
+    // #208: sectioned — channels and groups first (by recency within the
+    // section: project-x spoke more recently than announce), then direct
+    // messages — never one flat list ordered by recency alone.
+    expect(screen.getAllByTestId("room-title").map((title) => title.textContent)).toEqual(["project-x", "announce", "Bose"]);
 
     // A direct conversation has no name to show: its members are the title.
     const direct = entryFor("Bose");
@@ -963,8 +965,9 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
 
     await waitFor(() => expect(fake.connection.leave).toHaveBeenCalledWith("!announce:workspace.example"));
     await waitFor(() => expect(screen.queryByText("announce")).toBeNull());
-    // The others stand: leaving one conversation leaves the rest of the list.
-    expect(screen.getAllByTestId("room-title").map((title) => title.textContent)).toEqual(["Bose", "project-x"]);
+    // The others stand: leaving one conversation leaves the rest of the
+    // list — project-x (Channels) still ahead of Bose (Direct messages).
+    expect(screen.getAllByTestId("room-title").map((title) => title.textContent)).toEqual(["project-x", "Bose"]);
   });
 });
 

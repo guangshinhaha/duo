@@ -42,18 +42,31 @@ function initialsOf(title: string): string {
     .join("");
 }
 
+/** A stable hue for a person's tile from a seed (their id, or the room's) — the same person reads the same colour every time, with no picture to store (#208). */
+function hueOf(seed: string): number {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return hash % 360;
+}
+
 /**
  * A row's picture. A duo — yours or a colleague's — is always the mark and
  * never initials, so a duo cannot be mistaken for a person in the list
- * (Hairline P1); a person is their initials on a plain tile, a group a `#`.
+ * (Hairline P1); a person is their initials on a coloured tile (#208: a
+ * stable colour per `seed` stands in for a picture — uploading one is out
+ * of scope), a group or channel a `#`.
  */
-function Avatar({ kind, title }: { kind: "duo" | "person" | "group"; title: string }) {
+function Avatar({ kind, title, seed }: { kind: "duo" | "person" | "group"; title: string; seed?: string }) {
+  const hue = kind === "person" ? hueOf(seed ?? title) : null;
   return (
     <span
       aria-hidden="true"
       className="inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface-2)] type-identifier text-[var(--muted)]"
       data-kind={kind}
       data-testid="chat-avatar"
+      style={hue === null ? undefined : { background: `hsl(${hue} 55% 90%)`, color: `hsl(${hue} 45% 32%)` }}
     >
       {kind === "duo" ? <Mark /> : kind === "group" ? "#" : initialsOf(title)}
     </span>
@@ -98,7 +111,10 @@ function Row({
           {avatar}
           <span className="flex min-w-0 flex-col">
             <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate type-body text-[var(--text)]" data-testid={ids.title}>
+              {/* The name wins the space (#208): members and a duo label
+                  ride the secondary line instead, so nothing here competes
+                  with the title for width and it is never cut to a letter. */}
+              <span className="min-w-0 flex-1 truncate type-body text-[var(--text)]" data-testid={ids.title}>
                 {title}
               </span>
               {badges}
@@ -140,6 +156,43 @@ function CountPill({ n, label, testId, prefix = "" }: { n: number; label: string
       {prefix}
       {n}
     </span>
+  );
+}
+
+/**
+ * The sidebar's own grouping (#208): a colleague's duo split out from a
+ * person so it is never mistaken for one, channels and private groups
+ * sharing the `#` shelf (neither is a person or a duo, and the issue names
+ * no separate shelf for a private group), then direct messages — each
+ * bucket keeping the order it arrived in (the seam's own recency order,
+ * `rooms()`'s `lastActiveAt`/`latest.at` sort), with a muted conversation
+ * slid to the end of its own bucket rather than off the list entirely. The
+ * sort is stable (`Array.prototype.sort` has been since ES2019), so "muted
+ * last" never reshuffles the recency order within either half.
+ */
+function sectionsOf(rooms: readonly RoomSummary[]): { channels: RoomSummary[]; directs: RoomSummary[]; duos: RoomSummary[] } {
+  const channels: RoomSummary[] = [];
+  const directs: RoomSummary[] = [];
+  const duos: RoomSummary[] = [];
+  for (const room of rooms) {
+    if (soleDuoLabel(room) !== null) {
+      duos.push(room);
+    } else if (room.kind === "direct") {
+      directs.push(room);
+    } else {
+      channels.push(room);
+    }
+  }
+  const mutedLast = (list: RoomSummary[]): RoomSummary[] => [...list].sort((a, b) => Number(a.muted) - Number(b.muted));
+  return { channels: mutedLast(channels), directs: mutedLast(directs), duos: mutedLast(duos) };
+}
+
+/** A section's own label, above its rows — hidden entirely when its section is empty, so a sparse workspace shows no empty shelves. */
+function SectionHeader({ label, testId }: { label: string; testId: string }) {
+  return (
+    <div className="px-2 pb-1 pt-3 type-provenance uppercase tracking-wide text-[var(--faint)]" data-testid={testId}>
+      {label}
+    </div>
   );
 }
 
@@ -260,6 +313,11 @@ export function ChatList({
   const bridged = useBridgedChats(api).chats;
   const bridgedWaiting = useMemo(() => new Map(waiting.items.filter((item) => item.kind === "bridged").map((item) => [item.key, item])), [waiting.items]);
   const roomRows = rooms.data ?? [];
+  // #208: grouped the way the list itself renders — Channels, then Direct
+  // messages, then Duos — so ⌘1–9 and J/K (below) walk the rows in the same
+  // order the eye does, never the server's flat recency order.
+  const sections = useMemo(() => sectionsOf(roomRows), [roomRows]);
+  const sectionedRoomRows = useMemo(() => [...sections.channels, ...sections.directs, ...sections.duos], [sections]);
   const activeRoom = typeof route === "object" && "chat" in route ? route.chat : typeof route === "object" && "thread" in route ? route.thread.roomId : null;
 
   // The addresses in list order — what J/K and ⌘1–9 walk.
@@ -267,8 +325,8 @@ export function ChatList({
     () =>
       filterWaiting
         ? waiting.items.map((item) => item.href)
-        : [...(api ? ["#duo", ...bridged.map((chat) => bridgedHref(chat.id))] : []), ...roomRows.map((room) => roomHref(room.roomId))],
-    [api, bridged, roomRows, filterWaiting, waiting.items],
+        : [...(api ? ["#duo", ...bridged.map((chat) => bridgedHref(chat.id))] : []), ...sectionedRoomRows.map((room) => roomHref(room.roomId))],
+    [api, bridged, sectionedRoomRows, filterWaiting, waiting.items],
   );
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -355,8 +413,10 @@ export function ChatList({
                 : item.kind === "confirmations"
                   ? "Confirmations"
                   : (item.label ?? "Unknown origin");
+          // #208: the icon follows the room's own `kind`, never whether it
+          // happened to have a name — the same rule the full list uses.
           const kind: "duo" | "person" | "group" =
-            item.kind === "duo" || item.kind === "confirmations" || sole ? "duo" : room && room.name !== null ? "group" : "person";
+            item.kind === "duo" || item.kind === "confirmations" || sole ? "duo" : room ? (room.kind === "direct" ? "person" : "group") : "person";
           const isActive =
             item.kind === "chat"
               ? activeRoom === item.roomId
@@ -478,6 +538,127 @@ export function ChatList({
         </div>
       );
     }
+    const renderRoomRow = (room: RoomSummary): ReactNode => {
+      const sole = soleDuoLabel(room);
+      const title = sole ?? roomTitle(room);
+      const duoLabels = sole ? [] : roomDuoLabels(room);
+      // #208: the icon is the projection's own `kind`, never a guess from
+      // whether the room happened to have a name — a named group and an
+      // unnamed one must read the same way, and only `kind` agrees with
+      // `directRoomIdsOf`'s DM record either way.
+      const avatarKind: "duo" | "person" | "group" = sole ? "duo" : room.kind === "direct" ? "person" : "group";
+      const more = openMore === room.roomId;
+      return (
+        <Row
+          active={activeRoom === room.roomId}
+          avatar={<Avatar kind={avatarKind} seed={room.roomId} title={title} />}
+          badges={
+            room.muted ? (
+              <span className="type-provenance uppercase text-[var(--faint)]" data-testid="room-muted">
+                Muted
+              </span>
+            ) : undefined
+          }
+          href={roomHref(room.roomId)}
+          key={room.roomId}
+          meta={
+            <>
+              {room.latest && <Timestamp iso={new Date(room.latest.at).toISOString()} />}
+              <span className="flex items-center gap-1">
+                {waitingByRoom.get(room.roomId) && (
+                  <CountPill label={`${waitingByRoom.get(room.roomId)!.count} waiting on you`} n={waitingByRoom.get(room.roomId)!.count} testId="waiting-count" />
+                )}
+                {room.unread.mentions > 0 && <CountPill label={`${room.unread.mentions} mentions`} n={room.unread.mentions} prefix="@ " testId="room-mentions" />}
+                {room.unread.notifications > 0 && (
+                  <span
+                    aria-label={`${room.unread.notifications} unread`}
+                    className="rounded-full border border-[var(--edge)] px-2 type-identifier text-[var(--text)]"
+                    data-testid="room-unread"
+                  >
+                    {room.unread.notifications}
+                  </span>
+                )}
+              </span>
+            </>
+          }
+          more={
+            <button
+              aria-expanded={more}
+              aria-label={`More for ${title}`}
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--faint)]"
+              data-testid="room-more"
+              onClick={() => setOpenMore(more ? null : room.roomId)}
+              type="button"
+            >
+              <Ellipsis aria-label={`More for ${title}`} size={16} />
+            </button>
+          }
+          preview={
+            waitingByRoom.get(room.roomId) ? (
+              <>
+                <DraftLine state={waitingByRoom.get(room.roomId)!.state} />
+                {waitingWords(waitingByRoom.get(room.roomId)!)}
+              </>
+            ) : (
+              <>
+                {/* #208: a duo riding in the room is named on the secondary
+                    line, not beside the title — the title is what must
+                    never be cut to a letter. */}
+                {duoLabels.length > 0 && (
+                  <>
+                    <span data-testid="room-duo">{duoLabels.join(", ")}</span>
+                    {" · "}
+                  </>
+                )}
+                {room.latest ? plainPreview(room.latest.body) : "No messages yet."}
+              </>
+            )
+          }
+          previewTestId="room-preview"
+          title={title}
+        >
+          {more && (
+            <div className="mx-2 mb-2 flex flex-wrap items-center gap-2 rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface)] p-2">
+              {/* #69: the tri-state, in the app's select idiom — what may interrupt from this conversation. */}
+              <select
+                aria-label={`Notifications for ${title}`}
+                className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 type-provenance text-[var(--muted)] disabled:opacity-40"
+                data-testid="room-notifications"
+                disabled={busyRoomId === room.roomId}
+                onChange={(e) => setMode(room, e.target.value as NotificationMode)}
+                value={room.notifications}
+              >
+                <option value="all">All messages</option>
+                <option value="mentions">Mentions</option>
+                <option value="nothing">Nothing</option>
+              </select>
+              {/* #214: invite someone into THIS room — a direct conversation is just its two members, so there's nothing to invite into. */}
+              {room.kind !== "direct" && (
+                <button
+                  aria-label={`Invite to ${title}`}
+                  className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
+                  data-testid="room-invite"
+                  onClick={() => setInviteTarget(room)}
+                  type="button"
+                >
+                  Invite
+                </button>
+              )}
+              <button
+                aria-label={`Leave ${title}`}
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
+                data-testid="room-leave"
+                onClick={() => setLeaveTarget(room)}
+                type="button"
+              >
+                Leave
+              </button>
+            </div>
+          )}
+        </Row>
+      );
+    };
+
     return (
       <ConversationSearch connection={connection} rooms={rooms.data} titleOf={roomTitle}>
         {rooms.data.length === 0 ? (
@@ -486,119 +667,24 @@ export function ChatList({
           </p>
         ) : (
           <div className="mt-2 flex flex-col gap-1" data-testid="conversations-list">
-            {rooms.data.map((room) => {
-              const sole = soleDuoLabel(room);
-              const title = sole ?? roomTitle(room);
-              const duoLabels = sole ? [] : roomDuoLabels(room);
-              const more = openMore === room.roomId;
-              return (
-                <Row
-                  active={activeRoom === room.roomId}
-                  avatar={<Avatar kind={sole ? "duo" : room.name !== null ? "group" : "person"} title={title} />}
-                  badges={
-                    <>
-                      {room.muted && (
-                        <span className="type-provenance uppercase text-[var(--faint)]" data-testid="room-muted">
-                          Muted
-                        </span>
-                      )}
-                      {duoLabels.map((label) => (
-                        <span className="truncate type-provenance text-[var(--muted)]" data-testid="room-duo" key={label}>
-                          {label}
-                        </span>
-                      ))}
-                    </>
-                  }
-                  href={roomHref(room.roomId)}
-                  key={room.roomId}
-                  meta={
-                    <>
-                      {room.latest && <Timestamp iso={new Date(room.latest.at).toISOString()} />}
-                      <span className="flex items-center gap-1">
-                        {waitingByRoom.get(room.roomId) && (
-                          <CountPill label={`${waitingByRoom.get(room.roomId)!.count} waiting on you`} n={waitingByRoom.get(room.roomId)!.count} testId="waiting-count" />
-                        )}
-                        {room.unread.mentions > 0 && <CountPill label={`${room.unread.mentions} mentions`} n={room.unread.mentions} prefix="@ " testId="room-mentions" />}
-                        {room.unread.notifications > 0 && (
-                          <span
-                            aria-label={`${room.unread.notifications} unread`}
-                            className="rounded-full border border-[var(--edge)] px-2 type-identifier text-[var(--text)]"
-                            data-testid="room-unread"
-                          >
-                            {room.unread.notifications}
-                          </span>
-                        )}
-                      </span>
-                    </>
-                  }
-                  more={
-                    <button
-                      aria-expanded={more}
-                      aria-label={`More for ${title}`}
-                      className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--faint)]"
-                      data-testid="room-more"
-                      onClick={() => setOpenMore(more ? null : room.roomId)}
-                      type="button"
-                    >
-                      <Ellipsis aria-label={`More for ${title}`} size={16} />
-                    </button>
-                  }
-                  preview={
-                    waitingByRoom.get(room.roomId) ? (
-                      <>
-                        <DraftLine state={waitingByRoom.get(room.roomId)!.state} />
-                        {waitingWords(waitingByRoom.get(room.roomId)!)}
-                      </>
-                    ) : room.latest ? (
-                      plainPreview(room.latest.body)
-                    ) : (
-                      "No messages yet."
-                    )
-                  }
-                  previewTestId="room-preview"
-                  title={title}
-                >
-                  {more && (
-                    <div className="mx-2 mb-2 flex flex-wrap items-center gap-2 rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface)] p-2">
-                      {/* #69: the tri-state, in the app's select idiom — what may interrupt from this conversation. */}
-                      <select
-                        aria-label={`Notifications for ${title}`}
-                        className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 type-provenance text-[var(--muted)] disabled:opacity-40"
-                        data-testid="room-notifications"
-                        disabled={busyRoomId === room.roomId}
-                        onChange={(e) => setMode(room, e.target.value as NotificationMode)}
-                        value={room.notifications}
-                      >
-                        <option value="all">All messages</option>
-                        <option value="mentions">Mentions</option>
-                        <option value="nothing">Nothing</option>
-                      </select>
-                      {/* #214: invite someone into THIS room — a direct conversation is just its two members, so there's nothing to invite into. */}
-                      {room.kind !== "direct" && (
-                        <button
-                          aria-label={`Invite to ${title}`}
-                          className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
-                          data-testid="room-invite"
-                          onClick={() => setInviteTarget(room)}
-                          type="button"
-                        >
-                          Invite
-                        </button>
-                      )}
-                      <button
-                        aria-label={`Leave ${title}`}
-                        className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
-                        data-testid="room-leave"
-                        onClick={() => setLeaveTarget(room)}
-                        type="button"
-                      >
-                        Leave
-                      </button>
-                    </div>
-                  )}
-                </Row>
-              );
-            })}
+            {sections.channels.length > 0 && (
+              <>
+                <SectionHeader label="Channels" testId="chat-section-channels" />
+                {sections.channels.map(renderRoomRow)}
+              </>
+            )}
+            {sections.directs.length > 0 && (
+              <>
+                <SectionHeader label="Direct messages" testId="chat-section-direct-messages" />
+                {sections.directs.map(renderRoomRow)}
+              </>
+            )}
+            {sections.duos.length > 0 && (
+              <>
+                <SectionHeader label="Duos" testId="chat-section-duos" />
+                {sections.duos.map(renderRoomRow)}
+              </>
+            )}
           </div>
         )}
       </ConversationSearch>
