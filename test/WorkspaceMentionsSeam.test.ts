@@ -101,11 +101,14 @@ function notificationsResponse(notifications: ReturnType<typeof notification>[],
 }
 
 /** A joined room the client knows, and the member names it holds. */
-function fakeRoom(roomId: string, over: { names?: Record<string, string> } = {}): Room {
+function fakeRoom(roomId: string, over: { names?: Record<string, string>; isSpace?: boolean } = {}): Room {
   return {
     roomId,
     name: roomId,
     getMember: (userId: string) => (over.names?.[userId] ? ({ name: over.names[userId] } as RoomMember) : null),
+    // #246: every fixture room is an ordinary room unless a test says
+    // otherwise — the real SDK's own `isSpaceRoom()`, stubbed.
+    isSpaceRoom: () => over.isSpace ?? false,
   } as unknown as Room;
 }
 
@@ -203,6 +206,23 @@ describe("#222 — the wire: highlight notifications, asked of the homeserver", 
     const connection = await connectPrepared(client);
 
     await expect(connection.mentions()).rejects.toThrow("M_UNKNOWN");
+  });
+
+  it("#246: a highlight that somehow landed in the org's Space is never a mention — a Space is not a conversation", async () => {
+    const SPACE = "!org-space:workspace.example";
+    const client = fakeClient({
+      rooms: [fakeRoom(PROJECT, { names: { "@bose:workspace.example": "Bose" } }), fakeRoom(SPACE, { isSpace: true })],
+      answer: notificationsResponse([
+        notification({ event: wireEvent({ id: "$ok", room: PROJECT, sender: "@bose:workspace.example", ts: 10, body: "@ana check this" }) }),
+        notification({ event: wireEvent({ id: "$space", room: SPACE, sender: "@bose:workspace.example", ts: 20, body: "@ana in the space?" }) }),
+      ]),
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const hits = await connection.mentions();
+
+    expect(hits.map((hit) => hit.eventId)).toEqual(["$ok"]);
   });
 });
 

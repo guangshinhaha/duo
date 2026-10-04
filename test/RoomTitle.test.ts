@@ -52,8 +52,35 @@ describe("roomTitle — the one place every surface reads a room's title from", 
     expect(roomTitle(room({ name: null, members: [{ userId: "@eeyore:workspace.example", name: null }] }))).toBe("eeyore");
   });
 
-  it("a room with no name and no other members reads under its own id — the last resort, never a blank", () => {
-    expect(roomTitle(room({ roomId: "!empty:workspace.example", name: null, members: [] }))).toBe("!empty:workspace.example");
+  it("a room with no name and no joined members, but someone still sitting on an invite, reads under THAT person — #245", () => {
+    expect(
+      roomTitle(
+        room({
+          name: null,
+          members: [],
+          invitedMembers: [{ userId: "@carol:workspace.example", name: "Carol Chen" }],
+        }),
+      ),
+    ).toBe("Carol Chen");
+  });
+
+  it("an invited member with no name on record reads under its localpart too — #245", () => {
+    expect(
+      roomTitle(room({ name: null, members: [], invitedMembers: [{ userId: "@eeyore:workspace.example", name: null }] })),
+    ).toBe("eeyore");
+  });
+
+  it("a room with no name, no joined members and no invited ones falls to matrix-js-sdk's own generated name — #245", () => {
+    expect(
+      roomTitle(room({ name: null, members: [], invitedMembers: [], generatedName: "Empty room (was Guang Shin MOE)" })),
+    ).toBe("Empty room (was Guang Shin MOE)");
+  });
+
+  it("a room with truly no information — no name, no members ever, no generated name — reads as 'Conversation', NEVER its raw id — #245", () => {
+    expect(
+      roomTitle(room({ roomId: "!empty:workspace.example", name: null, members: [], invitedMembers: [], generatedName: null })),
+    ).toBe("Conversation");
+    expect(roomTitle(room({ roomId: "!PWCpfCxbgCgYzydXHH:duo", name: null, members: [] }))).not.toContain("!");
   });
 });
 

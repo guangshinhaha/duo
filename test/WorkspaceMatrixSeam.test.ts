@@ -154,6 +154,8 @@ function fakeRoom(pendingEvents: MatrixEvent[] = []): Room {
     getMyMembership: () => "join",
     guessDMUserId: () => "@nobody:workspace.example",
     normalizedName: "project-x",
+    // #246: an ordinary room, never the org's Space.
+    isSpaceRoom: () => false,
   } as unknown as Room;
 }
 
@@ -281,7 +283,15 @@ function summaryRoom(shape: {
   roomId: string;
   name: string | null;
   joinRule: string;
-  members: Array<{ userId: string; name: string | null; powerLevel?: number }>;
+  members: Array<{
+    userId: string;
+    name: string | null;
+    powerLevel?: number;
+    /** #245: "join" unless a test says otherwise — an outstanding invite to this member, for the invited-members fallback and the direct-by-invitee-side classification below. */
+    membership?: "join" | "invite";
+    /** #245: set when THIS member's own membership event should read as an `is_direct` invite THEY are the invitee of — `RoomMember.getDMInviter()`'s answer for them, the mirror of the room-level `dmInviter` below (which answers it for the viewer instead). */
+    dmInvitedBy?: string;
+  }>;
   notificationCount: number;
   highlightCount: number;
   events: MatrixEvent[];
@@ -289,7 +299,7 @@ function summaryRoom(shape: {
   accountDataMode?: "mentions";
   /** #220: the room's `m.marked_unread` account data, as this or another device wrote it. */
   markedUnread?: boolean;
-  /** #208: set when this room should read as an invite the SDK knows was flagged `is_direct` — `getDMInviter()`'s own answer. */
+  /** #208: set when this room should read as an invite the SDK knows was flagged `is_direct` — `getDMInviter()`'s own answer, for the VIEWER's own membership. */
   dmInviter?: string;
   /** #214: `rooms()` reads only joined rooms now; #208: also the common case this account's own membership defaults to — "join" unless a test says otherwise. */
   membership?: "join" | "invite";
@@ -300,26 +310,41 @@ function summaryRoom(shape: {
   powerLevels?: { events?: Record<string, number>; state_default?: number };
   /** #209: this device's own sends still in flight — empty unless a test asks otherwise. */
   pendingEvents?: MatrixEvent[];
+  /** #246: true for the org's own Space room — `isSpaceRoom()`'s answer. False (an ordinary room) unless a test says otherwise. */
+  isSpace?: boolean;
 }): Room {
   const lastEventTs = shape.events.length > 0 ? shape.events[shape.events.length - 1]!.getTs() : 0;
+  const memberOf = (member: (typeof shape.members)[number]) => ({
+    userId: member.userId,
+    name: member.name,
+    rawDisplayName: member.name,
+    membership: member.membership ?? "join",
+    powerLevel: member.powerLevel ?? 0,
+    // #245: only present when a test actually wants this member to carry an
+    // `is_direct` invite — real `RoomMember`s always have the method, but
+    // `directPartnerIdOf`'s duck-typed `typeof … === "function"` check means
+    // leaving it off entirely is the honest way to model "this member's
+    // membership event never carried the flag", same as every other fixture
+    // member here that never mentions it.
+    ...(member.dmInvitedBy !== undefined ? { getDMInviter: () => member.dmInvitedBy } : {}),
+  });
   return {
     roomId: shape.roomId,
     name: shape.name,
     normalizedName: shape.name ?? "",
     getJoinRule: () => shape.joinRule,
     getMyMembership: () => shape.membership ?? "join",
-    getMembers: () => shape.members.map((member) => ({ userId: member.userId, name: member.name, rawDisplayName: member.name, membership: "join" })),
+    getMembers: () => shape.members.map(memberOf),
     getUnreadNotificationCount: (type?: string) => (type === "highlight" ? shape.highlightCount : shape.notificationCount),
     getLiveTimeline: () => ({ getEvents: () => shape.events }),
     getPendingEvents: () => shape.pendingEvents ?? [],
     getUnfilteredTimelineSet: () => ({}),
+    isSpaceRoom: () => shape.isSpace ?? false,
     // Membership lookup and the member list agree, the way the SDK's do —
     // the timeline projection resolves sender names through this door.
     getMember: (userId: string) => {
       const member = shape.members.find((candidate) => candidate.userId === userId);
-      return member
-        ? ({ name: member.name ?? null, rawDisplayName: member.name ?? null, powerLevel: member.powerLevel ?? 0 } as RoomMember)
-        : null;
+      return member ? (memberOf(member) as unknown as RoomMember) : null;
     },
     getAccountData: (type: string) => {
       if (type === "duo.notifications" && shape.accountDataMode) {
@@ -1154,6 +1179,8 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         topic: null, // #223: no m.room.topic state in this fixture's events
         avatarUrl: null,
         members: [{ userId: "@bose:workspace.example", name: "Bose" }], // this member's own id never lists
+        invitedMembers: [], // #245: nobody outstanding on this one
+        generatedName: null, // #245: no real name, and this fixture's `.name` (null) stands in for the SDK's generated one too
         latest: { at: 3_000, body: "lunch?", senderId: "@bose:workspace.example" }, // #247: who sent it — the preview reads this to attribute a duo's own word to its owner
         lastActiveAt: 3_000,
         unread: { notifications: 0, mentions: 0 },
@@ -1171,6 +1198,8 @@ describe("the rooms projection the conversation list reads (#63)", () => {
           { userId: "@bose:workspace.example", name: "Bose" },
           { userId: "@duo-carol:workspace.example", name: "duo-carol" },
         ],
+        invitedMembers: [],
+        generatedName: "project-x", // #245: the real name doubles as the fixture's generated one
         latest: { at: 2_000, body: "ship it", senderId: "@bose:workspace.example" },
         lastActiveAt: 2_000,
         unread: { notifications: 3, mentions: 0 },
@@ -1188,6 +1217,8 @@ describe("the rooms projection the conversation list reads (#63)", () => {
           { userId: "@dee:workspace.example", name: "Dee" },
           { userId: "@eeyore:workspace.example", name: "eeyore" }, // no name on record: the localpart, never a blank
         ],
+        invitedMembers: [],
+        generatedName: "announce",
         latest: { at: 1_500, body: "all-hands friday", senderId: "@dee:workspace.example" },
         lastActiveAt: 1_500,
         unread: { notifications: 9, mentions: 9 },
@@ -1479,6 +1510,84 @@ describe("the rooms projection the conversation list reads (#63)", () => {
     expect(client.setAccountData).not.toHaveBeenCalled();
   });
 
+  it("#245: a room with no name and no JOINED members still carries the member still sitting on an invite, for roomTitle.ts's fallback", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!invited-only:workspace.example",
+          name: null,
+          joinRule: "invite",
+          members: [{ userId: "@carol:workspace.example", name: "Carol Chen", membership: "invite" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [room] = await connection.rooms();
+    expect(room?.members).toEqual([]); // nobody has actually joined
+    expect(room?.invitedMembers).toEqual([{ userId: "@carol:workspace.example", name: "Carol Chen" }]);
+  });
+
+  it("#245: this account invited the other party directly and they haven't joined yet — still backfills as a direct conversation, by THEIR membership event rather than the viewer's own", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!outstanding-dm:workspace.example",
+          name: null,
+          joinRule: "invite",
+          members: [{ userId: "@carol:workspace.example", name: "Carol Chen", membership: "invite", dmInvitedBy: "@ana:workspace.example" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          // No room-level `dmInviter`: the VIEWER (ana) was never invited —
+          // ana created this room and invited Carol, so #208's own check
+          // (which reads only ana's own membership) would find nothing.
+        }),
+      ],
+      directRoomIds: [],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [room] = await connection.rooms();
+    expect(room?.kind).toBe("direct");
+    // Merged with whatever was already on record (the fake's default: Bose's) — never overwritten.
+    expect(client.setAccountData).toHaveBeenCalledWith("m.direct", {
+      "@bose:workspace.example": [],
+      "@carol:workspace.example": ["!outstanding-dm:workspace.example"],
+    });
+  });
+
+  it("#245: a room with more than one other party is never guessed as direct, even if one of them carries an is_direct invite", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!crowded:workspace.example",
+          name: null,
+          joinRule: "invite",
+          members: [
+            { userId: "@bose:workspace.example", name: "Bose" },
+            { userId: "@carol:workspace.example", name: "Carol Chen", membership: "invite", dmInvitedBy: "@ana:workspace.example" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+      directRoomIds: [],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [room] = await connection.rooms();
+    expect(room?.kind).toBe("group");
+    expect(client.setAccountData).not.toHaveBeenCalled();
+  });
+
   it("a duo's chip is attributed to the owner's own display name from THIS room, when the owner shares it — no profile fetch needed", async () => {
     const client = fakeClient({
       rooms: [
@@ -1708,6 +1817,52 @@ describe("a group conversation's name, topic, picture and edit permissions (#223
     );
 
     expect(handler).toHaveBeenCalledWith(room.roomId);
+  });
+});
+
+describe("#246 — the org's Space is a container for rooms, never a room to chat in", () => {
+  it("rooms() leaves the Space out of the conversation list — #general and other real rooms are unaffected", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({ roomId: "!general:workspace.example", name: "general", joinRule: "public", members: [], notificationCount: 0, highlightCount: 0, events: [] }),
+        summaryRoom({
+          roomId: "!org-space:workspace.example",
+          name: "Default",
+          joinRule: "invite",
+          members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          isSpace: true,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const rooms = await connection.rooms();
+    expect(rooms.map((room) => room.roomId)).toEqual(["!general:workspace.example"]);
+  });
+
+  it("findRooms never matches the Space, however its name matches the query", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!org-space:workspace.example",
+          name: "Default",
+          joinRule: "invite",
+          members: [],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          isSpace: true,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.findRooms("Default")).toEqual([]);
   });
 });
 
