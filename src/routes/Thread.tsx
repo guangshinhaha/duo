@@ -5,6 +5,7 @@ import { InfoButton } from "../shell/InfoButton.js";
 import { MessageBody } from "./Room.js";
 import { roomTitle } from "../shell/roomTitle.js";
 import type { RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
+import { handleComposerKeyDown } from "../composerKeyDown.js";
 
 /** #70: bring the message a search hit landed at into view — the ref runs once, when its row mounts. */
 const focusIntoView = (element: HTMLElement | null): void => {
@@ -317,12 +318,7 @@ function ThreadComposer({
           onChange={(e) => {
             setText(e.target.value);
           }}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-              e.preventDefault();
-              e.currentTarget.form?.requestSubmit();
-            }
-          }}
+          onKeyDown={handleComposerKeyDown}
         />
         <button
           className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"

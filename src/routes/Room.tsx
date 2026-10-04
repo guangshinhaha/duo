@@ -21,6 +21,7 @@ import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../wor
 import { messagePermalink, roomHref, threadHref } from "../workspace/links.js";
 import { firstLinkOf } from "../workspace/linkPreview.js";
 import { readUrlPreviewPref } from "../urlPreviewPrefs.js";
+import { handleComposerKeyDown } from "../composerKeyDown.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
 
@@ -1456,12 +1457,7 @@ function RoomComposer({
             setText(e.target.value);
             setError(null);
           }}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-              e.preventDefault();
-              e.currentTarget.form?.requestSubmit();
-            }
-          }}
+          onKeyDown={handleComposerKeyDown}
           onPaste={(e) => {
             // #217: a pasted screenshot arrives as a clipboard file, the
             // same shape the picker and a drop both hand to `stage` — a
