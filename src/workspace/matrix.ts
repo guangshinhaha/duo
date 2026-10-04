@@ -87,6 +87,22 @@ export interface RoomMemberRef {
 }
 
 /**
+ * Whether THIS member may change a group conversation's name, topic and
+ * picture (#223) — each one its own power-level gate, read once from the
+ * room's `m.room.power_levels` state and this member's own level
+ * (`room.getMember(selfId)?.powerLevel`), so the edit controls can show
+ * enabled or disabled honestly instead of attempting a call and translating
+ * a predictable refusal afterwards. A homeserver that changes the room's
+ * power levels between this read and the member's next edit can still
+ * refuse the edit itself — that refusal is still handled, as a fallback.
+ */
+export interface RoomEditPermissions {
+  readonly name: boolean;
+  readonly topic: boolean;
+  readonly avatar: boolean;
+}
+
+/**
  * One room of the workspace, as the conversations list reads it (#63):
  * who's in it, what was last said and when, what's unread (and how much of
  * it mentions the member), and whether the member muted it. Every field is
@@ -98,6 +114,10 @@ export interface RoomSummary {
   readonly kind: RoomKind;
   /** The room's own name — null when it has none (a direct conversation shows its members instead). */
   readonly name: string | null;
+  /** The room's own topic (#223) — null when it has none. */
+  readonly topic: string | null;
+  /** The room's own picture (#223): an `mxc://` reference, the same shape every other media reference in this app carries — null when it has none. */
+  readonly avatarUrl: string | null;
   /** The other joined members; the member's own id never lists. */
   readonly members: readonly RoomMemberRef[];
   /** The latest text message, by homeserver time — null when the room has never said anything. */
@@ -108,6 +128,8 @@ export interface RoomSummary {
   readonly muted: boolean;
   /** What may interrupt from this room (#69) — the same server answer on every device; `muted` is its "nothing" half. */
   readonly notifications: NotificationMode;
+  /** #223: whether this member may edit the room's name, topic and picture — read client-side so the UI never has to guess from a failed call. */
+  readonly canEdit: RoomEditPermissions;
 }
 
 /**
@@ -431,6 +453,23 @@ export interface WorkspaceConnection {
    * the account, so every device reads the conversation as read (#63).
    */
   markRead(roomId: string): Promise<void>;
+  /**
+   * Names a group conversation (#223): `m.room.name`, the way every member's
+   * sidebar and header read it. Gated client-side by `RoomSummary.canEdit`;
+   * a homeserver refusal (e.g. a power level that changed since) still
+   * throws, for the caller to show as a fallback.
+   */
+  setRoomName(roomId: string, name: string): Promise<void>;
+  /** Sets a group conversation's topic (#223): `m.room.topic`, same gating as the name. */
+  setRoomTopic(roomId: string, topic: string): Promise<void>;
+  /**
+   * Sets a group conversation's picture (#223): an `m.room.avatar` state
+   * event pointing at an upload already on the homeserver's media store —
+   * the picture rides the identical `uploadFile()` door a shared image
+   * does (#66), validated by the same size and type rules, and this just
+   * states the result as the room's own.
+   */
+  setRoomAvatar(roomId: string, mxcUrl: string): Promise<void>;
   /** Creates a direct conversation with a workspace user (a person or a colleague's duo) and answers its room id. */
   startDirect(userId: string): Promise<string>;
   /**
@@ -851,22 +890,59 @@ function directRoomIdsOf(client: MatrixClient): Set<string> {
 }
 
 /**
+ * The power level a room requires to send a state event of this type: the
+ * event's own entry in `m.room.power_levels`, else the room's
+ * `state_default`, else the spec's own default (50) — the same fallback
+ * chain the homeserver itself applies when deciding whether to accept the
+ * event, so this client's answer agrees with the server's.
+ */
+function requiredPowerLevelFor(content: { events?: Record<string, number>; state_default?: number } | undefined, eventType: string): number {
+  return content?.events?.[eventType] ?? content?.state_default ?? 50;
+}
+
+/**
+ * #223: whether THIS member may send each of the three state events a group
+ * conversation's name, topic and picture ride on — read from the room's own
+ * `m.room.power_levels` and this member's own level. No power-levels event
+ * at all is read as the spec's defaults (a 50 state default, a 0 member
+ * level absent an override), which is "cannot edit" for anyone the room
+ * hasn't explicitly raised — the safe reading when the state is missing,
+ * same as a server would apply it.
+ */
+function editPermissionsOf(room: MatrixRoom, selfId: string): RoomEditPermissions {
+  const content = room.currentState?.getStateEvents(EventType.RoomPowerLevels, "")?.getContent() as
+    | { events?: Record<string, number>; state_default?: number }
+    | undefined;
+  const myLevel = room.getMember(selfId)?.powerLevel ?? 0;
+  return {
+    name: myLevel >= requiredPowerLevelFor(content, EventType.RoomName),
+    topic: myLevel >= requiredPowerLevelFor(content, EventType.RoomTopic),
+    avatar: myLevel >= requiredPowerLevelFor(content, EventType.RoomAvatar),
+  };
+}
+
+/**
  * One room as the conversations list reads it (#63). Every field is the
  * homeserver's own state: membership, notification accounting (and its
  * highlight half — mentions), the join rule behind group-vs-channel, the
- * account's mute rule and the notification mode it half-names (#69).
- * Nothing here is invented client-side, which is the whole of "reflected
- * across their devices" — the list renders the same server answer
- * everywhere.
+ * account's mute rule and the notification mode it half-names (#69), and
+ * (#223) the room's own topic and picture with this member's own edit
+ * permissions for all three. Nothing here is invented client-side, which is
+ * the whole of "reflected across their devices" — the list renders the same
+ * server answer everywhere.
  */
 function projectRoom(room: MatrixRoom, selfId: string, direct: boolean, mode: NotificationMode): RoomSummary {
   const latestText = [...room.getLiveTimeline().getEvents()]
     .reverse()
     .find((event) => event.getType() === "m.room.message" && event.getContent()?.msgtype === MsgType.Text);
+  const topicContent = room.currentState?.getStateEvents(EventType.RoomTopic, "")?.getContent() as { topic?: unknown } | undefined;
+  const avatarContent = room.currentState?.getStateEvents(EventType.RoomAvatar, "")?.getContent() as { url?: unknown } | undefined;
   return {
     roomId: room.roomId,
     kind: direct ? "direct" : room.getJoinRule() === "public" ? "channel" : "group",
     name: room.name || null,
+    topic: typeof topicContent?.topic === "string" && topicContent.topic !== "" ? topicContent.topic : null,
+    avatarUrl: typeof avatarContent?.url === "string" && avatarContent.url !== "" ? avatarContent.url : null,
     members: room
       .getMembers()
       .filter((member) => member.membership === "join" && member.userId !== selfId)
@@ -878,6 +954,7 @@ function projectRoom(room: MatrixRoom, selfId: string, direct: boolean, mode: No
     },
     muted: mode === "nothing",
     notifications: mode,
+    canEdit: editPermissionsOf(room, selfId),
   };
 }
 
@@ -953,6 +1030,16 @@ function searchableText(event: SearchWireEvent): { body: string; threadRootEvent
  * timeline stream leaves what the surface reads where it was.
  */
 const LIVE_EVENT_TYPES = new Set<string>([EventType.RoomMessage, EventType.Reaction, EventType.RoomRedaction]);
+
+/**
+ * #223: the three state events a group conversation's name, topic and
+ * picture ride on. A change arrives at every joined member's sync, not just
+ * the member who made it — this is the other half of AC2 ("shows for
+ * everyone"): a subscriber hears the room id the moment one of these lands,
+ * the same door a new message uses, so the sidebar and header re-read the
+ * homeserver's projection instead of a local guess.
+ */
+const ROOM_INFO_EVENT_TYPES = new Set<string>([EventType.RoomName, EventType.RoomTopic, EventType.RoomAvatar]);
 
 /** Hold the workspace connection for a stored session — resolves at the first completed sync, then serves rooms and timelines from it. */
 export async function connect(session: WorkspaceSession, options: ConnectOptions = {}): Promise<WorkspaceConnection> {
@@ -1283,6 +1370,15 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         await client.sendReadReceipt(last, ReceiptType.Read, true);
       }
     },
+    setRoomName: async (roomId, name) => {
+      await client.setRoomName(roomId, name);
+    },
+    setRoomTopic: async (roomId, topic) => {
+      await client.setRoomTopic(roomId, topic);
+    },
+    setRoomAvatar: async (roomId, mxcUrl) => {
+      await client.sendStateEvent(roomId, EventType.RoomAvatar, { url: mxcUrl }, "");
+    },
     startDirect: async (userId) => {
       const { room_id } = await client.createRoom({ is_direct: true, invite: [userId] });
       return room_id;
@@ -1357,7 +1453,17 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
     },
     subscribe: (handler) => {
       const listener = (event: MatrixEvent, room: MatrixRoom | undefined): void => {
-        if (!room || !LIVE_EVENT_TYPES.has(event.getType())) {
+        if (!room) {
+          return;
+        }
+        if (ROOM_INFO_EVENT_TYPES.has(event.getType())) {
+          // #223: room news, not message news — no arrival, just the roomId,
+          // so every subscriber re-reads the next projection rather than
+          // being told what changed.
+          handler(room.roomId);
+          return;
+        }
+        if (!LIVE_EVENT_TYPES.has(event.getType())) {
           return;
         }
         // The arrival half (#69): a NEW text message — not an amendment of

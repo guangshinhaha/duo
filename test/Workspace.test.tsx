@@ -5,6 +5,7 @@ import { workspaceSessionUrl } from "../src/api/hosted.js";
 import type { LiveArrival, NotificationMode, RoomInvite, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
 import { WorkspaceSignInDialog } from "../src/components/WorkspaceSignInDialog.js";
 import type { StagedShare } from "../src/workspace/sharing.js";
+import { stubDesktop } from "./desktop.js";
 
 /*
  * #62: the app's front door becomes two doors — a workspace sign-in (who you
@@ -58,16 +59,21 @@ function roomsFixture(): RoomSummary[] {
       roomId: "!direct:workspace.example",
       kind: "direct",
       name: null,
+      topic: null,
+      avatarUrl: null,
       members: [{ userId: "@bose:workspace.example", name: "Bose" }],
       latest: { at: now - hour, body: "lunch?" },
       unread: { notifications: 0, mentions: 0 },
       muted: false,
       notifications: "all",
+      canEdit: { name: false, topic: false, avatar: false },
     },
     {
       roomId: "!project-x:workspace.example",
       kind: "group",
       name: "project-x",
+      topic: null,
+      avatarUrl: null,
       members: [
         { userId: "@bose:workspace.example", name: "Bose" },
         { userId: "@duo-carol:workspace.example", name: "duo-carol" },
@@ -76,16 +82,20 @@ function roomsFixture(): RoomSummary[] {
       unread: { notifications: 3, mentions: 0 },
       muted: false,
       notifications: "all",
+      canEdit: { name: true, topic: true, avatar: true },
     },
     {
       roomId: "!announce:workspace.example",
       kind: "channel",
       name: "announce",
+      topic: null,
+      avatarUrl: null,
       members: [{ userId: "@dee:workspace.example", name: "Dee" }],
       latest: { at: now - 3 * hour, body: "all-hands friday" },
       unread: { notifications: 0, mentions: 0 },
       muted: false,
       notifications: "all",
+      canEdit: { name: false, topic: false, avatar: false },
     },
   ];
 }
@@ -211,11 +221,14 @@ function fakeConnection(state: {
         roomId,
         kind: "direct",
         name: null,
+        topic: null,
+        avatarUrl: null,
         members: [{ userId, name: null }],
         latest: null,
         unread: { notifications: 0, mentions: 0 },
         muted: false,
         notifications: "all",
+        canEdit: { name: false, topic: false, avatar: false },
       });
       return roomId;
     }),
@@ -227,11 +240,14 @@ function fakeConnection(state: {
         roomId,
         kind: "group",
         name,
+        topic: null,
+        avatarUrl: null,
         members: [],
         latest: null,
         unread: { notifications: 0, mentions: 0 },
         muted: false,
         notifications: "all",
+        canEdit: { name: true, topic: true, avatar: true },
       });
       return roomId;
     }),
@@ -250,11 +266,14 @@ function fakeConnection(state: {
           roomId,
           kind: invite.kind,
           name: invite.name,
+          topic: null,
+          avatarUrl: null,
           members: invite.inviterId ? [{ userId: invite.inviterId, name: invite.inviterName }] : [],
           latest: null,
           unread: { notifications: 0, mentions: 0 },
           muted: false,
           notifications: "all",
+          canEdit: { name: false, topic: false, avatar: false },
         });
       }
     }),
@@ -272,6 +291,27 @@ function fakeConnection(state: {
       const at = roomAt(roomId);
       if (at >= 0) {
         state.rooms[at] = { ...state.rooms[at]!, notifications: mode, muted: mode === "nothing" };
+      }
+    }),
+    // #223: the homeserver's own state moves under these the same way the
+    // notification mode above does — the next `rooms()` read is what every
+    // surface (sidebar, header) shows, never a locally-assumed value.
+    setRoomName: vi.fn(async (roomId: string, name: string) => {
+      const at = roomAt(roomId);
+      if (at >= 0) {
+        state.rooms[at] = { ...state.rooms[at]!, name };
+      }
+    }),
+    setRoomTopic: vi.fn(async (roomId: string, topic: string) => {
+      const at = roomAt(roomId);
+      if (at >= 0) {
+        state.rooms[at] = { ...state.rooms[at]!, topic };
+      }
+    }),
+    setRoomAvatar: vi.fn(async (roomId: string, mxcUrl: string) => {
+      const at = roomAt(roomId);
+      if (at >= 0) {
+        state.rooms[at] = { ...state.rooms[at]!, avatarUrl: mxcUrl };
       }
     }),
     searchPeople: vi.fn(async (query: string) =>
@@ -377,6 +417,21 @@ function fakeConnection(state: {
       const arrival: LiveArrival = { senderId: message.senderId, senderName: message.senderName, body: message.body, mentionsMe };
       for (const listener of listeners) {
         listener(message.roomId, arrival);
+      }
+    },
+    // #223 AC2: a colleague renames the conversation on their own device.
+    // The homeserver's sync delivers no arrival for this (it's room news,
+    // not message news) — just the roomId, same as the seam's own
+    // ROOM_INFO_EVENT_TYPES handling (WorkspaceMatrixSeam.test.ts pins
+    // that half); this fake moves `state.rooms` the way that next
+    // `rooms()` read would, and notifies every subscriber the same way.
+    renameRoomElsewhere: (roomId: string, name: string) => {
+      const at = roomAt(roomId);
+      if (at >= 0) {
+        state.rooms[at] = { ...state.rooms[at]!, name };
+      }
+      for (const listener of listeners) {
+        listener(roomId);
       }
     },
   };
@@ -2885,5 +2940,67 @@ describe("#127 — a hosted device connects by itself", () => {
     expect(vi.mocked(connect)).toHaveBeenCalledWith(SESSION);
     expect(net.sessionCalls()).toEqual([]);
     expect(net.logoutCalls()).toEqual([]);
+  });
+});
+
+describe("#223 — naming a conversation, setting its topic, and its picture", () => {
+  it("a member with permission edits the name from the Info panel, and both the header and the sidebar show it — for a colleague's own change too", async () => {
+    stubDesktop();
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    expect(screen.getByTestId("room-header")).toHaveTextContent("project-x");
+
+    // #223: the Info panel is the room-settings surface — open it, edit the
+    // name there, same as the issue's "give it a name" asks.
+    fireEvent.click(screen.getByTestId("info-toggle"));
+    const panel = await screen.findByTestId("inspector");
+    fireEvent.click(within(panel).getByTestId("room-settings-name-edit"));
+    fireEvent.change(within(panel).getByTestId("room-settings-name-input"), { target: { value: "Project X" } });
+    fireEvent.click(within(panel).getByTestId("room-settings-name-save"));
+
+    await waitFor(() => expect(fake.connection.setRoomName).toHaveBeenCalledWith("!project-x:workspace.example", "Project X"));
+    // AC2: the change shows in the conversation header AND the sidebar —
+    // both read the same `rooms()` projection, invalidated after the save.
+    await waitFor(() => expect(screen.getByTestId("room-header")).toHaveTextContent("Project X"));
+    expect(entryFor("Project X")).toBeInTheDocument();
+
+    // AC2, the other half: a colleague renames it from their own device.
+    // The homeserver's sync delivers no "arrival" for this — the seam's own
+    // ROOM_INFO_EVENT_TYPES handling (WorkspaceMatrixSeam.test.ts) turns a
+    // bare m.room.name event into exactly this: a roomId with no message,
+    // which still has to reach the header and the sidebar with nothing
+    // done on this device at all.
+    fake.renameRoomElsewhere("!project-x:workspace.example", "project-x (renamed)");
+    await waitFor(() => expect(screen.getByTestId("room-header")).toHaveTextContent("project-x (renamed)"));
+    expect(entryFor("project-x (renamed)")).toBeInTheDocument();
+  });
+
+  it("a member without permission sees the Info panel's name and topic, with no way to edit either", async () => {
+    stubDesktop();
+    seedSession();
+    const readOnlyRooms = roomsFixture().map((room) =>
+      room.roomId === "!project-x:workspace.example"
+        ? { ...room, topic: "refunds and billing", canEdit: { name: false, topic: false, avatar: false } }
+        : room,
+    );
+    const fake = fakeConnection({ rooms: readOnlyRooms, timelines: { "!project-x:workspace.example": [] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(screen.getByTestId("info-toggle"));
+    const panel = await screen.findByTestId("inspector");
+    expect(within(panel).getByTestId("room-settings-name")).toHaveTextContent("project-x");
+    expect(within(panel).queryByTestId("room-settings-name-edit")).toBeNull();
+    expect(within(panel).getByTestId("room-settings-topic")).toHaveTextContent("refunds and billing");
+    expect(within(panel).queryByTestId("room-settings-topic-edit")).toBeNull();
+    expect(within(panel).queryByTestId("room-picture-pick")).toBeNull();
   });
 });

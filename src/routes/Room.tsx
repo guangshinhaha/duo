@@ -129,6 +129,11 @@ export function Room({
     }
     return connection.subscribe((changedRoomId) => {
       void queryClient.invalidateQueries({ queryKey: ["workspace", "timeline", changedRoomId] });
+      // #223: a name/topic/picture change (or anything else about a room)
+      // is also room news — re-read the rooms projection so this header
+      // (and `roomName` above) shows what the homeserver now says, even
+      // when the chat list isn't mounted beside it to have asked already.
+      void queryClient.invalidateQueries({ queryKey: ["workspace", "rooms"] });
     });
   }, [connection, queryClient]);
 

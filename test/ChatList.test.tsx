@@ -19,11 +19,14 @@ const room = (roomId: string, overrides: Partial<RoomSummary> = {}): RoomSummary
   roomId,
   kind: "direct",
   name: null,
+  topic: null,
+  avatarUrl: null,
   members: [{ userId: "@bose:workspace.example", name: "Bose" }],
   latest: { at: Date.now() - 60_000, body: "lunch?" },
   unread: { notifications: 0, mentions: 0 },
   muted: false,
   notifications: "all",
+  canEdit: { name: false, topic: false, avatar: false },
   ...overrides,
 });
 

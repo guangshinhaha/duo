@@ -55,16 +55,21 @@ function roomsFixture(): RoomSummary[] {
       roomId: DIRECT,
       kind: "direct",
       name: null,
+      topic: null,
+      avatarUrl: null,
       members: [{ userId: "@bose:workspace.example", name: "Bose" }],
       latest: { at: now - 3_600_000, body: "lunch?" },
       unread: { notifications: 0, mentions: 0 },
       muted: false,
       notifications: "all",
+      canEdit: { name: false, topic: false, avatar: false },
     },
     {
       roomId: PROJECT,
       kind: "group",
       name: "project-x",
+      topic: null,
+      avatarUrl: null,
       members: [
         { userId: "@bose:workspace.example", name: "Bose" },
         { userId: "@duo-carol:workspace.example", name: "duo-carol" },
@@ -73,6 +78,7 @@ function roomsFixture(): RoomSummary[] {
       unread: { notifications: 0, mentions: 0 },
       muted: false,
       notifications: "all",
+      canEdit: { name: false, topic: false, avatar: false },
     },
   ];
 }

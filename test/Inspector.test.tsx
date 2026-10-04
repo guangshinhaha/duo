@@ -7,7 +7,8 @@ import type { DuoApiConfig } from "../src/api/client.js";
 import type { DraftRecord } from "../src/api/types.js";
 import { DraftTray } from "../src/components/DraftTray.js";
 import { DuoInfo, RoomInfo, WhyPanel, whyReading } from "../src/shell/Inspector.js";
-import type { RoomSummary } from "../src/workspace/matrix.js";
+import type { RoomSummary, SharedFile, WorkspaceConnection } from "../src/workspace/matrix.js";
+import type { StagedShare } from "../src/workspace/sharing.js";
 import { stubDesktop, stubPhone } from "./desktop.js";
 
 /*
@@ -45,6 +46,8 @@ const room = (over: Partial<RoomSummary> = {}): RoomSummary => ({
   roomId: "!p:w",
   kind: "group",
   name: "project-x",
+  topic: null,
+  avatarUrl: null,
   members: [
     { userId: "@bose:w", name: "Bose" },
     { userId: "@duo-carol:w", name: "Not Carol" },
@@ -53,6 +56,7 @@ const room = (over: Partial<RoomSummary> = {}): RoomSummary => ({
   unread: { notifications: 0, mentions: 0 },
   muted: false,
   notifications: "all",
+  canEdit: { name: false, topic: false, avatar: false },
   ...over,
 });
 
@@ -132,6 +136,131 @@ describe("RoomInfo and DuoInfo — when nothing is waiting", () => {
       "#duo/profile/rules",
       "#duo/profile/activity",
     ]);
+  });
+});
+
+/** A connection stub for #223's settings fields — only what RoomInfo's editing touches is real, and every write it could make is a spy. */
+function fakeRoomConnection(over: Partial<WorkspaceConnection> = {}): WorkspaceConnection {
+  return {
+    userId: "@ana:w",
+    setRoomName: vi.fn(async () => {}),
+    setRoomTopic: vi.fn(async () => {}),
+    setRoomAvatar: vi.fn(async () => {}),
+    uploadFile: vi.fn(async (staged: StagedShare): Promise<SharedFile> => ({
+      name: staged.name,
+      mimeType: staged.mimeType,
+      size: staged.size,
+      url: "mxc://w/uploaded",
+      image: staged.mimeType.startsWith("image/"),
+    })),
+    loadMedia: vi.fn(async () => null),
+    ...over,
+  } as unknown as WorkspaceConnection;
+}
+
+describe("a group conversation's name, topic and picture (#223)", () => {
+  it("a direct conversation never shows the settings — a DM has no name of its own to give", () => {
+    mount(<RoomInfo connection={fakeRoomConnection()} room={room({ kind: "direct", canEdit: { name: true, topic: true, avatar: true } })} />);
+    expect(screen.queryByTestId("room-settings")).toBeNull();
+  });
+
+  it("a member without permission sees the name and topic, but no way to change them", () => {
+    mount(
+      <RoomInfo
+        connection={fakeRoomConnection()}
+        room={room({ topic: "refunds and billing", canEdit: { name: false, topic: false, avatar: false } })}
+      />,
+    );
+    expect(screen.getByTestId("room-settings-name")).toHaveTextContent("project-x");
+    expect(screen.queryByTestId("room-settings-name-edit")).toBeNull();
+    expect(screen.getByTestId("room-settings-topic")).toHaveTextContent("refunds and billing");
+    expect(screen.queryByTestId("room-settings-topic-edit")).toBeNull();
+    // No picker for the picture either — only the current state (here, none) shows.
+    expect(screen.getByTestId("room-picture-placeholder")).toBeInTheDocument();
+    expect(screen.queryByTestId("room-picture-pick")).toBeNull();
+  });
+
+  it("a member with permission can rename the conversation, and the seam hears the new name", async () => {
+    const connection = fakeRoomConnection();
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: true, topic: false, avatar: false } })} />);
+
+    fireEvent.click(screen.getByTestId("room-settings-name-edit"));
+    const input = screen.getByTestId("room-settings-name-input");
+    fireEvent.change(input, { target: { value: "Project X" } });
+    fireEvent.click(screen.getByTestId("room-settings-name-save"));
+
+    await waitFor(() => expect(connection.setRoomName).toHaveBeenCalledWith("!p:w", "Project X"));
+    // Saving closes the form back to the read display.
+    await waitFor(() => expect(screen.queryByTestId("room-settings-name-input")).toBeNull());
+  });
+
+  it("can set a topic independently of the name — a blank room gets one for the first time", async () => {
+    const connection = fakeRoomConnection();
+    mount(<RoomInfo connection={connection} room={room({ topic: null, canEdit: { name: false, topic: true, avatar: false } })} />);
+
+    expect(screen.getByTestId("room-settings-topic")).toHaveTextContent("No topic");
+    fireEvent.click(screen.getByTestId("room-settings-topic-edit"));
+    fireEvent.change(screen.getByTestId("room-settings-topic-input"), { target: { value: "refunds" } });
+    fireEvent.click(screen.getByTestId("room-settings-topic-save"));
+
+    await waitFor(() => expect(connection.setRoomTopic).toHaveBeenCalledWith("!p:w", "refunds"));
+    // The name was never touched by a topic save.
+    expect(connection.setRoomName).not.toHaveBeenCalled();
+  });
+
+  it("a cancel discards the draft without calling the seam", () => {
+    const connection = fakeRoomConnection();
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: true, topic: false, avatar: false } })} />);
+
+    fireEvent.click(screen.getByTestId("room-settings-name-edit"));
+    fireEvent.change(screen.getByTestId("room-settings-name-input"), { target: { value: "something else" } });
+    fireEvent.click(screen.getByTestId("room-settings-name-cancel"));
+
+    expect(screen.queryByTestId("room-settings-name-input")).toBeNull();
+    expect(screen.getByTestId("room-settings-name")).toHaveTextContent("project-x");
+    expect(connection.setRoomName).not.toHaveBeenCalled();
+  });
+
+  it("a homeserver refusal shows in words at the field that was refused, not a generic error", async () => {
+    const connection = fakeRoomConnection({ setRoomName: vi.fn(async () => { throw new Error("M_FORBIDDEN"); }) });
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: true, topic: false, avatar: false } })} />);
+
+    fireEvent.click(screen.getByTestId("room-settings-name-edit"));
+    fireEvent.change(screen.getByTestId("room-settings-name-input"), { target: { value: "Project X" } });
+    fireEvent.click(screen.getByTestId("room-settings-name-save"));
+
+    expect(await screen.findByTestId("room-settings-name-error")).toHaveTextContent("didn't take that");
+    // The draft stays open on a refusal — nothing is thrown away.
+    expect(screen.getByTestId("room-settings-name-input")).toBeInTheDocument();
+  });
+
+  it("a picture upload reuses the share path's own type and size rules before it ever uploads", async () => {
+    const connection = fakeRoomConnection();
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: false, topic: false, avatar: true } })} />);
+
+    const input = screen.getByTestId("room-picture-input") as HTMLInputElement;
+    const tooBig = new File([new Uint8Array(9 * 1024 * 1024)], "huge.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [tooBig] } });
+
+    expect(await screen.findByTestId("room-picture-error")).toHaveTextContent("8 MiB");
+    expect(connection.uploadFile).not.toHaveBeenCalled();
+
+    const notAnImage = new File([new Uint8Array([1])], "notes.txt", { type: "text/plain" });
+    fireEvent.change(input, { target: { files: [notAnImage] } });
+    expect(await screen.findByTestId("room-picture-error")).toHaveTextContent("must be an image");
+    expect(connection.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("a member with permission can set the picture — staged, uploaded, then stated as the room's own", async () => {
+    const connection = fakeRoomConnection();
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: false, topic: false, avatar: true } })} />);
+
+    const input = screen.getByTestId("room-picture-input") as HTMLInputElement;
+    const picture = new File([new Uint8Array([1, 2, 3])], "team.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [picture] } });
+
+    await waitFor(() => expect(connection.uploadFile).toHaveBeenCalled());
+    await waitFor(() => expect(connection.setRoomAvatar).toHaveBeenCalledWith("!p:w", "mxc://w/uploaded"));
   });
 });
 

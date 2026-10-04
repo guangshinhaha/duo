@@ -100,11 +100,14 @@ function roomsFixture(): RoomSummary[] {
       roomId: PROJECT,
       kind: "group",
       name: "project-x",
+      topic: null,
+      avatarUrl: null,
       members: [{ userId: "@bose:workspace.example", name: "Bose" }],
       latest: { at: Date.now(), body: BOSE_QUESTION },
       unread: { notifications: 1, mentions: 0 },
       muted: false,
       notifications: "all",
+      canEdit: { name: false, topic: false, avatar: false },
     },
   ];
 }
