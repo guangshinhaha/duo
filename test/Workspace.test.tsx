@@ -1852,6 +1852,65 @@ describe("#66 — sharing files and images in a conversation", () => {
     expect(imageShare.getByTestId("room-file-download")).toBeInTheDocument();
   });
 
+  it("#218: clicking the thumbnail opens the image full screen, with the thumbnail's own bytes — Esc closes it", async () => {
+    const fake = await openRoom({
+      [ROOM]: [...PROJECT_TIMELINE, sharedMessageFor({ eventId: "$f1", senderId: "@bose:workspace.example", senderName: "Bose", file: IMAGE_SHARE })],
+    });
+
+    const thumbnail = await screen.findByTestId("room-file-image");
+    const thumbnailSrc = thumbnail.getAttribute("src");
+    expect(thumbnailSrc).toMatch(/^blob:mock\//);
+
+    expect(screen.queryByTestId("image-viewer")).toBeNull();
+    fireEvent.click(screen.getByTestId("room-file-image-trigger"));
+    const viewer = await screen.findByTestId("image-viewer");
+
+    // The full-screen image is the same blob the thumbnail already held —
+    // never a second fetch against the raw mxc reference, authenticated or not.
+    expect(within(viewer).getByTestId("image-viewer-image")).toHaveAttribute("src", thumbnailSrc);
+    expect(fake.connection.loadMedia).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(viewer, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("image-viewer")).toBeNull());
+  });
+
+  it("#218: the viewer's download button fetches the file the same authenticated way the card's own download does", async () => {
+    const fake = await openRoom({
+      [ROOM]: [...PROJECT_TIMELINE, sharedMessageFor({ eventId: "$f1", senderId: "@bose:workspace.example", senderName: "Bose", file: IMAGE_SHARE })],
+    });
+
+    await screen.findByTestId("room-file-image");
+    fireEvent.click(screen.getByTestId("room-file-image-trigger"));
+    const viewer = await screen.findByTestId("image-viewer");
+
+    await act(async () => {
+      fireEvent.click(within(viewer).getByTestId("image-viewer-download"));
+    });
+    await waitFor(() => expect(downloads).toEqual([{ download: "whiteboard.png", href: expect.stringMatching(/^blob:mock\//) }]));
+    expect(fake.connection.loadMedia).toHaveBeenCalledWith("mxc://workspace.example/img1");
+
+    // The close button also works, same as Escape.
+    fireEvent.click(within(viewer).getByTestId("image-viewer-close"));
+    await waitFor(() => expect(screen.queryByTestId("image-viewer")).toBeNull());
+  });
+
+  it("#218: the image zooms on click — fit to screen, then its own size — a plain toggle, not a gesture", async () => {
+    await openRoom({
+      [ROOM]: [...PROJECT_TIMELINE, sharedMessageFor({ eventId: "$f1", senderId: "@bose:workspace.example", senderName: "Bose", file: IMAGE_SHARE })],
+    });
+
+    await screen.findByTestId("room-file-image");
+    fireEvent.click(screen.getByTestId("room-file-image-trigger"));
+    const viewer = await screen.findByTestId("image-viewer");
+
+    const zoom = within(viewer).getByTestId("image-viewer-zoom");
+    expect(zoom).toHaveAccessibleName("Zoom in");
+    fireEvent.click(zoom);
+    expect(zoom).toHaveAccessibleName("Zoom out");
+    fireEvent.click(zoom);
+    expect(zoom).toHaveAccessibleName("Zoom in");
+  });
+
   it("bytes this member can't load keep the facts and say so — no broken thumbnail, no silent dead link", async () => {
     seedSession();
     const fake = fakeConnection({
