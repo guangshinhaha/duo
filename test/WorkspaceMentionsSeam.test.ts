@@ -15,7 +15,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("matrix-js-sdk", () => ({
   createClient: vi.fn(),
   ClientEvent: { Sync: "sync" },
-  RoomEvent: { Timeline: "timeline" },
+  // #209: LocalEchoUpdated alongside Timeline — the seam's `subscribe`
+  // listens for both (room news with no arrival vs. a message's arrival).
+  RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated" },
   SyncState: { Prepared: "PREPARED" },
   Method: { Get: "GET" },
   TweakName: { Highlight: "highlight" },
@@ -25,6 +27,17 @@ vi.mock("matrix-js-sdk", () => ({
   PushRuleKind: { Override: "override", ContentSpecific: "content", RoomSpecific: "room", SenderSpecific: "sender", Underride: "underride" },
   EventType: { RoomMessage: "m.room.message", Reaction: "m.reaction", RoomRedaction: "m.room.redaction" },
   RelationType: { Annotation: "m.annotation", Replace: "m.replace", Thread: "m.thread", Reference: "m.reference" },
+  // #209: Detached pending-event ordering (startClient) and the local-echo
+  // statuses the projection maps to pending/failed.
+  PendingEventOrdering: { Chronological: "chronological", Detached: "detached" },
+  EventStatus: {
+    NOT_SENT: "not_sent",
+    ENCRYPTING: "encrypting",
+    SENDING: "sending",
+    QUEUED: "queued",
+    SENT: "sent",
+    CANCELLED: "cancelled",
+  },
   MatrixError: class MatrixError extends Error {
     errcode?: string;
   },
