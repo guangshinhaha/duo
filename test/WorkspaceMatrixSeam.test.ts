@@ -274,6 +274,8 @@ function summaryRoom(shape: {
   events: MatrixEvent[];
   /** #69: the room's account-data notification mode, as another device wrote it. */
   accountDataMode?: "mentions";
+  /** #220: the room's `m.marked_unread` account data, as this or another device wrote it. */
+  markedUnread?: boolean;
   /** #208: set when this room should read as an invite the SDK knows was flagged `is_direct` — `getDMInviter()`'s own answer. */
   dmInviter?: string;
   /** #214: `rooms()` reads only joined rooms now; #208: also the common case this account's own membership defaults to — "join" unless a test says otherwise. */
@@ -306,10 +308,15 @@ function summaryRoom(shape: {
         ? ({ name: member.name ?? null, rawDisplayName: member.name ?? null, powerLevel: member.powerLevel ?? 0 } as RoomMember)
         : null;
     },
-    getAccountData: (type: string) =>
-      type === "duo.notifications" && shape.accountDataMode
-        ? ({ getContent: () => ({ mode: shape.accountDataMode }) } as MatrixEvent)
-        : undefined,
+    getAccountData: (type: string) => {
+      if (type === "duo.notifications" && shape.accountDataMode) {
+        return { getContent: () => ({ mode: shape.accountDataMode }) } as MatrixEvent;
+      }
+      if (type === "m.marked_unread" && shape.markedUnread) {
+        return { getContent: () => ({ unread: true }) } as MatrixEvent;
+      }
+      return undefined;
+    },
     // #223: the three state events a group's name, topic and picture ride
     // on, read the way the SDK's RoomState does — a stateKey of "" and
     // null when the room has never carried that event. #208: `m.room.name`
@@ -1057,6 +1064,109 @@ describe("the rooms projection the conversation list reads (#63)", () => {
     // The receipt points at the last event the room has — even a non-text
     // one: the read position is where the eye stopped, not what was said.
     expect(client.sendReadReceipt).toHaveBeenCalledWith(events[1], ReceiptType.Read, true);
+  });
+
+  it("#220: the rooms projection carries markedUnread from the room's own m.marked_unread account data, true only", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "r",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          markedUnread: true,
+        }),
+        summaryRoom({
+          roomId: "!s:workspace.example",
+          name: "s",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [flagged, plain] = await connection.rooms();
+    expect(flagged?.markedUnread).toBe(true);
+    // Absent, not an explicit false — the same convention this projection
+    // already uses for "no" elsewhere (RoomMemberRef.ownerName).
+    expect(plain).not.toHaveProperty("markedUnread");
+  });
+
+  it("#220: markUnread writes m.marked_unread account data as true", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "r",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.markUnread("!r:workspace.example");
+
+    expect(client.setRoomAccountData).toHaveBeenCalledWith("!r:workspace.example", "m.marked_unread", { unread: true });
+  });
+
+  it("#220: markRead clears an explicit mark-unread flag, the same reading it does for a true unread count", async () => {
+    const events = [fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "one", ts: 1 })];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "r",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 1,
+          highlightCount: 0,
+          events,
+          markedUnread: true,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.markRead("!r:workspace.example");
+
+    expect(client.sendReadReceipt).toHaveBeenCalledWith(events[0], ReceiptType.Read, true);
+    expect(client.setRoomAccountData).toHaveBeenCalledWith("!r:workspace.example", "m.marked_unread", { unread: false });
+  });
+
+  it("#220: markRead costs no account-data write when the room was never flagged unread", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "r",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.markRead("!r:workspace.example");
+
+    expect(client.setRoomAccountData).not.toHaveBeenCalled();
   });
 
   it("start, leave, mute, and people-search map to the homeserver's verbs", async () => {

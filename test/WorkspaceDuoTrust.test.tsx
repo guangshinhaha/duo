@@ -116,6 +116,7 @@ function fakeConnection(timeline: RoomMessage[], roomList: RoomSummary[] = rooms
     retry: vi.fn(async () => {}),
     cancel: vi.fn(() => {}),
     markRead: vi.fn(async () => {}),
+    markUnread: vi.fn(async () => {}),
     startDirect: vi.fn(async () => "!x:workspace.example"),
     createRoom: vi.fn(async () => "!x:workspace.example"),
     invite: vi.fn(async () => {}),

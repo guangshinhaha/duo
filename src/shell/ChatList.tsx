@@ -289,6 +289,41 @@ export function ChatList({
       });
   };
 
+  // #220: read/unread is the account's own flag, the same footing as the
+  // notification mode above — one busy lock, one refresh, the server's
+  // next answer is what the badge shows next.
+  const markRead = (room: RoomSummary): void => {
+    if (busyRoomId !== null || !connection) {
+      return;
+    }
+    setBusyRoomId(room.roomId);
+    setActionError(null);
+    connection
+      .markRead(room.roomId)
+      .then(() => setActionError(null))
+      .catch(() => setActionError("The workspace didn't take that — try again."))
+      .finally(() => {
+        setBusyRoomId(null);
+        refresh();
+      });
+  };
+
+  const markUnread = (room: RoomSummary): void => {
+    if (busyRoomId !== null || !connection) {
+      return;
+    }
+    setBusyRoomId(room.roomId);
+    setActionError(null);
+    connection
+      .markUnread(room.roomId)
+      .then(() => setActionError(null))
+      .catch(() => setActionError("The workspace didn't take that — try again."))
+      .finally(() => {
+        setBusyRoomId(null);
+        refresh();
+      });
+  };
+
   const confirmLeave = (): void => {
     if (!leaveTarget || leaving || !connection) {
       return;
@@ -569,7 +604,7 @@ export function ChatList({
                   <CountPill label={`${waitingByRoom.get(room.roomId)!.count} waiting on you`} n={waitingByRoom.get(room.roomId)!.count} testId="waiting-count" />
                 )}
                 {room.unread.mentions > 0 && <CountPill label={`${room.unread.mentions} mentions`} n={room.unread.mentions} prefix="@ " testId="room-mentions" />}
-                {room.unread.notifications > 0 && (
+                {room.unread.notifications > 0 ? (
                   <span
                     aria-label={`${room.unread.notifications} unread`}
                     className="rounded-full border border-[var(--edge)] px-2 type-identifier text-[var(--text)]"
@@ -577,6 +612,12 @@ export function ChatList({
                   >
                     {room.unread.notifications}
                   </span>
+                ) : (
+                  // #220: marked unread by hand — nothing new arrived, so
+                  // there's no count to show, only the fact of the flag.
+                  room.markedUnread && (
+                    <span aria-label="Marked unread" className="inline-flex size-2 rounded-full bg-[var(--accent)]" data-testid="room-unread-dot" />
+                  )
                 )}
               </span>
             </>
@@ -632,6 +673,27 @@ export function ChatList({
                 <option value="mentions">Mentions</option>
                 <option value="nothing">Nothing</option>
               </select>
+              {/* #220: read/unread from the list — the account's own flag either way, so it's never just this device's opinion. */}
+              <button
+                aria-label={`Mark ${title} as read`}
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
+                data-testid="room-mark-read"
+                disabled={busyRoomId === room.roomId}
+                onClick={() => markRead(room)}
+                type="button"
+              >
+                Mark as read
+              </button>
+              <button
+                aria-label={`Mark ${title} as unread`}
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
+                data-testid="room-mark-unread"
+                disabled={busyRoomId === room.roomId}
+                onClick={() => markUnread(room)}
+                type="button"
+              >
+                Mark as unread
+              </button>
               {/* #214: invite someone into THIS room — a direct conversation is just its two members, so there's nothing to invite into. */}
               {room.kind !== "direct" && (
                 <button

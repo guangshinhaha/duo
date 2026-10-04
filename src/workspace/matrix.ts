@@ -172,6 +172,16 @@ export interface RoomSummary {
   readonly notifications: NotificationMode;
   /** #223: whether this member may edit the room's name, topic and picture — read client-side so the UI never has to guess from a failed call. */
   readonly canEdit: RoomEditPermissions;
+  /**
+   * #220: this member explicitly flagged the room unread (MSC2867's
+   * `m.marked_unread` room account data) — "come back to this", not the
+   * server's own unread count, which is why it can be true even with
+   * `unread.notifications` at 0. True only — absent rather than carrying an
+   * explicit `false`, the same convention `RoomMemberRef.ownerName` uses for
+   * "no", so an existing fixture elsewhere in this codebase still satisfies
+   * the type. `markRead` clears it, wherever that's called from.
+   */
+  readonly markedUnread?: true;
 }
 
 /**
@@ -519,8 +529,20 @@ export interface WorkspaceConnection {
   /**
    * Receipts the room's latest event — the member's read position, held by
    * the account, so every device reads the conversation as read (#63).
+   * #220: also clears an explicit "mark unread" (`RoomSummary.markedUnread`)
+   * when one stands — reading the conversation, however that happened
+   * (opening it, or "Mark as read" from the list), is what that flag means
+   * to undo.
    */
   markRead(roomId: string): Promise<void>;
+  /**
+   * #220: flags the conversation unread with nothing new having arrived —
+   * MSC2867's `m.marked_unread` room account data, the spec's own "come
+   * back to this" convention, held by the account like every other read
+   * state here, so it follows the member to their other devices. Idempotent,
+   * the same as every other account-data write in this seam.
+   */
+  markUnread(roomId: string): Promise<void>;
   /**
    * Names a group conversation (#223): `m.room.name`, the way every member's
    * sidebar and header read it. Gated client-side by `RoomSummary.canEdit`;
@@ -1243,6 +1265,7 @@ async function projectRoom(
     muted: mode === "nothing",
     notifications: mode,
     canEdit: editPermissionsOf(room, selfId),
+    ...(markedUnreadOf(room) ? { markedUnread: true as const } : {}),
   };
 }
 
@@ -1261,6 +1284,22 @@ function notificationModeOf(room: MatrixRoom, muted: boolean): NotificationMode 
     return content?.mode === "mentions" ? "mentions" : "all";
   } catch {
     return "all";
+  }
+}
+
+/**
+ * #220: whether this member explicitly flagged the room unread (MSC2867's
+ * `m.marked_unread` room account data), read as defensively as the other
+ * account-data flags above (`notificationModeOf`) — a fixture that predates
+ * this, or carries no such accessor at all, reads as "no flag", never a
+ * crash.
+ */
+function markedUnreadOf(room: MatrixRoom): boolean {
+  try {
+    const content = room.getAccountData("m.marked_unread")?.getContent() as { unread?: unknown } | undefined;
+    return content?.unread === true;
+  } catch {
+    return false;
   }
 }
 
@@ -1749,11 +1788,20 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       }
     },
     markRead: async (roomId) => {
-      const events = client.getRoom(roomId)?.getLiveTimeline().getEvents() ?? [];
+      const room = client.getRoom(roomId);
+      const events = room?.getLiveTimeline().getEvents() ?? [];
       const last = events[events.length - 1];
       if (last) {
         await client.sendReadReceipt(last, ReceiptType.Read, true);
       }
+      // #220: reading the conversation — however that happened — undoes an
+      // explicit "mark unread" the same way it undoes a true unread count.
+      if (room && markedUnreadOf(room)) {
+        await client.setRoomAccountData(roomId, "m.marked_unread", { unread: false });
+      }
+    },
+    markUnread: async (roomId) => {
+      await client.setRoomAccountData(roomId, "m.marked_unread", { unread: true });
     },
     setRoomName: async (roomId, name) => {
       await client.setRoomName(roomId, name);

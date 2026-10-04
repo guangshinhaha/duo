@@ -252,11 +252,23 @@ function fakeConnection(state: {
     }),
     stop: vi.fn(async () => {}),
     // The homeserver's own read accounting moves — what another device
-    // would also see on its next sync.
+    // would also see on its next sync. #220: reading the conversation also
+    // clears an explicit "mark unread" flag, the same as the real seam.
     markRead: vi.fn(async (roomId: string) => {
       const at = roomAt(roomId);
       if (at >= 0) {
-        state.rooms[at] = { ...state.rooms[at]!, unread: { notifications: 0, mentions: 0 } };
+        const next: RoomSummary = { ...state.rooms[at]!, unread: { notifications: 0, mentions: 0 } };
+        delete (next as { markedUnread?: true }).markedUnread;
+        state.rooms[at] = next;
+      }
+    }),
+    // #220: the account's own "come back to this" flag — set with nothing
+    // new having arrived, the same server-side footing as every other read
+    // state here.
+    markUnread: vi.fn(async (roomId: string) => {
+      const at = roomAt(roomId);
+      if (at >= 0) {
+        state.rooms[at] = { ...state.rooms[at]!, markedUnread: true };
       }
     }),
     startDirect: vi.fn(async (userId: string) => {
@@ -1174,6 +1186,125 @@ describe("#63 — read state is durable, not local", () => {
     window.location.hash = "#conversations";
     window.dispatchEvent(new Event("hashchange"));
     await waitFor(() => expect(within(entryFor("project-x")).queryByTestId("room-unread")).toBeNull());
+  });
+});
+
+describe("#220 — a conversation can be marked read or unread from the list", () => {
+  it("marking a conversation unread shows a badge with no new messages, and marking it read clears it", async () => {
+    seedSession();
+    // "announce" starts with nothing server-counted as unread (unlike
+    // "project-x", which this fixture seeds with 3) — the clean slate
+    // "mark as unread" is meant to flag.
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    expect(within(entryFor("announce")).queryByTestId("room-unread")).toBeNull();
+    expect(within(entryFor("announce")).queryByTestId("room-unread-dot")).toBeNull();
+
+    fireEvent.click(within(entryFor("announce")).getByTestId("room-more"));
+    fireEvent.click(within(entryFor("announce")).getByTestId("room-mark-unread"));
+
+    await waitFor(() => expect(fake.connection.markUnread).toHaveBeenCalledWith("!announce:workspace.example"));
+    // The flag, not a true count: a dot, never a number.
+    await waitFor(() => expect(within(entryFor("announce")).getByTestId("room-unread-dot")).toBeInTheDocument());
+
+    fireEvent.click(within(entryFor("announce")).getByTestId("room-mark-read"));
+
+    await waitFor(() => expect(fake.connection.markRead).toHaveBeenCalledWith("!announce:workspace.example"));
+    await waitFor(() => expect(within(entryFor("announce")).queryByTestId("room-unread-dot")).toBeNull());
+  });
+
+  it("marking as read also clears a genuinely unread conversation's badge — the same server-side flag either way", async () => {
+    seedSession();
+    const rooms = roomsFixture();
+    rooms[1] = { ...rooms[1]!, unread: { notifications: 3, mentions: 0 } };
+    const fake = fakeConnection({ rooms, timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    expect(within(entryFor("project-x")).getByTestId("room-unread")).toHaveAttribute("aria-label", "3 unread");
+
+    fireEvent.click(within(entryFor("project-x")).getByTestId("room-more"));
+    fireEvent.click(within(entryFor("project-x")).getByTestId("room-mark-read"));
+
+    await waitFor(() => expect(fake.connection.markRead).toHaveBeenCalledWith("!project-x:workspace.example"));
+    await waitFor(() => expect(within(entryFor("project-x")).queryByTestId("room-unread")).toBeNull());
+  });
+});
+
+describe("#225 — a link to one message", () => {
+  it("opening a matrix.to-style permalink against this app lands in the conversation", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    navigate("#/!project-x:workspace.example/$2?via=workspace.example");
+
+    await screen.findByTestId("room-timeline");
+    expect(screen.getByTestId("room-header")).toHaveTextContent("project-x");
+  });
+
+  it("a link to a conversation this account can't see says so, rather than opening an empty room", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    navigate("#/!elsewhere:other-org.example/$nope?via=other-org.example");
+
+    expect(await screen.findByTestId("room-not-accessible")).toHaveTextContent(/can.t see this conversation/i);
+    expect(screen.queryByTestId("room-composer")).toBeNull();
+  });
+
+  describe("copying a message's link", () => {
+    const writeText = vi.fn(async () => {});
+    beforeEach(() => {
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      writeText.mockClear();
+    });
+    afterEach(() => {
+      Reflect.deleteProperty(navigator, "clipboard");
+    });
+
+    it("copies the message's matrix.to permalink and confirms it", async () => {
+      seedSession();
+      const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+      vi.mocked(connect).mockResolvedValue(fake.connection);
+
+      await renderApp();
+      navigate("#chat/!project-x%3Aworkspace.example");
+      await screen.findByTestId("room-timeline");
+
+      const row = messageRow("Refunds within 30 days, full amount.");
+      fireEvent.click(within(row).getByTestId("room-message-copy-link"));
+
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://matrix.to/#/!project-x:workspace.example/$2?via=workspace.example"));
+      await waitFor(() => expect(within(row).getByTestId("room-message-copy-link")).toHaveTextContent("Copied"));
+    });
+
+    it("says so plainly when the clipboard refuses", async () => {
+      writeText.mockRejectedValue(new Error("denied"));
+      seedSession();
+      const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+      vi.mocked(connect).mockResolvedValue(fake.connection);
+
+      await renderApp();
+      navigate("#chat/!project-x%3Aworkspace.example");
+      await screen.findByTestId("room-timeline");
+
+      const row = messageRow("Refunds within 30 days, full amount.");
+      fireEvent.click(within(row).getByTestId("room-message-copy-link"));
+
+      await waitFor(() => expect(within(row).getByTestId("room-message-copy-link")).toHaveTextContent("Copy failed"));
+    });
   });
 });
 
