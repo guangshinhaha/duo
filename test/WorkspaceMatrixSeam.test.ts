@@ -25,6 +25,7 @@ vi.mock("matrix-js-sdk", () => ({
   MsgType: { Text: "m.text", File: "m.file", Image: "m.image" },
   ReceiptType: { Read: "m.read", FullyRead: "m.fully_read", ReadPrivate: "m.read.private" },
   NotificationCountType: { Highlight: "highlight", Total: "total" },
+  Preset: { PrivateChat: "private_chat", TrustedPrivateChat: "trusted_private_chat", PublicChat: "public_chat" },
   PushRuleKind: { Override: "override", ContentSpecific: "content", RoomSpecific: "room", SenderSpecific: "sender", Underride: "underride" },
   EventType: { RoomMessage: "m.room.message", Reaction: "m.reaction", RoomRedaction: "m.room.redaction" },
   RelationType: { Annotation: "m.annotation", Replace: "m.replace", Thread: "m.thread", Reference: "m.reference" },
@@ -133,6 +134,8 @@ type FakeClient = MatrixClient & {
   getAccountData: ReturnType<typeof vi.fn>;
   getPushRules: ReturnType<typeof vi.fn>;
   createRoom: ReturnType<typeof vi.fn>;
+  invite: ReturnType<typeof vi.fn>;
+  joinRoom: ReturnType<typeof vi.fn>;
   leave: ReturnType<typeof vi.fn>;
   addPushRule: ReturnType<typeof vi.fn>;
   deletePushRule: ReturnType<typeof vi.fn>;
@@ -175,6 +178,8 @@ function fakeClient(
       global: { room: (over.mutedRoomIds ?? []).map((roomId) => ({ rule_id: roomId, enabled: true, actions: [] })) },
     })),
     createRoom: vi.fn(async () => ({ room_id: "!fresh:workspace.example" })),
+    invite: vi.fn(async () => ({})),
+    joinRoom: vi.fn(async () => ({})),
     leave: vi.fn(async () => ({})),
     addPushRule: vi.fn(async () => ({})),
     deletePushRule: vi.fn(async () => ({})),
@@ -209,11 +214,14 @@ function summaryRoom(shape: {
   events: MatrixEvent[];
   /** #69: the room's account-data notification mode, as another device wrote it. */
   accountDataMode?: "mentions";
+  /** #214: `rooms()` reads only joined rooms now — "join" unless a test says otherwise. */
+  membership?: "join" | "invite";
 }): Room {
   return {
     roomId: shape.roomId,
     name: shape.name,
     getJoinRule: () => shape.joinRule,
+    getMyMembership: () => shape.membership ?? "join",
     getMembers: () => shape.members.map((member) => ({ userId: member.userId, name: member.name, membership: "join" })),
     getUnreadNotificationCount: (type?: string) => (type === "highlight" ? shape.highlightCount : shape.notificationCount),
     getLiveTimeline: () => ({ getEvents: () => shape.events }),
@@ -227,6 +235,30 @@ function summaryRoom(shape: {
       type === "duo.notifications" && shape.accountDataMode
         ? ({ getContent: () => ({ mode: shape.accountDataMode }) } as MatrixEvent)
         : undefined,
+  } as unknown as Room;
+}
+
+/**
+ * A room as an INVITED (not yet joined) client sees it (#214): Synapse's
+ * stripped `invite_room_state`, never a full member list or a timeline. A
+ * DM invite carries `getDMInviter()` (the SDK's own `is_direct` read); any
+ * other invite's inviter comes from the one membership event this account
+ * does have — its own invite.
+ */
+function inviteRoom(shape: { roomId: string; name: string | null; joinRule?: string; inviterId: string | null; inviterName?: string | null; direct?: boolean }): Room {
+  // The viewer's OWN membership record (keyed by their own id) carries the
+  // invite's m.room.member event — whose sender is who invited them. A
+  // lookup for anyone else (the inviter's own profile, if it's known) is
+  // served separately, the way the real room's membership table would.
+  const selfMember = { name: null, events: { member: { getSender: () => shape.inviterId ?? undefined } } } as unknown as RoomMember;
+  const inviterProfile = shape.inviterId ? ({ name: shape.inviterName ?? null } as RoomMember) : null;
+  return {
+    roomId: shape.roomId,
+    name: shape.name,
+    getJoinRule: () => shape.joinRule ?? "invite",
+    getMyMembership: () => "invite",
+    getDMInviter: () => (shape.direct ? (shape.inviterId ?? undefined) : undefined),
+    getMember: (userId: string) => (userId === SESSION.userId ? selfMember : userId === shape.inviterId ? inviterProfile : null),
   } as unknown as Room;
 }
 
@@ -1446,6 +1478,134 @@ describe("the share wire (#66)", () => {
         threadRootEventId: null,
       },
     ]);
+  });
+});
+
+describe("#214 — creating a group conversation and inviting people", () => {
+  it("createRoom makes a private, invite-only room with the given name and topic", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.createRoom("Project X", "Launch planning")).resolves.toBe("!fresh:workspace.example");
+    // private_chat is the only preset the org wall allows a member to
+    // create with (`duo_org_wall/rules.py`'s `ALLOWED_PRESETS`) — never
+    // public_chat, which would be refused outright.
+    expect(client.createRoom).toHaveBeenCalledWith({ preset: "private_chat", name: "Project X", topic: "Launch planning" });
+  });
+
+  it("createRoom omits a blank topic rather than sending empty words", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.createRoom("Project X", "   ");
+
+    expect(client.createRoom).toHaveBeenCalledWith({ preset: "private_chat", name: "Project X" });
+  });
+
+  it("invite adds a workspace user to an existing room", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.invite("!project-x:workspace.example", "@carol:workspace.example");
+
+    expect(client.invite).toHaveBeenCalledWith("!project-x:workspace.example", "@carol:workspace.example");
+  });
+
+  it("an invite across organisations is refused, and the org wall's own sentence is what the UI is given", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const refused = (errcode: string, message: string): MatrixError => Object.assign(new MatrixError({ errcode, error: message }), { errcode, message });
+
+    // The exact sentence `duo_org_wall/rules.py`'s ERR_INVITE sends back —
+    // this is the server's refusal, not a client-side guess about orgs.
+    client.invite.mockRejectedValueOnce(refused("M_FORBIDDEN", "Invites across organisations are not allowed."));
+
+    await expect(connection.invite("!project-x:workspace.example", "@bose.ana:otherorg.example")).rejects.toThrow(
+      "Invites across organisations are not allowed.",
+    );
+  });
+
+  it("createRoom's own refusal (the org wall, or a dropped connection) is surfaced the same honest way", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const refused = (errcode: string, message: string): MatrixError => Object.assign(new MatrixError({ errcode, error: message }), { errcode, message });
+
+    client.createRoom.mockRejectedValueOnce(refused("M_FORBIDDEN", "This room cannot be created."));
+    await expect(connection.createRoom("Project X", "")).rejects.toThrow("This room cannot be created.");
+
+    client.createRoom.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(connection.createRoom("Project X", "")).rejects.toThrow("couldn't reach the workspace");
+  });
+
+  it("rooms() reads only joined rooms — an invited-but-not-joined room is not a conversation yet", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+        summaryRoom({
+          roomId: "!not-yet:workspace.example",
+          name: "not-yet",
+          joinRule: "invite",
+          members: [],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          membership: "invite",
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect((await connection.rooms()).map((room) => room.roomId)).toEqual(["!project-x:workspace.example"]);
+  });
+
+  it("invites() reads the pending invites — a direct invite tells itself apart from a group one, and names who asked", async () => {
+    const client = fakeClient({
+      rooms: [
+        inviteRoom({ roomId: "!dm-invite:workspace.example", name: null, inviterId: "@bose:workspace.example", inviterName: "Bose", direct: true }),
+        inviteRoom({ roomId: "!group-invite:workspace.example", name: "project-x", inviterId: "@carol:workspace.example", inviterName: "Carol" }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.invites()).toEqual([
+      { roomId: "!dm-invite:workspace.example", kind: "direct", name: null, inviterId: "@bose:workspace.example", inviterName: "Bose" },
+      { roomId: "!group-invite:workspace.example", kind: "group", name: "project-x", inviterId: "@carol:workspace.example", inviterName: "Carol" },
+    ]);
+  });
+
+  it("joinRoom accepts a pending invite — the homeserver's own join, nothing more", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.joinRoom("!group-invite:workspace.example");
+
+    expect(client.joinRoom).toHaveBeenCalledWith("!group-invite:workspace.example");
+  });
+
+  it("declining an invite is leave — Matrix models both the same way, and the seam adds no second verb", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.leave("!group-invite:workspace.example");
+
+    expect(client.leave).toHaveBeenCalledWith("!group-invite:workspace.example");
   });
 });
 
