@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Download, File as FileIcon, Image as ImageIcon } from "lucide-react";
 import { formatBytes } from "../workspace/sharing.js";
 import type { SharedFile } from "../workspace/matrix.js";
+import { ImageViewer } from "./ImageViewer.js";
 
 /**
  * #66: one shared file as the conversation reads it — inside the sender's
@@ -17,11 +18,17 @@ import type { SharedFile } from "../workspace/matrix.js";
  * The facts line is the honesty: name · size · type as the sender's message
  * declared them. When the bytes can't be loaded the card keeps its facts,
  * says so when asked, and shows no thumbnail that isn't there.
+ *
+ * #218: clicking the thumbnail opens it full screen in `ImageViewer` — the
+ * same blob already loaded above, never a second (and unauthenticated)
+ * fetch against the raw `mxc://` reference. Download in the viewer is the
+ * same `download` handler the card's own download link calls.
  */
 export function SharedFileCard({ file, loadMedia }: { file: SharedFile; loadMedia: (url: string) => Promise<Blob | null> }) {
   const [thumbnail, setThumbnail] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
 
   // An image's bytes are the preview: loaded on render, released on leave.
   useEffect(() => {
@@ -67,12 +74,23 @@ export function SharedFileCard({ file, loadMedia }: { file: SharedFile; loadMedi
   return (
     <div className="flex flex-col gap-2" data-testid="room-file">
       {file.image && thumbnail !== null ? (
-        <img
-          alt={file.name}
-          className="max-h-80 w-auto max-w-full rounded-[var(--r-sm)] border border-[var(--edge)]"
-          data-testid="room-file-image"
-          src={thumbnail}
-        />
+        <>
+          <button
+            aria-label={`Open ${file.name} full screen`}
+            className="block w-fit max-w-full cursor-zoom-in rounded-[var(--r-sm)]"
+            data-testid="room-file-image-trigger"
+            onClick={() => setViewerOpen(true)}
+            type="button"
+          >
+            <img
+              alt={file.name}
+              className="max-h-80 w-auto max-w-full rounded-[var(--r-sm)] border border-[var(--edge)]"
+              data-testid="room-file-image"
+              src={thumbnail}
+            />
+          </button>
+          <ImageViewer downloading={downloading} file={file} onDownload={download} onOpenChange={setViewerOpen} open={viewerOpen} src={thumbnail} />
+        </>
       ) : (
         <div
           className="flex items-center gap-2 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-3 py-2 type-body"
