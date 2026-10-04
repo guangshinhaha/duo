@@ -796,11 +796,11 @@ export function ChatList({
               data-testid="chat-list-mentions"
               href="#mentions"
             >
-              <AtSign aria-hidden="true" size={18} />
+              <AtSign aria-label="Mentions" size={18} />
               {mentionsUnread > 0 && (
                 <span
                   aria-hidden="true"
-                  className="absolute right-1 top-1 inline-flex size-4 items-center justify-center rounded-full bg-[var(--accent)] type-identifier text-[8px] text-[var(--bg)]"
+                  className="absolute right-1 top-1 inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--accent)] px-1 type-identifier text-[var(--bg)]"
                   data-testid="chat-list-mentions-badge"
                 >
                   {mentionsUnread > 9 ? "9+" : mentionsUnread}
