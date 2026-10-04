@@ -53,20 +53,20 @@ export function ImageViewer({
         <DialogDescription className="sr-only">{file.name}, shown full screen. Escape closes it.</DialogDescription>
         <div className="flex items-center justify-end gap-2 p-2">
           <button
-            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)] disabled:opacity-60"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)] disabled:opacity-60"
             data-testid="image-viewer-download"
             disabled={downloading}
             onClick={onDownload}
             type="button"
           >
-            <Download aria-hidden="true" className="mr-1.5 inline size-4" />
+            <Download aria-hidden="true" className="inline size-4" />
             Download
           </button>
           <DialogClose
-            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)]"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)]"
             data-testid="image-viewer-close"
           >
-            <X aria-hidden="true" className="mr-1.5 inline size-4" />
+            <X aria-hidden="true" className="inline size-4" />
             Close
           </DialogClose>
         </div>
