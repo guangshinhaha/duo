@@ -56,6 +56,7 @@ function messageFor(over: Partial<RoomMessage> & Pick<RoomMessage, "eventId" | "
     reactions: [],
     thread: null,
     threadRootEventId: null,
+    replyToEventId: null,
     parts: null,
     ...over,
   };
