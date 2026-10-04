@@ -59,6 +59,12 @@ describe("the chat-first address grammar (#141)", () => {
     expect(routeFromHash("#settings")).toBe("settings");
   });
 
+  it("#222: mentions is its own plain address, separate from waiting", () => {
+    expect(routeFromHash("#mentions")).toBe("mentions");
+    expect(canonicalHash("mentions")).toBe("#mentions");
+    expect(routeFromHash("#mentions")).not.toBe(routeFromHash("#waiting"));
+  });
+
   it("settings is an index and one address per section; an unknown section is the index", () => {
     for (const id of ["notifications", "appearance", "devices", "links", "claude", "advanced", "end"] as const) {
       expect(routeFromHash(`#settings/${id}`)).toEqual({ settings: id });

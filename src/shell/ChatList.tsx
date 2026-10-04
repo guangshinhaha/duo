@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ellipsis, Settings as SettingsIcon, SquarePen, UsersRound } from "lucide-react";
+import { AtSign, Ellipsis, Settings as SettingsIcon, SquarePen, UsersRound } from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
 import { usePendingT4, useRecordOutcome } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
@@ -26,6 +26,7 @@ import { roomDuoLabels, roomTitle, soleDuoLabel } from "./roomTitle.js";
 import { bridgedHref, bridgedTitle, useBridgedChats, type BridgedChat } from "./bridged.js";
 import { SourceBadge } from "./BridgedChat.js";
 import { useWaitingItems, waitingWords, swipeActionsOf, type WaitingItem } from "./waiting.js";
+import { useMentions } from "./mentions.js";
 import { SwipeRow } from "./SwipeRow.js";
 import { DESKTOP_QUERY, useMediaQuery } from "./useMediaQuery.js";
 import { DuoLine } from "../components/DuoLine.js";
@@ -252,6 +253,8 @@ export function ChatList({
   };
 
   const waiting = useWaitingItems(api, connection);
+  // #222: the nav badge counts unread mentions only — read ones (and anything dismissed from the Mentions view) stay off it, the same "what's new" idiom as every other badge here.
+  const mentionsUnread = useMentions(connection).unreadCount;
   const waitingByRoom = useMemo(() => new Map(waiting.items.filter((item) => item.roomId !== null).map((item) => [item.roomId!, item])), [waiting.items]);
   const duoWaiting = waiting.items.find((item) => item.kind === "duo") ?? null;
   const bridged = useBridgedChats(api).chats;
@@ -628,6 +631,26 @@ export function ChatList({
             >
               <UsersRound aria-label="New group" size={18} />
             </button>
+          )}
+          {connection && (
+            <a
+              aria-current={route === "mentions" ? "page" : undefined}
+              aria-label={mentionsUnread > 0 ? `Mentions, ${mentionsUnread} unread` : "Mentions"}
+              className="relative inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--muted)]"
+              data-testid="chat-list-mentions"
+              href="#mentions"
+            >
+              <AtSign aria-hidden="true" size={18} />
+              {mentionsUnread > 0 && (
+                <span
+                  aria-hidden="true"
+                  className="absolute right-1 top-1 inline-flex size-4 items-center justify-center rounded-full bg-[var(--accent)] type-identifier text-[8px] text-[var(--bg)]"
+                  data-testid="chat-list-mentions-badge"
+                >
+                  {mentionsUnread > 9 ? "9+" : mentionsUnread}
+                </span>
+              )}
+            </a>
           )}
           <a
             aria-label="Settings"

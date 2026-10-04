@@ -16,6 +16,7 @@
 export const NAMED_ROUTES = [
   "chats",
   "waiting",
+  "mentions",
   "duo",
   "confirmations",
   "settings",

@@ -3,6 +3,7 @@ import {
   createClient,
   EventType,
   MatrixError,
+  Method,
   MsgType,
   NotificationCountType,
   Preset,
@@ -11,6 +12,9 @@ import {
   RelationType,
   RoomEvent,
   SyncState,
+  TweakName,
+  type INotification,
+  type INotificationsResponse,
   type MatrixClient,
   type MatrixEvent,
   type Room as MatrixRoom,
@@ -268,6 +272,36 @@ export interface MessageSearchPage {
 }
 
 /**
+ * One place the member was mentioned (#222): a message that named them,
+ * wherever it was said — the homeserver's own highlight-tier notification
+ * (`GET /notifications`, `only=highlight`), the same push-rule signal a
+ * room's own mention badge counts (`RoomSummary.unread.mentions`). This is
+ * NOT "Waiting on you": that is the duo's drafts awaiting the owner's
+ * decision; this is raw `@mentions` of the member themselves, the two
+ * never share a row. Projected like a timeline message — sender attributed
+ * by id, with the same fallback to the localpart — so a mentions list and
+ * a room's own timeline never disagree about who said what.
+ */
+export interface MentionHit {
+  readonly eventId: string;
+  readonly roomId: string;
+  readonly senderId: string;
+  /** The room's own record of the sender's name, else the localpart — a claim; the id is the fact (#60). */
+  readonly senderName: string;
+  readonly body: string;
+  readonly originServerTs: number;
+  /**
+   * The homeserver's own record of whether this account's read receipt has
+   * passed the event — informational only. Dismissing a mention from the
+   * view is a separate, local choice (shell/mentions.ts): sending a receipt
+   * at an arbitrary past event is not a verb this seam offers.
+   */
+  readonly read: boolean;
+  /** The thread this mention answers inside, if any — null in the main flow. Opening a threaded mention lands in its thread, like a search hit (#70). */
+  readonly threadRootEventId: string | null;
+}
+
+/**
  * The workspace refused this session's credential (`M_UNKNOWN_TOKEN`): it
  * expired, or was signed out elsewhere. Carries the homeserver's own errcode so
  * a caller that mocks this module can still recognise it by shape.
@@ -319,6 +353,15 @@ export interface WorkspaceConnection {
    * owner's Mac) is a different thing, served by a different module.
    */
   searchMessages(query: string, next?: string): Promise<MessageSearchPage>;
+  /**
+   * Every place the member was mentioned, across every conversation (#222):
+   * the homeserver's own highlight notifications, newest first — re-sorted
+   * here rather than trusted off the wire, since the spec does not pin an
+   * order on the response. This is the raw `@mention` signal, not the
+   * duo's drafts ("Waiting on you" is a different list, kept separate on
+   * purpose — see matrix.ts's `MentionHit`).
+   */
+  mentions(): Promise<readonly MentionHit[]>;
   /**
    * Sends a text message (#65): the body says what people read; when the
    * message addresses members, the seam builds the spec's full mention
@@ -865,6 +908,20 @@ const SEARCH_PAGE_SIZE = 20;
 /** How many lines around each hit the search is asked to bring: enough to recognise the moment, not to reread it. */
 const SEARCH_CONTEXT_LINES = 2;
 
+/** How many highlight notifications a mentions read asks for: enough for "everywhere you were mentioned" to read as complete in the common case. */
+const MENTIONS_LIMIT = 50;
+
+/**
+ * Whether a notification is actually highlight-tier. `only=highlight` on
+ * the request is the ask; this is the check — a homeserver that answers
+ * the filter loosely cannot put a non-mention on this list.
+ */
+function isHighlightedNotification(notification: INotification): boolean {
+  return notification.actions.some(
+    (action) => typeof action === "object" && action.set_tweak === TweakName.Highlight && action.value !== false,
+  );
+}
+
 /** An event as the homeserver's `/search` hands it back — the SDK's own wire type, read through the one door. */
 type SearchWireEvent = NonNullable<
   Awaited<ReturnType<MatrixClient["search"]>>["search_categories"]["room_events"]["results"]
@@ -1021,6 +1078,53 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         });
       }
       return { hits, next: found.next_batch ?? null };
+    },
+    mentions: async () => {
+      // #222: the homeserver's own highlight tier — the same signal
+      // `.m.rule.is_user_mention` raises for a room's unread-mentions count
+      // (`projectRoom`'s `unread.mentions`, above). `only=highlight` is the
+      // ask; `isHighlightedNotification` is the check.
+      const response = await client.http.authedRequest<INotificationsResponse>(Method.Get, "/notifications", {
+        limit: String(MENTIONS_LIMIT),
+        only: "highlight",
+      });
+      const hits: MentionHit[] = [];
+      for (const notification of response.notifications) {
+        if (!isHighlightedNotification(notification)) {
+          continue;
+        }
+        // The notification's own event carries no room id of its own on the
+        // wire — the SDK's own notification-timeline handling gutwrenches it
+        // on exactly the same way (client.ts's paginateEventTimeline).
+        const event = client.getEventMapper()(notification.event);
+        event.event.room_id = notification.room_id;
+        if (event.getType() !== EventType.RoomMessage || event.getContent()?.msgtype !== MsgType.Text || event.isRedacted()) {
+          // A mention can only ever ride a text turn's words; a share's
+          // "body" is a filename, and a struck event has no words to read.
+          continue;
+        }
+        const relation = relationOf(event);
+        if (relation?.rel_type === RelationType.Replace) {
+          // An edit's replacement event is not a row of its own — the same
+          // rule the timeline and the search projections hold.
+          continue;
+        }
+        const senderId = event.getSender() ?? "";
+        const room = client.getRoom(notification.room_id);
+        hits.push({
+          eventId: event.getId() ?? "",
+          roomId: notification.room_id,
+          senderId,
+          senderName: room?.getMember(senderId)?.name || localpartOf(senderId),
+          body: String(event.getContent()?.body ?? ""),
+          originServerTs: event.getTs(),
+          read: notification.read,
+          threadRootEventId: relation?.rel_type === RelationType.Thread && relation.event_id !== undefined ? relation.event_id : null,
+        });
+      }
+      // Newest first: the wire's own order isn't pinned by the spec, so this
+      // is read back deliberately rather than trusted.
+      return [...hits].sort((a, b) => b.originServerTs - a.originServerTs);
     },
     send: async (roomId, body, mentions = []) => {
       // #65: the spec's mention wire shape (§User and room mentions). The
