@@ -15,6 +15,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("matrix-js-sdk", () => ({
   createClient: vi.fn(),
   ClientEvent: { Sync: "sync" },
+  // #211: backward-pagination token checks (`loadOlder`) read this.
+  Direction: { Backward: "b", Forward: "f" },
   // #209: LocalEchoUpdated alongside Timeline — the seam's `subscribe`
   // listens for both (room news with no arrival vs. a message's arrival).
   RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated" },

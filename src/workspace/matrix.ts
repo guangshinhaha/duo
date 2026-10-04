@@ -1,6 +1,7 @@
 import {
   ClientEvent,
   createClient,
+  Direction,
   EventStatus,
   EventType,
   MatrixError,
@@ -393,6 +394,25 @@ export interface MessageSearchPage {
 }
 
 /**
+ * Where the "New messages" line belongs in a room's LOADED window (#212),
+ * measured from a frozen read-marker anchor (`WorkspaceConnection.readMarker`)
+ * against the homeserver's own event order — never a row index, so a
+ * reaction or an edit sitting at the anchor doesn't miscount:
+ *  - `found`: the first row the main flow would render after the anchor.
+ *  - `none`: nothing unread to show — either the anchor already covers the
+ *    newest loaded message, or there is no anchor at all (no marker has
+ *    ever been set and this account has no read receipt here either).
+ *  - `unknown`: the anchor event is older than anything paginated into this
+ *    room yet. #211 is how a caller goes looking for it — `loadOlder`,
+ *    bounded, with "jump to the top" a reasonable fallback if it doesn't
+ *    turn up quickly.
+ */
+export type UnreadBoundary =
+  | { readonly kind: "none" }
+  | { readonly kind: "found"; readonly eventId: string }
+  | { readonly kind: "unknown" };
+
+/**
  * One place the member was mentioned (#222): a message that named them,
  * wherever it was said — the homeserver's own highlight-tier notification
  * (`GET /notifications`, `only=highlight`), the same push-rule signal a
@@ -463,6 +483,21 @@ export interface WorkspaceConnection {
    * conversation this account is not in.
    */
   timelineAt(roomId: string, eventId: string): Promise<readonly RoomMessage[]>;
+  /**
+   * Extends a room's loaded window backward by one page of older messages
+   * (#211): matrix-js-sdk's own `client.scrollback`, which paginates the
+   * room's live timeline directly — the same timeline `timeline()` already
+   * reads (`room.getLiveTimeline().getEvents()`) — so nothing here keeps a
+   * second copy of history. `loadedMore` is false when the page brought in
+   * nothing new (a connection hiccup, or the room was already fully loaded);
+   * `atStart` is true once the homeserver's own backward pagination token
+   * runs out — the conversation's very first message has been reached
+   * (#211 AC2), not a guess from how many pages came back empty. A room
+   * this account has left, or hasn't loaded at all yet, answers as if it
+   * were already at the beginning — there is nothing further back a caller
+   * could usefully ask for.
+   */
+  loadOlder(roomId: string): Promise<{ readonly loadedMore: boolean; readonly atStart: boolean }>;
   /**
    * Searches what was said (#70): the homeserver's own `POST /search` over
    * message bodies, in the member's words. Membership scoping is the
@@ -566,11 +601,13 @@ export interface WorkspaceConnection {
   cancel(roomId: string, eventId: string): void;
   /**
    * Receipts the room's latest event — the member's read position, held by
-   * the account, so every device reads the conversation as read (#63).
-   * #220: also clears an explicit "mark unread" (`RoomSummary.markedUnread`)
-   * when one stands — reading the conversation, however that happened
-   * (opening it, or "Mark as read" from the list), is what that flag means
-   * to undo.
+   * the account, so every device reads the conversation as read (#63). This
+   * is unconditional on open, same as it always was. #220: also clears an
+   * explicit "mark unread" (`RoomSummary.markedUnread`) when one stands —
+   * reading the conversation, however that happened (opening it, or "Mark
+   * as read" from the list), is what that flag means to undo. #212's own
+   * read marker (`readMarker`/`advanceReadMarker`, below) is a separate,
+   * more careful fact — this verb neither reads nor writes it.
    */
   markRead(roomId: string): Promise<void>;
   /**
@@ -581,6 +618,40 @@ export interface WorkspaceConnection {
    * the same as every other account-data write in this seam.
    */
   markUnread(roomId: string): Promise<void>;
+  /**
+   * This member's place in this room (#212): `m.fully_read`'s event id, or
+   * — the one time no marker has ever been set here — this account's own
+   * read receipt position, so a room opened for the first time since #212
+   * shipped still anchors from somewhere real rather than nothing. Null
+   * when neither exists (nobody, on any device, has ever read this room).
+   *
+   * Meant to be read ONCE per room-open and held by the caller: reading it
+   * again mid-session would drift as this device's own receipt send
+   * (`markRead`, unconditional on open) and this device's own marker
+   * advances (`advanceReadMarker`, below) land — exactly the "not just by
+   * opening it" #212 AC3 asks for. `unreadBoundaryFrom` is what a caller
+   * asks, over and over as the window changes, using the anchor this
+   * answered once.
+   */
+  readMarker(roomId: string): string | null;
+  /**
+   * Where the "New messages" line belongs (#212), measured from an anchor
+   * event id a caller froze earlier (`readMarker`) against whatever this
+   * room has loaded right now — see `UnreadBoundary`. Cheap and synchronous:
+   * a caller may ask again after every page `loadOlder` brings in, without
+   * a second network trip.
+   */
+  unreadBoundaryFrom(roomId: string, anchorEventId: string): UnreadBoundary;
+  /**
+   * Moves this member's read marker (#212): `m.fully_read`, the spec's own
+   * place for "read up to here" — distinct from the read receipt `markRead`
+   * sends (which still fires unconditionally on open, clearing the
+   * sidebar's unread count the same as always). This is the ONE door that
+   * moves it, and a caller is only meant to call it once the member has
+   * actually had the event in view for a beat — never just because the
+   * conversation was opened (#212 AC3).
+   */
+  advanceReadMarker(roomId: string, eventId: string): Promise<void>;
   /**
    * Names a group conversation (#223): `m.room.name`, the way every member's
    * sidebar and header read it. Gated client-side by `RoomSummary.canEdit`;
@@ -851,6 +922,34 @@ function localEchoFlagsOf(event: MatrixEvent): { pending: boolean; failed: boole
     pending: status === EventStatus.SENDING || status === EventStatus.QUEUED || status === EventStatus.ENCRYPTING || status === EventStatus.SENT,
     failed: status === EventStatus.NOT_SENT,
   };
+}
+
+/**
+ * #212: whether an event is a row the MAIN FLOW would render — `timelineOf`'s
+ * own rule for what counts as a message, minus thread replies (which render
+ * under their root's preview, never as a main-flow row), re-asked here
+ * rather than guessed, so the unread line's placement and the rows it sits
+ * between can never disagree about what's on screen. A struck message still
+ * counts (the row stays, striking only its words); a struck EDIT doesn't
+ * (it was never a row of its own); and a replacement counts as nothing of
+ * its own either, the same way `timelineOf`'s first pass treats it.
+ */
+function isMainFlowRow(event: MatrixEvent): boolean {
+  if (event.getType() !== EventType.RoomMessage) {
+    return false;
+  }
+  const relation = relationOf(event);
+  if (relation?.rel_type === RelationType.Thread) {
+    return false;
+  }
+  if (event.isRedacted()) {
+    return relation?.rel_type !== RelationType.Replace;
+  }
+  if (relation?.rel_type === RelationType.Replace) {
+    return false;
+  }
+  const msgtype = event.getContent()?.msgtype;
+  return msgtype === MsgType.Text || msgtype === MsgType.File || msgtype === MsgType.Image;
 }
 
 /**
@@ -1397,6 +1496,9 @@ function markedUnreadOf(room: MatrixRoom): boolean {
   }
 }
 
+/** How many older events one backward page asks the homeserver for (#211) — enough that a scroll to the top usually turns up another visible row in one page, small enough to stay quick. */
+const SCROLLBACK_PAGE_SIZE = 30;
+
 /** How many people a directory search answers with — enough to pick a colleague out, small enough to read. */
 const PEOPLE_SEARCH_LIMIT = 10;
 
@@ -1603,6 +1705,32 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       // the live timeline itself when the event is recent enough to be in it.
       const window = await client.getEventTimeline(room.getUnfilteredTimelineSet(), eventId);
       return timelineOf(client, roomId, window?.getEvents() ?? []);
+    },
+    loadOlder: async (roomId) => {
+      const room = client.getRoom(roomId);
+      if (!room || room.getMyMembership() !== "join") {
+        // Nothing this account can ask the homeserver for here — the same
+        // honest answer as having already reached the beginning.
+        return { loadedMore: false, atStart: true };
+      }
+      if (room.getLiveTimeline().getPaginationToken(Direction.Backward) === null) {
+        // Already established there's nothing further back — not a reason
+        // to ask the homeserver again.
+        return { loadedMore: false, atStart: true };
+      }
+      const before = room.getLiveTimeline().getEvents().length;
+      try {
+        await client.scrollback(room, SCROLLBACK_PAGE_SIZE);
+      } catch {
+        // A connection hiccup is not "the beginning" — the UI's own retry
+        // (another scroll to the top) is what tries again.
+        return { loadedMore: false, atStart: false };
+      }
+      const timeline = room.getLiveTimeline();
+      return {
+        loadedMore: timeline.getEvents().length > before,
+        atStart: timeline.getPaginationToken(Direction.Backward) === null,
+      };
     },
     searchMessages: async (query, next) => {
       const term = query.trim();
@@ -1909,6 +2037,45 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
     },
     markUnread: async (roomId) => {
       await client.setRoomAccountData(roomId, "m.marked_unread", { unread: true });
+    },
+    readMarker: (roomId) => {
+      const room = client.getRoom(roomId);
+      if (!room) {
+        return null;
+      }
+      const marker = room.getAccountData("m.fully_read")?.getContent() as { event_id?: unknown } | undefined;
+      if (typeof marker?.event_id === "string" && marker.event_id !== "") {
+        return marker.event_id;
+      }
+      // #212: nobody, on any device, has ever moved `m.fully_read` here —
+      // the one fallback that still anchors from something real is this
+      // account's own read receipt, which `markRead` (#63, unconditional on
+      // open) has been advancing all along.
+      return room.getEventReadUpTo(session.userId) ?? null;
+    },
+    unreadBoundaryFrom: (roomId, anchorEventId) => {
+      const room = client.getRoom(roomId);
+      if (!room) {
+        return { kind: "none" };
+      }
+      const events = room.getLiveTimeline().getEvents();
+      const anchorIndex = events.findIndex((event) => event.getId() === anchorEventId);
+      if (anchorIndex === -1) {
+        // Older than anything loaded here (#211's job to go looking) — not
+        // the same as "nothing unread".
+        return { kind: "unknown" };
+      }
+      for (let i = anchorIndex + 1; i < events.length; i++) {
+        const event = events[i]!;
+        if (isMainFlowRow(event)) {
+          const eventId = event.getId();
+          return eventId ? { kind: "found", eventId } : { kind: "none" };
+        }
+      }
+      return { kind: "none" };
+    },
+    advanceReadMarker: async (roomId, eventId) => {
+      await client.setRoomReadMarkers(roomId, eventId);
     },
     setRoomName: async (roomId, name) => {
       await client.setRoomName(roomId, name);

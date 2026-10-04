@@ -121,6 +121,13 @@ function fakeConnection(timelines: Record<string, RoomMessage[]>) {
     userId: SESSION.userId,
     rooms: vi.fn(async () => roomsFixture()),
     timeline: vi.fn(async (roomId: string) => [...(timelines[roomId] ?? [])]),
+    // #211/#212: these ACs don't exercise scroll-back or the unread line —
+    // a fixed "already caught up" answer keeps Room's render from needing
+    // either, without inventing history.
+    loadOlder: vi.fn(async () => ({ loadedMore: false, atStart: true })),
+    readMarker: vi.fn(() => null),
+    unreadBoundaryFrom: vi.fn(() => ({ kind: "none" as const })),
+    advanceReadMarker: vi.fn(async () => {}),
     send: vi.fn(async () => {}),
     edit: vi.fn(async () => {}),
     delete: vi.fn(async () => {}),

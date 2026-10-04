@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { InfoButton } from "../shell/InfoButton.js";
@@ -10,6 +10,9 @@ import type { RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
 const focusIntoView = (element: HTMLElement | null): void => {
   element?.scrollIntoView?.({ block: "center" });
 };
+
+/** #211: how near the scroll container's own top counts as "scrolled to the top" — same figure Room.tsx uses, so the two pages feel the same under the finger. */
+const SCROLLBACK_TRIGGER_PX = 80;
 
 /**
  * #64: one thread — a root message and the replies that relate to it. The
@@ -95,6 +98,28 @@ export function ThreadView({
     };
   }, [connection, roomId, at, timeline.isSuccess, timeline.data, queryClient]);
 
+  // #211: a thread pages the SAME room timeline the main flow does (there is
+  // no separate "thread timeline" door), so scrolling to the top of one
+  // extends what both read — the same `loadOlder`/scroll-position-preserving
+  // mechanics as Room.tsx, without that route's unread line (a thread has no
+  // read marker of its own; Matrix receipts at room grade).
+  const scroller = useRef<HTMLDivElement>(null);
+  const prependAdjust = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const [olderState, setOlderState] = useState<{ loading: boolean; atStart: boolean }>({ loading: false, atStart: false });
+
+  useEffect(() => {
+    setOlderState({ loading: false, atStart: false });
+  }, [roomId]);
+
+  useLayoutEffect(() => {
+    const adjust = prependAdjust.current;
+    const el = scroller.current;
+    if (adjust && el) {
+      el.scrollTop = el.scrollHeight - adjust.scrollHeight + adjust.scrollTop;
+      prependAdjust.current = null;
+    }
+  }, [timeline.data]);
+
   if (!connection || timeline.isLoading || (at !== undefined && around.isLoading)) {
     return (
       <div className="p-6">
@@ -145,13 +170,40 @@ export function ThreadView({
     refresh();
   };
 
+  // #211: same mechanics as Room.tsx's handler — see its own comment for why.
+  const handleScroll = (): void => {
+    if (olderState.loading || olderState.atStart) {
+      return;
+    }
+    const el = scroller.current;
+    if (!el || el.scrollTop > SCROLLBACK_TRIGGER_PX) {
+      return;
+    }
+    prependAdjust.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
+    setOlderState((state) => ({ ...state, loading: true }));
+    void connection
+      .loadOlder(roomId)
+      .then(async (result) => {
+        if (result.loadedMore) {
+          await timeline.refetch();
+        } else {
+          prependAdjust.current = null;
+        }
+        setOlderState({ loading: false, atStart: result.atStart });
+      })
+      .catch(() => {
+        prependAdjust.current = null;
+        setOlderState((state) => ({ ...state, loading: false }));
+      });
+  };
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-[var(--edge)] px-4 py-2" data-testid="thread-header">
         <h1 className="min-w-0 truncate type-heading">{roomName} — thread</h1>
         <InfoButton />
       </header>
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6" ref={scroller} onScroll={handleScroll}>
         <a
           className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
           data-testid="back-to-room"
@@ -159,6 +211,16 @@ export function ThreadView({
         >
           Back to conversation
         </a>
+        {olderState.loading && (
+          <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-loading-older">
+            Loading older messages…
+          </p>
+        )}
+        {!olderState.loading && olderState.atStart && (
+          <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-beginning">
+            This is the beginning of the conversation.
+          </p>
+        )}
         <section className="mt-2 flex flex-col gap-5" data-testid="thread-timeline">
           {root === null ? (
             <p className="text-[var(--muted)]" data-testid="thread-gone">

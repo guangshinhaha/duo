@@ -20,6 +20,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("matrix-js-sdk", () => ({
   createClient: vi.fn(),
   ClientEvent: { Sync: "sync" },
+  // #211: backward-pagination token checks (`loadOlder`) read this.
+  Direction: { Backward: "b", Forward: "f" },
   // #209: LocalEchoUpdated alongside Timeline — the seam's `subscribe`
   // listens for both (room news with no arrival vs. a message's arrival).
   RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated" },
@@ -191,6 +193,8 @@ type FakeClient = MatrixClient & {
   resendEvent: ReturnType<typeof vi.fn>;
   cancelPendingEvent: ReturnType<typeof vi.fn>;
   getEventTimeline: ReturnType<typeof vi.fn>;
+  scrollback: ReturnType<typeof vi.fn>;
+  setRoomReadMarkers: ReturnType<typeof vi.fn>;
 };
 
 /**
@@ -258,6 +262,8 @@ function fakeClient(
     resendEvent: vi.fn(async () => ({})),
     cancelPendingEvent: vi.fn(() => {}),
     getEventTimeline: vi.fn(async () => undefined),
+    scrollback: vi.fn(async (room: Room) => room),
+    setRoomReadMarkers: vi.fn(async () => ({})),
   };
   return client as unknown as FakeClient;
 }
@@ -2723,6 +2729,196 @@ describe("#214 — creating a group conversation and inviting people", () => {
     await connection.leave("!group-invite:workspace.example");
 
     expect(client.leave).toHaveBeenCalledWith("!group-invite:workspace.example");
+  });
+});
+
+/**
+ * A room shaped for #211's backward pagination and #212's read marker: a
+ * live timeline whose pagination token `scrollback` (mocked per test) can
+ * clear to signal "the beginning", and the two doors a read position can
+ * come from — the account's own `m.fully_read` marker, and (its fallback)
+ * this account's read receipt.
+ */
+function paginatingRoom(shape: {
+  roomId: string;
+  events: MatrixEvent[];
+  paginationToken?: string | null;
+  fullyRead?: string;
+  readUpTo?: string | null;
+}): Room {
+  let token: string | null = shape.paginationToken === undefined ? "tok0" : shape.paginationToken;
+  const timeline = {
+    getEvents: () => shape.events,
+    getPaginationToken: () => token,
+    setPaginationToken: (next: string | null) => {
+      token = next;
+    },
+  };
+  return {
+    roomId: shape.roomId,
+    getMyMembership: () => "join",
+    getLiveTimeline: () => timeline,
+    getPendingEvents: () => [],
+    getMember: () => null,
+    getAccountData: (type: string) =>
+      type === "m.fully_read" && shape.fullyRead
+        ? ({ getContent: () => ({ event_id: shape.fullyRead }) } as MatrixEvent)
+        : undefined,
+    getEventReadUpTo: () => shape.readUpTo ?? null,
+    getUnfilteredTimelineSet: () => ({}),
+    loadMembersIfNeeded: vi.fn(async () => true),
+  } as unknown as Room;
+}
+
+describe("#211: scrolling back through older messages", () => {
+  it("asks the homeserver for an older page and folds it into the live timeline", async () => {
+    const events = [fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "newer", ts: 10 })];
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events, paginationToken: "tok1" });
+    const client = fakeClient({ rooms: [room] });
+    client.scrollback.mockImplementation(async (r: Room) => {
+      events.unshift(fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "older", ts: 5 }));
+      (r.getLiveTimeline() as unknown as { setPaginationToken: (t: string | null) => void }).setPaginationToken(null);
+      return r;
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const result = await connection.loadOlder("!r:workspace.example");
+
+    expect(client.scrollback).toHaveBeenCalledWith(room, 30);
+    // The homeserver's own token ran out in this one page: the very first
+    // message has been reached (#211 AC2), not a guess from the page size.
+    expect(result).toEqual({ loadedMore: true, atStart: true });
+    const messages = await connection.timeline("!r:workspace.example");
+    expect(messages.map((message) => message.body)).toEqual(["older", "newer"]);
+  });
+
+  it("answers atStart without asking again once the homeserver's own token is already exhausted", async () => {
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events: [], paginationToken: null });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const result = await connection.loadOlder("!r:workspace.example");
+
+    expect(client.scrollback).not.toHaveBeenCalled();
+    expect(result).toEqual({ loadedMore: false, atStart: true });
+  });
+
+  it("a connection hiccup answers 'not yet the beginning' rather than throwing", async () => {
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events: [], paginationToken: "tok1" });
+    const client = fakeClient({ rooms: [room] });
+    client.scrollback.mockRejectedValue(new Error("offline"));
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.loadOlder("!r:workspace.example")).resolves.toEqual({ loadedMore: false, atStart: false });
+  });
+
+  it("a room this account isn't in answers as if already at the beginning", async () => {
+    const client = fakeClient();
+    client.getRoom.mockReturnValue(undefined);
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.loadOlder("!gone:workspace.example")).resolves.toEqual({ loadedMore: false, atStart: true });
+    expect(client.scrollback).not.toHaveBeenCalled();
+  });
+});
+
+describe("#212: the read marker and the unread line", () => {
+  it("readMarker prefers the account's own m.fully_read marker", async () => {
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events: [], fullyRead: "$5", readUpTo: "$1" });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.readMarker("!r:workspace.example")).toBe("$5");
+  });
+
+  it("falls back to this account's own read receipt when no marker has ever been set", async () => {
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events: [], readUpTo: "$3" });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.readMarker("!r:workspace.example")).toBe("$3");
+  });
+
+  it("answers null when neither a marker nor a receipt exists", async () => {
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events: [] });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.readMarker("!r:workspace.example")).toBeNull();
+  });
+
+  it("unreadBoundaryFrom finds the first main-flow row after the anchor, skipping a reaction in between", async () => {
+    const events = [
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "read", ts: 1 }),
+      fakeEvent({ type: "m.reaction", sender: "@bose:workspace.example", ts: 2, relatesTo: { rel_type: "m.annotation", event_id: "$1", key: "👍" } }),
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "unread", ts: 3 }),
+    ];
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.unreadBoundaryFrom("!r:workspace.example", "$1")).toEqual({ kind: "found", eventId: "$3" });
+  });
+
+  it("skips a thread reply — it never renders in the main flow", async () => {
+    const events = [
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "root", ts: 1 }),
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.text",
+        body: "reply",
+        ts: 2,
+        relatesTo: { rel_type: "m.thread", event_id: "$1" },
+      }),
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "next in main flow", ts: 3 }),
+    ];
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.unreadBoundaryFrom("!r:workspace.example", "$1")).toEqual({ kind: "found", eventId: "$3" });
+  });
+
+  it("answers 'unknown' when the anchor is older than anything loaded (#211 is how a caller goes looking for it)", async () => {
+    const events = [fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "only one loaded", ts: 9 })];
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.unreadBoundaryFrom("!r:workspace.example", "$1")).toEqual({ kind: "unknown" });
+  });
+
+  it("answers 'none' when the anchor already covers the newest loaded message", async () => {
+    const events = [fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "latest", ts: 1 })];
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.unreadBoundaryFrom("!r:workspace.example", "$1")).toEqual({ kind: "none" });
+  });
+
+  it("advanceReadMarker sets m.fully_read at the given event — never touching the read receipt", async () => {
+    const room = paginatingRoom({ roomId: "!r:workspace.example", events: [] });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.advanceReadMarker("!r:workspace.example", "$7");
+
+    expect(client.setRoomReadMarkers).toHaveBeenCalledWith("!r:workspace.example", "$7");
+    expect(client.sendReadReceipt).not.toHaveBeenCalled();
   });
 });
 
