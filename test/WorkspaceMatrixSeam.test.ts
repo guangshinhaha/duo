@@ -141,6 +141,7 @@ function fakeRoom(pendingEvents: MatrixEvent[] = []): Room {
       ],
     }),
     getMember: member,
+    loadMembersIfNeeded: vi.fn(async () => true),
   } as unknown as Room;
 }
 
@@ -156,6 +157,8 @@ type FakeClient = MatrixClient & {
   sendMessage: ReturnType<typeof vi.fn>;
   login: ReturnType<typeof vi.fn>;
   getAccountData: ReturnType<typeof vi.fn>;
+  setAccountData: ReturnType<typeof vi.fn>;
+  getProfileInfo: ReturnType<typeof vi.fn>;
   getPushRules: ReturnType<typeof vi.fn>;
   createRoom: ReturnType<typeof vi.fn>;
   invite: ReturnType<typeof vi.fn>;
@@ -205,6 +208,10 @@ function fakeClient(
         ? { getContent: () => ({ "@bose:workspace.example": over.directRoomIds ?? [] }) }
         : undefined,
     ),
+    setAccountData: vi.fn(async () => ({})),
+    getProfileInfo: vi.fn(async () => {
+      throw new Error("no profile in this fake — override per test");
+    }),
     getPushRules: vi.fn(async () => ({
       global: { room: (over.mutedRoomIds ?? []).map((roomId) => ({ rule_id: roomId, enabled: true, actions: [] })) },
     })),
@@ -258,7 +265,9 @@ function summaryRoom(shape: {
   events: MatrixEvent[];
   /** #69: the room's account-data notification mode, as another device wrote it. */
   accountDataMode?: "mentions";
-  /** #214: `rooms()` reads only joined rooms now — "join" unless a test says otherwise. */
+  /** #208: set when this room should read as an invite the SDK knows was flagged `is_direct` — `getDMInviter()`'s own answer. */
+  dmInviter?: string;
+  /** #214: `rooms()` reads only joined rooms now; #208: also the common case this account's own membership defaults to — "join" unless a test says otherwise. */
   membership?: "join" | "invite";
   /** #223: the room's own topic and picture, as `m.room.topic`/`m.room.avatar` state would carry them — absent when the room has none. */
   topic?: string;
@@ -268,12 +277,13 @@ function summaryRoom(shape: {
   /** #209: this device's own sends still in flight — empty unless a test asks otherwise. */
   pendingEvents?: MatrixEvent[];
 }): Room {
+  const lastEventTs = shape.events.length > 0 ? shape.events[shape.events.length - 1]!.getTs() : 0;
   return {
     roomId: shape.roomId,
     name: shape.name,
     getJoinRule: () => shape.joinRule,
     getMyMembership: () => shape.membership ?? "join",
-    getMembers: () => shape.members.map((member) => ({ userId: member.userId, name: member.name, membership: "join" })),
+    getMembers: () => shape.members.map((member) => ({ userId: member.userId, name: member.name, rawDisplayName: member.name, membership: "join" })),
     getUnreadNotificationCount: (type?: string) => (type === "highlight" ? shape.highlightCount : shape.notificationCount),
     getLiveTimeline: () => ({ getEvents: () => shape.events }),
     getPendingEvents: () => shape.pendingEvents ?? [],
@@ -282,7 +292,9 @@ function summaryRoom(shape: {
     // the timeline projection resolves sender names through this door.
     getMember: (userId: string) => {
       const member = shape.members.find((candidate) => candidate.userId === userId);
-      return member ? ({ name: member.name ?? null, powerLevel: member.powerLevel ?? 0 } as RoomMember) : null;
+      return member
+        ? ({ name: member.name ?? null, rawDisplayName: member.name ?? null, powerLevel: member.powerLevel ?? 0 } as RoomMember)
+        : null;
     },
     getAccountData: (type: string) =>
       type === "duo.notifications" && shape.accountDataMode
@@ -290,9 +302,15 @@ function summaryRoom(shape: {
         : undefined,
     // #223: the three state events a group's name, topic and picture ride
     // on, read the way the SDK's RoomState does — a stateKey of "" and
-    // null when the room has never carried that event.
+    // null when the room has never carried that event. #208: `m.room.name`
+    // is the real name only — never the SDK's auto-generated fill-in, which
+    // `.name` above stands in for in every OTHER test here. `projectRoom`
+    // reads this door, not `.name`.
     currentState: {
       getStateEvents: (type: string) => {
+        if (type === "m.room.name") {
+          return shape.name !== null ? ({ getContent: () => ({ name: shape.name }) } as MatrixEvent) : null;
+        }
         if (type === "m.room.topic") {
           return shape.topic === undefined ? null : ({ getContent: () => ({ topic: shape.topic }) } as MatrixEvent);
         }
@@ -305,6 +323,9 @@ function summaryRoom(shape: {
         return null;
       },
     },
+    getLastActiveTimestamp: () => lastEventTs,
+    loadMembersIfNeeded: vi.fn(async () => true),
+    getDMInviter: () => shape.dmInviter,
   } as unknown as Room;
 }
 
@@ -928,6 +949,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         avatarUrl: null,
         members: [{ userId: "@bose:workspace.example", name: "Bose" }], // this member's own id never lists
         latest: { at: 3_000, body: "lunch?" },
+        lastActiveAt: 3_000,
         unread: { notifications: 0, mentions: 0 },
         muted: false,
         notifications: "all", // nothing muted, nothing scoped — the default
@@ -944,6 +966,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
           { userId: "@duo-carol:workspace.example", name: "duo-carol" },
         ],
         latest: { at: 2_000, body: "ship it" },
+        lastActiveAt: 2_000,
         unread: { notifications: 3, mentions: 0 },
         muted: false,
         notifications: "all",
@@ -960,6 +983,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
           { userId: "@eeyore:workspace.example", name: "eeyore" }, // no name on record: the localpart, never a blank
         ],
         latest: { at: 1_500, body: "all-hands friday" },
+        lastActiveAt: 1_500,
         unread: { notifications: 9, mentions: 9 },
         muted: true, // the server's own push rule — true on every device
         notifications: "nothing", // the same rule, read as the mode it is (#69)
@@ -1029,6 +1053,13 @@ describe("the rooms projection the conversation list reads (#63)", () => {
 
     await expect(connection.startDirect("@carol:workspace.example")).resolves.toBe("!fresh:workspace.example");
     expect(client.createRoom).toHaveBeenCalledWith({ is_direct: true, invite: ["@carol:workspace.example"] });
+    // #208: the homeserver never infers DM-ness from `is_direct` on create —
+    // only this account's own `m.direct` record does, merged with whatever
+    // another device already wrote there (the fake's default: Bose's).
+    expect(client.setAccountData).toHaveBeenCalledWith("m.direct", {
+      "@bose:workspace.example": [],
+      "@carol:workspace.example": ["!fresh:workspace.example"],
+    });
 
     await connection.leave("!r:workspace.example");
     expect(client.leave).toHaveBeenCalledWith("!r:workspace.example");
@@ -1051,6 +1082,166 @@ describe("the rooms projection the conversation list reads (#63)", () => {
       { userId: "@carol:workspace.example", name: "Carol" },
       { userId: "@duo-carol:workspace.example", name: "duo-carol" }, // display name absent: the localpart, never a blank
     ]);
+  });
+
+  it("a member whose display name equals their own user id falls back to the localpart, never the raw id (#208)", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "r",
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            // A member record that merely echoes the id back — the SDK's
+            // own stand-in for "nobody ever set one" (#208).
+            { userId: "@weird:workspace.example", name: "@weird:workspace.example" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [room] = await connection.rooms();
+    expect(room?.members).toEqual([{ userId: "@weird:workspace.example", name: "weird" }]);
+  });
+
+  it("backfills `m.direct` for a joined room the SDK can still tell was a direct invite — no second device needed (#208)", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!dm:workspace.example",
+          name: null,
+          joinRule: "invite",
+          members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          dmInviter: "@bose:workspace.example",
+          membership: "join",
+        }),
+      ],
+      // Nothing on record for Bose yet — this room was never written.
+      directRoomIds: [],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [room] = await connection.rooms();
+    expect(room?.kind).toBe("direct"); // read as a DM on the very read that discovered it — no reload needed
+    expect(client.setAccountData).toHaveBeenCalledWith("m.direct", { "@bose:workspace.example": ["!dm:workspace.example"] });
+  });
+
+  it("never backfills a room nobody ever flagged `is_direct`, or one not yet joined", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "r",
+          joinRule: "invite",
+          members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          // No dmInviter: an ordinary group invite, never flagged direct.
+        }),
+        summaryRoom({
+          roomId: "!pending:workspace.example",
+          name: null,
+          joinRule: "invite",
+          members: [{ userId: "@dee:workspace.example", name: "Dee" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          dmInviter: "@dee:workspace.example",
+          membership: "invite", // still just an invite — not joined yet
+        }),
+      ],
+      directRoomIds: [],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.rooms();
+    expect(client.setAccountData).not.toHaveBeenCalled();
+  });
+
+  it("a duo's chip is attributed to the owner's own display name from THIS room, when the owner shares it — no profile fetch needed", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!together:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [
+            { userId: "@carol:workspace.example", name: "Carol Chen" },
+            { userId: "@duo-carol:workspace.example", name: "duo-carol" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [room] = await connection.rooms();
+    expect(room?.members).toEqual([
+      { userId: "@carol:workspace.example", name: "Carol Chen" },
+      { userId: "@duo-carol:workspace.example", name: "duo-carol", ownerName: "Carol Chen" },
+    ]);
+    expect(client.getProfileInfo).not.toHaveBeenCalled();
+  });
+
+  it("a duo's chip is attributed to the owner's own display name from the workspace's profile, when the owner never joined this room (#208)", async () => {
+    const client = fakeClient({
+      rooms: [
+        // A 1:1 with just the duo — the owner (Carol) never joined this one.
+        summaryRoom({
+          roomId: "!duo-only:workspace.example",
+          name: null,
+          joinRule: "invite",
+          members: [{ userId: "@duo-carol:workspace.example", name: "duo-carol" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    client.getProfileInfo = vi.fn(async () => ({ displayname: "Carol Chen" })) as unknown as FakeClient["getProfileInfo"];
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [room] = await connection.rooms();
+    expect(room?.members).toEqual([{ userId: "@duo-carol:workspace.example", name: "duo-carol", ownerName: "Carol Chen" }]);
+    expect(client.getProfileInfo).toHaveBeenCalledWith("@carol:workspace.example");
+  });
+
+  it("a duo whose owner's profile can't be found falls back to no owner name — the caller's own grammar label stands in, never a raw id", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!duo-only:workspace.example",
+          name: null,
+          joinRule: "invite",
+          members: [{ userId: "@duo-carol:workspace.example", name: "duo-carol" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    // The default fake's getProfileInfo rejects — nothing to resolve from.
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [room] = await connection.rooms();
+    expect(room?.members).toEqual([{ userId: "@duo-carol:workspace.example", name: "duo-carol" }]); // no `ownerName`
   });
 
   it("names, topics and pictures a conversation — #223's three verbs, each its own homeserver call", async () => {

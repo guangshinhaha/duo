@@ -79,7 +79,8 @@ describe("#141 — your duo is pinned first, and is never a person", () => {
     renderList({ connection: connectionWith([duoRoom, room("!b:w")]), session: {} as never });
 
     const rows = await screen.findAllByTestId("conversations-room");
-    const [carol, bose] = rows;
+    // #208: sectioned — Direct messages ahead of Duos — so Bose leads and carol's duo follows.
+    const [bose, carol] = rows;
     // The duo's title is the structural possessive, never the display name it set.
     expect(within(carol!).getByTestId("room-title")).toHaveTextContent("carol's duo");
     expect(carol!.textContent).not.toContain("Totally A Person");
@@ -95,6 +96,67 @@ describe("#141 — your duo is pinned first, and is never a person", () => {
     await screen.findByTestId("conversations-list");
     expect(screen.queryByTestId("duo-link")).toBeNull();
     expect(screen.getByTestId("no-duo-pair")).toBeInTheDocument();
+  });
+});
+
+describe("#208 — people are named, kinds are visible, and the list is sectioned", () => {
+  it("a direct message shows the other person's real name and the person icon, never a raw id or a group's #", async () => {
+    const dm = room("!dm:w", { kind: "direct", name: null, members: [{ userId: "@bose:workspace.example", name: "Bose" }] });
+    renderList({ connection: connectionWith([dm]), session: {} as never });
+
+    const row = await screen.findByTestId("conversations-room");
+    expect(within(row).getByTestId("room-title")).toHaveTextContent("Bose");
+    expect(within(row).getByTestId("chat-avatar")).toHaveAttribute("data-kind", "person");
+    expect(within(row).getByTestId("chat-avatar")).toHaveTextContent("B");
+  });
+
+  it("a group room with no explicit name still reads under a sensible generated name, and is still categorized as a group — never '#' only, never a person", async () => {
+    const unnamed = room("!g:w", {
+      kind: "group",
+      name: null,
+      members: [
+        { userId: "@ana:workspace.example", name: "Ana" },
+        { userId: "@bose:workspace.example", name: "Bose" },
+      ],
+    });
+    renderList({ connection: connectionWith([unnamed]), session: {} as never });
+
+    const row = await screen.findByTestId("conversations-room");
+    // No `m.room.name`: the title falls back to its members, exactly the
+    // way a direct conversation's would — but the icon still reads "group",
+    // driven by `kind`, never by whether a name happened to be set (#208).
+    expect(within(row).getByTestId("room-title")).toHaveTextContent("Ana, Bose");
+    expect(within(row).getByTestId("chat-avatar")).toHaveAttribute("data-kind", "group");
+    expect(within(row).getByTestId("chat-avatar")).toHaveTextContent("#");
+  });
+
+  it("sections render in order — Channels, then Direct messages, then Duos — each its own icon", async () => {
+    const channel = room("!c:w", { kind: "channel", name: "general", members: [{ userId: "@dee:workspace.example", name: "Dee" }] });
+    const dm = room("!d:w", { kind: "direct", name: null, members: [{ userId: "@bose:workspace.example", name: "Bose" }] });
+    const duo = room("!e:w", { kind: "direct", name: null, members: [{ userId: "@duo-carol:workspace.example", name: "duo-carol" }] });
+    // Shuffled on purpose: the sections are the seam's own grouping, not the input order.
+    renderList({ connection: connectionWith([duo, dm, channel]), session: {} as never });
+
+    await screen.findAllByTestId("conversations-room");
+    const headers = screen.getAllByTestId(/^chat-section-/);
+    expect(headers.map((header) => header.getAttribute("data-testid"))).toEqual([
+      "chat-section-channels",
+      "chat-section-direct-messages",
+      "chat-section-duos",
+    ]);
+    const titles = screen.getAllByTestId("room-title").map((title) => title.textContent);
+    expect(titles).toEqual(["general", "Bose", "carol's duo"]);
+  });
+
+  it("a muted conversation sits last within its own section, not off the list", async () => {
+    const loud = room("!loud:w", { kind: "direct", name: null, members: [{ userId: "@ana:workspace.example", name: "Ana" }], muted: false });
+    const quiet = room("!quiet:w", { kind: "direct", name: null, members: [{ userId: "@bose:workspace.example", name: "Bose" }], muted: true });
+    // Muted one first in the input: it must still land last once rendered.
+    renderList({ connection: connectionWith([quiet, loud]), session: {} as never });
+
+    await screen.findAllByTestId("conversations-room");
+    const titles = screen.getAllByTestId("room-title").map((title) => title.textContent);
+    expect(titles).toEqual(["Ana", "Bose"]);
   });
 });
 

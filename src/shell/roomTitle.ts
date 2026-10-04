@@ -17,14 +17,16 @@ export function roomTitle(room: RoomSummary): string {
 }
 
 /**
- * "{owner}'s duo" for every duo riding in a room — read from the member id
- * grammar, never from a name the duo chose (vocabulary.md: a duo is
- * attributed structurally).
+ * "{owner}'s duo" for every duo riding in a room — attributed to the owner
+ * the member id grammar names (vocabulary.md: a duo is attributed
+ * structurally, never by a name it chose), shown under the owner's OWN
+ * display name when the projection found one (#208) and the grammar's own
+ * label (the owner's localpart) when it didn't — never a raw id either way.
  */
 export function roomDuoLabels(room: RoomSummary): string[] {
   return room.members
     .filter((member) => isDuoUserId(member.userId))
-    .map((member) => `${duoOwnerLabel(member.userId) ?? localpartOf(member.userId)}'s duo`);
+    .map((member) => `${member.ownerName ?? duoOwnerLabel(member.userId) ?? localpartOf(member.userId)}'s duo`);
 }
 
 /** A room that is one colleague's duo and nobody else — it reads as that duo, by the id grammar's label. */
