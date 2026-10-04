@@ -2,18 +2,29 @@ import { duoOwnerLabel, duoOwnerUserIdOf, isDuoUserId, localpartOf } from "../wo
 import type { RoomMemberRef, RoomSummary } from "../workspace/matrix.js";
 
 /**
- * The title a room reads under: its name when it has one, its members when
- * it doesn't (a direct conversation IS its members), its id as the last
- * resort. Pure presentation over the projection — the chat list, the room
- * and the thread all read from here, so they can never title one room two
- * ways.
+ * The title a room reads under (#245): its name when it has one, its joined
+ * members when it doesn't (a direct conversation IS its members), the
+ * members it's still waiting on an invite to answer when there are no
+ * joined ones, matrix-js-sdk's own generated name (heroes, including
+ * members who've since left) when none of those found anything, and a
+ * plain "Conversation" as the true last resort — NEVER the raw room id,
+ * which reads as nothing a person recognizes. Pure presentation over the
+ * projection — the chat list, the room and the thread all read from here,
+ * so they can never title one room two ways.
  */
 export function roomTitle(room: RoomSummary): string {
   if (room.name !== null) {
     return room.name;
   }
-  const names = room.members.map((member) => member.name ?? localpartOf(member.userId));
-  return names.length > 0 ? names.join(", ") : room.roomId;
+  const joinedNames = room.members.map((member) => member.name ?? localpartOf(member.userId));
+  if (joinedNames.length > 0) {
+    return joinedNames.join(", ");
+  }
+  const invitedNames = (room.invitedMembers ?? []).map((member) => member.name ?? localpartOf(member.userId));
+  if (invitedNames.length > 0) {
+    return invitedNames.join(", ");
+  }
+  return room.generatedName ?? "Conversation";
 }
 
 /**
