@@ -81,6 +81,10 @@ function fakeConnection(
     replyInThread: vi.fn(async () => {}),
     markRead: vi.fn(async () => {}),
     startDirect: vi.fn(async () => "!x:workspace.example"),
+    createRoom: vi.fn(async () => "!x:workspace.example"),
+    invite: vi.fn(async () => {}),
+    invites: vi.fn(async () => []),
+    joinRoom: vi.fn(async () => {}),
     leave: vi.fn(async () => {}),
     setNotificationMode: vi.fn(async () => {}),
     uploadFile: vi.fn(async () => {
@@ -90,6 +94,8 @@ function fakeConnection(
     loadMedia: vi.fn(async () => options.image ?? null),
     getUrlPreview: vi.fn(async () => options.preview ?? null),
     searchPeople: vi.fn(async () => []),
+    findRooms: vi.fn(async () => []),
+    getProfile: vi.fn(async () => null),
     subscribe: vi.fn(() => () => {}),
     stop: vi.fn(async () => {}),
   };

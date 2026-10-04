@@ -31,7 +31,19 @@ const room = (roomId: string, overrides: Partial<RoomSummary> = {}): RoomSummary
 });
 
 function connectionWith(rooms: RoomSummary[]): WorkspaceConnection {
-  return { rooms: async () => rooms, subscribe: () => () => {} } as unknown as WorkspaceConnection;
+  return {
+    rooms: async () => rooms,
+    subscribe: () => () => {},
+    // #207: CommandSearch's local filter and recent-conversations state —
+    // minimal fakes, since the matching rules are pinned at the seam
+    // (WorkspaceMatrixSeam.test.ts) and in CommandSearch.test.tsx.
+    findRooms: async (query: string) => {
+      const needle = query.trim().toLowerCase();
+      return needle === "" ? rooms : rooms.filter((room) => (room.name ?? "").toLowerCase().includes(needle));
+    },
+    searchPeople: async () => [],
+    getProfile: async () => null,
+  } as unknown as WorkspaceConnection;
 }
 
 function renderList(props: Partial<Parameters<typeof ChatList>[0]> = {}, route: Route = "chats") {

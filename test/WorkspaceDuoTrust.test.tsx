@@ -133,6 +133,8 @@ function fakeConnection(timeline: RoomMessage[], roomList: RoomSummary[] = rooms
     loadMedia: vi.fn(async () => null),
     getUrlPreview: vi.fn(async () => null),
     searchPeople: vi.fn(async () => []),
+    findRooms: vi.fn(async () => []),
+    getProfile: vi.fn(async () => null),
     subscribe: vi.fn((handler: (roomId: string) => void) => {
       listener = handler;
       return () => {

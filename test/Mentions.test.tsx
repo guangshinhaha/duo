@@ -99,6 +99,9 @@ function fakeConnection(state: { rooms: RoomSummary[]; mentions: MentionHit[] })
     searchMessages: vi.fn(async () => ({ hits: [], next: null })),
     mentions: vi.fn(async () => [...state.mentions]),
     markRead: vi.fn(async () => {}),
+    searchPeople: vi.fn(async () => []),
+    findRooms: vi.fn(async () => []),
+    getProfile: vi.fn(async () => null),
     subscribe: vi.fn(() => () => {}),
     stop: vi.fn(async () => {}),
   } as unknown as WorkspaceConnection;

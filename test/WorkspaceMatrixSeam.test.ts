@@ -142,6 +142,13 @@ function fakeRoom(pendingEvents: MatrixEvent[] = []): Room {
     }),
     getMember: member,
     loadMembersIfNeeded: vi.fn(async () => true),
+    getMembers: () => [{ userId: "@bose:workspace.example", name: "Bose", membership: "join" }],
+    // #207: startDirect's existing-DM check walks every visible room —
+    // "join" and no DM partner here, so the default fixture never looks
+    // like one already open with anybody.
+    getMyMembership: () => "join",
+    guessDMUserId: () => "@nobody:workspace.example",
+    normalizedName: "project-x",
   } as unknown as Room;
 }
 
@@ -153,6 +160,7 @@ type FakeClient = MatrixClient & {
   setAccessToken: ReturnType<typeof vi.fn>;
   stopClient: ReturnType<typeof vi.fn>;
   getRooms: ReturnType<typeof vi.fn>;
+  getVisibleRooms: ReturnType<typeof vi.fn>;
   getRoom: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   login: ReturnType<typeof vi.fn>;
@@ -168,6 +176,7 @@ type FakeClient = MatrixClient & {
   deletePushRule: ReturnType<typeof vi.fn>;
   setRoomAccountData: ReturnType<typeof vi.fn>;
   searchUserDirectory: ReturnType<typeof vi.fn>;
+  getProfileInfo: ReturnType<typeof vi.fn>;
   sendReadReceipt: ReturnType<typeof vi.fn>;
   sendEvent: ReturnType<typeof vi.fn>;
   redactEvent: ReturnType<typeof vi.fn>;
@@ -200,6 +209,7 @@ function fakeClient(
     setAccessToken: vi.fn(),
     stopClient: vi.fn(() => Promise.resolve()),
     getRooms: vi.fn(() => over.rooms ?? [fakeRoom()]),
+    getVisibleRooms: vi.fn(() => over.rooms ?? [fakeRoom()]),
     getRoom: vi.fn(() => over.rooms?.[0] ?? fakeRoom()),
     sendMessage: vi.fn(() => Promise.resolve()),
     login: vi.fn(() => Promise.resolve({ access_token: "syt_workspace_token", user_id: "@ana:workspace.example", device_id: "YGBNAUIOMK" })),
@@ -228,6 +238,9 @@ function fakeClient(
         { user_id: "@duo-carol:workspace.example", display_name: undefined },
       ],
     })),
+    getProfileInfo: vi.fn(async () => {
+      throw new Error("no such user");
+    }),
     sendReadReceipt: vi.fn(async () => ({})),
     sendEvent: vi.fn(async () => ({})),
     redactEvent: vi.fn(async () => ({})),
@@ -281,6 +294,7 @@ function summaryRoom(shape: {
   return {
     roomId: shape.roomId,
     name: shape.name,
+    normalizedName: shape.name ?? "",
     getJoinRule: () => shape.joinRule,
     getMyMembership: () => shape.membership ?? "join",
     getMembers: () => shape.members.map((member) => ({ userId: member.userId, name: member.name, rawDisplayName: member.name, membership: "join" })),
@@ -326,6 +340,9 @@ function summaryRoom(shape: {
     getLastActiveTimestamp: () => lastEventTs,
     loadMembersIfNeeded: vi.fn(async () => true),
     getDMInviter: () => shape.dmInviter,
+    // #207's findRooms: for a direct room, guessed from its one other
+    // member, the way the real SDK's `guessDMUserId` reads a two-person room.
+    guessDMUserId: () => shape.members[0]?.userId ?? "",
   } as unknown as Room;
 }
 
@@ -1399,6 +1416,187 @@ describe("a group conversation's name, topic, picture and edit permissions (#223
     );
 
     expect(handler).toHaveBeenCalledWith(room.roomId);
+  });
+});
+
+describe("the one search box's seam (#207)", () => {
+  it("findRooms matches a room's own name, local to the client — never a network call", async () => {
+    const rooms = [
+      summaryRoom({ roomId: "!a:workspace.example", name: "project-x", joinRule: "invite", members: [], notificationCount: 0, highlightCount: 0, events: [] }),
+      summaryRoom({ roomId: "!b:workspace.example", name: "announce", joinRule: "public", members: [], notificationCount: 0, highlightCount: 0, events: [] }),
+    ];
+    const client = fakeClient({ rooms });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const found = await connection.findRooms("project");
+
+    expect(found.map((room) => room.roomId)).toEqual(["!a:workspace.example"]);
+    // Local to the client's own visible rooms — never the directory (the
+    // one source here that is an actual network ask).
+    expect(client.searchUserDirectory).not.toHaveBeenCalled();
+  });
+
+  it("findRooms matches a direct conversation on its partner's name, not only the room's own (nameless) title", async () => {
+    const dm = summaryRoom({
+      roomId: "!dm:workspace.example",
+      name: null,
+      joinRule: "invite",
+      members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+    });
+    const client = fakeClient({ rooms: [dm], directRoomIds: ["!dm:workspace.example"] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const found = await connection.findRooms("bose");
+
+    expect(found.map((room) => room.roomId)).toEqual(["!dm:workspace.example"]);
+  });
+
+  it("ranks matches by last activity, and an empty query answers the member's most recent conversations", async () => {
+    const stale = summaryRoom({
+      roomId: "!stale:workspace.example",
+      name: "stale-room",
+      joinRule: "invite",
+      members: [],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "old", ts: 1 })],
+    });
+    const fresh = summaryRoom({
+      roomId: "!fresh:workspace.example",
+      name: "fresh-room",
+      joinRule: "invite",
+      members: [],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "new", ts: 999 })],
+    });
+    const client = fakeClient({ rooms: [stale, fresh] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect((await connection.findRooms("")).map((room) => room.roomId)).toEqual(["!fresh:workspace.example", "!stale:workspace.example"]);
+  });
+
+  it("searchPeople merges the directory with members of rooms already shared, de-duplicated by user id", async () => {
+    const sharedRoom = summaryRoom({
+      roomId: "!shared:workspace.example",
+      name: "shared",
+      joinRule: "invite",
+      members: [{ userId: "@carol:workspace.example", name: "Carol From Membership" }, { userId: "@priya:workspace.example", name: "Priya" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+    });
+    const client = fakeClient({ rooms: [sharedRoom] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const people = await connection.searchPeople("ca");
+
+    // Carol comes from BOTH sources (local membership and the directory
+    // fixture) — one entry, not two, and the first source (local) names her.
+    expect(people.filter((person) => person.userId === "@carol:workspace.example")).toHaveLength(1);
+    expect(people).toContainEqual({ userId: "@carol:workspace.example", name: "Carol From Membership" });
+  });
+
+  it("a person the directory doesn't carry is still found by local membership, when the directory itself fails", async () => {
+    const sharedRoom = summaryRoom({
+      roomId: "!shared:workspace.example",
+      name: "shared",
+      joinRule: "invite",
+      members: [{ userId: "@priya:workspace.example", name: "Priya" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+    });
+    const client = fakeClient({ rooms: [sharedRoom] });
+    client.searchUserDirectory.mockRejectedValueOnce(new Error("directory down"));
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.searchPeople("priya")).resolves.toEqual([{ userId: "@priya:workspace.example", name: "Priya" }]);
+  });
+
+  it("a full user id finds someone no shared room and no directory entry can — the exact-id fallback", async () => {
+    const client = fakeClient();
+    client.searchUserDirectory.mockResolvedValueOnce({ results: [] });
+    client.getProfileInfo.mockResolvedValueOnce({ displayname: "Priya (other team)" });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const people = await connection.searchPeople("@priya:workspace.example");
+
+    expect(client.getProfileInfo).toHaveBeenCalledWith("@priya:workspace.example");
+    expect(people).toEqual([{ userId: "@priya:workspace.example", name: "Priya (other team)" }]);
+  });
+
+  it("a query that merely contains an '@' and a ':' but isn't a real id asks no exact lookup of it", async () => {
+    const client = fakeClient();
+    client.searchUserDirectory.mockResolvedValueOnce({ results: [] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.searchPeople("meeting @ 3: refunds")).toEqual([]);
+    expect(client.getProfileInfo).not.toHaveBeenCalled();
+  });
+
+  it("another org's person — no shared room, and the directory (membership-scoped, search_all_users:false) refuses them — never appears from a name search", async () => {
+    const client = fakeClient();
+    client.searchUserDirectory.mockResolvedValueOnce({ results: [] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    // The org wall is enforced server-side (the directory's own answer, and
+    // no shared room to find them through locally); the client adds no
+    // filtering, and should need none — this is what that looks like from
+    // here: nothing comes back for a name.
+    expect(await connection.searchPeople("someone at another company")).toEqual([]);
+  });
+
+  it("startDirect reuses a DM already open with that person instead of creating a duplicate", async () => {
+    const existing = summaryRoom({
+      roomId: "!already:workspace.example",
+      name: null,
+      joinRule: "invite",
+      members: [{ userId: "@carol:workspace.example", name: "Carol" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+    });
+    const client = fakeClient({ rooms: [existing], directRoomIds: ["!already:workspace.example"] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.startDirect("@carol:workspace.example")).resolves.toBe("!already:workspace.example");
+    expect(client.createRoom).not.toHaveBeenCalled();
+  });
+
+  it("startDirect still creates one when no DM with that person exists yet", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.startDirect("@carol:workspace.example")).resolves.toBe("!fresh:workspace.example");
+    expect(client.createRoom).toHaveBeenCalledWith({ is_direct: true, invite: ["@carol:workspace.example"] });
+  });
+
+  it("getProfile answers the homeserver's own name and avatar for an id, and null when it won't say", async () => {
+    const client = fakeClient();
+    client.getProfileInfo.mockResolvedValueOnce({ displayname: "Carol", avatar_url: "mxc://workspace.example/a1" });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.getProfile("@carol:workspace.example")).resolves.toEqual({
+      userId: "@carol:workspace.example",
+      name: "Carol",
+      avatarUrl: "mxc://workspace.example/a1",
+    });
+    await expect(connection.getProfile("@nobody:workspace.example")).resolves.toBeNull();
   });
 });
 

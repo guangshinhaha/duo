@@ -65,3 +65,29 @@ export function duoOwnerLabel(duoUserId: string): string | null {
   const owner = duoOwnerUserIdOf(duoUserId);
   return owner === null ? null : localpartOf(owner);
 }
+
+/**
+ * The homeserver part of a Matrix user id — `@alice:acme.example` →
+ * "acme.example". This client's organisation boundary IS the homeserver
+ * (one org, one homeserver, the ratified platform decision core PR #194
+ * records; #235's org wall is federation refusing a foreign one) — so this
+ * is the fact a person's "org" means, never a claim a profile makes about
+ * itself. Empty for an unshapely id.
+ */
+export function serverNameOf(userId: string): string {
+  const match = USER_ID_PATTERN.exec(userId);
+  return match ? match[2]! : "";
+}
+
+/**
+ * How a directory entry reads, wherever the workspace's people search
+ * surfaces (the pencil dialog, #63; the one search box, #207): a duo by its
+ * owner, from the id's grammar — "carol's duo" — never by the display name
+ * it chose; a person by their name.
+ */
+export function directoryEntryLabel(entry: { readonly userId: string; readonly name: string }): string {
+  if (isDuoUserId(entry.userId)) {
+    return `${duoOwnerLabel(entry.userId) ?? localpartOf(entry.userId)}'s duo`;
+  }
+  return entry.name;
+}

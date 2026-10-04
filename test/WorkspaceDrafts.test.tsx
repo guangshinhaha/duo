@@ -134,6 +134,12 @@ function fakeConnection(timelines: Record<string, RoomMessage[]>) {
     }),
     stop: vi.fn(async () => {}),
     markRead: vi.fn(async () => {}),
+    // #207: the sidebar's CommandSearch renders alongside every route and
+    // calls these on mount — minimal fakes, since none of these ACs drive
+    // the search box itself.
+    findRooms: vi.fn(async () => roomsFixture()),
+    searchPeople: vi.fn(async () => []),
+    getProfile: vi.fn(async () => null),
   } as unknown as WorkspaceConnection;
   return {
     connection,

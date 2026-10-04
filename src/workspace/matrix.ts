@@ -21,6 +21,14 @@ import {
   type MatrixEvent,
   type Room as MatrixRoom,
 } from "matrix-js-sdk";
+// #207: case- and accent-insensitive matching for the one search box's
+// display-name matching — Apache-2.0, the SDK's own fold (it also strips the
+// zero-width tricks a name can carry), used exactly as Element uses it
+// rather than reimplemented here. Never used on a user id (see
+// `matchesQuery` and `searchPeople`'s exact-id branch below): its homoglyph
+// pass folds visually-similar sequences, which is right for matching a
+// typed name and wrong for an id meant to resolve to one exact account.
+import { normalize } from "matrix-js-sdk/lib/utils";
 import { duoOwnerUserIdOf, localpartOf } from "./identity.js";
 import { normalizeHomeserverUrl } from "../homeserver.js";
 import {
@@ -111,6 +119,20 @@ export interface RoomEditPermissions {
   readonly name: boolean;
   readonly topic: boolean;
   readonly avatar: boolean;
+}
+
+/**
+ * One person's profile, looked up directly (#207): the homeserver's own
+ * answer to "who is this id", not waited on from room membership — the way
+ * to show a name, and an avatar, for someone the one search box found but
+ * no shared room has introduced yet. Null from the lookup, not this shape,
+ * is how a caller hears "the server won't say".
+ */
+export interface PersonProfile {
+  readonly userId: string;
+  /** The server's profile name, else the localpart — a display name is still a claim, never the id. */
+  readonly name: string;
+  readonly avatarUrl: string | null;
 }
 
 /**
@@ -516,7 +538,14 @@ export interface WorkspaceConnection {
    * states the result as the room's own.
    */
   setRoomAvatar(roomId: string, mxcUrl: string): Promise<void>;
-  /** Creates a direct conversation with a workspace user (a person or a colleague's duo) and answers its room id. */
+  /**
+   * Creates a direct conversation with a workspace user (a person or a
+   * colleague's duo) and answers its room id. #207: reuses a DM already
+   * open with that person (the account's own `m.direct` record of it)
+   * rather than opening a second one — the directory and the one search
+   * box can both lead here, and choosing someone twice must land in the
+   * same conversation, not a duplicate of it.
+   */
   startDirect(userId: string): Promise<string>;
   /**
    * Creates a named, private group conversation (#214) and answers its room
@@ -560,8 +589,36 @@ export interface WorkspaceConnection {
    * to write again.
    */
   setNotificationMode(roomId: string, mode: NotificationMode): Promise<void>;
-  /** Searches the workspace's people directory: the way to address someone no shared room has introduced yet. */
+  /**
+   * Searches the workspace's people directory (#207: the one search box's
+   * People section, and the pencil dialog before it): three sources merged
+   * and de-duplicated by user id — the members of rooms the member is
+   * already in (local, instant, no network), the homeserver's user
+   * directory (`searchUserDirectory`, membership-scoped there — Synapse
+   * runs with `search_all_users: false`, so a colleague with no shared room
+   * is invisible to it), and, only when the query is itself shaped like a
+   * full user id (`@local:server`), an exact `getProfileInfo` lookup — the
+   * one way to address someone the directory can't find because no room
+   * has introduced you yet. An empty query answers nothing; this is a
+   * search, not a roster.
+   */
   searchPeople(query: string): Promise<readonly { userId: string; name: string }[]>;
+  /**
+   * Conversations matching a query (#207's Conversations section): local to
+   * what this client already has — the room's own name, and for a direct
+   * conversation, the other person's — never a network request, ranked by
+   * latest activity. An empty query answers the member's most recent
+   * conversations, for the box's empty state.
+   */
+  findRooms(query: string): Promise<readonly RoomSummary[]>;
+  /**
+   * One person's profile, fetched directly (#207's profile panel): name and
+   * avatar from the homeserver's own record, not waited on from room
+   * membership. Null when the server won't answer for this id — no shared
+   * room (the org wall, #235, refuses it the same way) or an id that
+   * doesn't exist.
+   */
+  getProfile(userId: string): Promise<PersonProfile | null>;
   /**
    * One subscription for the app's lifetime; the return value unsubscribes.
    * The arrival half (#69) rides only for a NEW text message — sender,
@@ -1210,6 +1267,23 @@ function notificationModeOf(room: MatrixRoom, muted: boolean): NotificationMode 
 /** How many people a directory search answers with — enough to pick a colleague out, small enough to read. */
 const PEOPLE_SEARCH_LIMIT = 10;
 
+/** How many conversations a local room search answers with (#207) — a suggestion list, not the whole sidebar again. */
+const ROOM_SEARCH_LIMIT = 8;
+
+/** A Matrix user id, shaped enough to look up directly: `@local:server`. */
+const USER_ID_SHAPE = /^@[^\s:]+:\S+$/;
+
+/**
+ * Whether a display name or room name matches a typed query (#207): case-
+ * and accent-folded, so "José" matches "jose" — `normalize` is the SDK's own
+ * fold (it already strips the zero-width tricks `removeHiddenChars` targets).
+ * Never used on a user id: Matrix ids are case-sensitive, and folding one
+ * could match — or fail to look up — the wrong account.
+ */
+function matchesQuery(candidate: string, needle: string): boolean {
+  return needle === "" || normalize(candidate).includes(needle);
+}
+
 /** How many hits a search page asks for — enough to scan, small enough to read. */
 const SEARCH_PAGE_SIZE = 20;
 
@@ -1272,6 +1346,19 @@ const LIVE_EVENT_TYPES = new Set<string>([EventType.RoomMessage, EventType.React
  */
 const ROOM_INFO_EVENT_TYPES = new Set<string>([EventType.RoomName, EventType.RoomTopic, EventType.RoomAvatar]);
 
+/**
+ * The room ids muted by the account's own push rules — one read, shared by
+ * `rooms()` and `findRooms()` (#207) so the two never disagree about which
+ * conversations are muted. A failed read answers "none known", the same
+ * fallback `rooms()` always took, rather than a list that won't render.
+ */
+async function mutedRoomIdsOf(client: MatrixClient): Promise<Set<string>> {
+  const pushRules = await client.getPushRules().catch(() => undefined);
+  return new Set(
+    (pushRules?.global.room ?? []).filter((rule) => rule.enabled && rule.actions.length === 0).map((rule) => rule.rule_id),
+  );
+}
+
 /** Hold the workspace connection for a stored session — resolves at the first completed sync, then serves rooms and timelines from it. */
 export async function connect(session: WorkspaceSession, options: ConnectOptions = {}): Promise<WorkspaceConnection> {
   // No `deviceId` on purpose, for a stored and a hosted session alike: the SDK
@@ -1307,16 +1394,10 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
     userId: session.userId,
     rooms: async () => {
       // The mute half of the projection lives in the account's push rules —
-      // one read for the whole list, and a failed read means "unmuted we
-      // don't know", never a list that won't render. The mode's audible
-      // half lives in each room's own account data, which the sync already
-      // delivered with the room.
-      const pushRules = await client.getPushRules().catch(() => undefined);
-      const mutedIds = new Set(
-        (pushRules?.global.room ?? [])
-          .filter((rule) => rule.enabled && rule.actions.length === 0)
-          .map((rule) => rule.rule_id),
-      );
+      // one read for the whole list. The mode's audible half lives in each
+      // room's own account data, which the sync already delivered with the
+      // room.
+      const mutedIds = await mutedRoomIdsOf(client);
       const rooms = client
         .getRooms()
         // #214: a room this member has been invited to but not joined is not
@@ -1342,6 +1423,42 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         await ensureMembersLoaded(room);
       }
       return timelineOf(client, roomId);
+    },
+    /**
+     * #207's Conversations section: local to what this client already has —
+     * `getVisibleRooms()` (unlike `getRooms()`, it hides a room an upgrade
+     * replaced) matched on the room's own name and, for a direct
+     * conversation, the other member's name (`guessDMUserId`) — ranked by
+     * the room's last activity rather than the list's own "latest text
+     * message" rule, so a room whose latest event isn't a text message
+     * still ranks where it was last active. An empty query answers the
+     * member's most recent conversations, capped the same as any match.
+     * Shares `projectRoom` with `rooms()` (#208) so a suggestion reads the
+     * same name, topic and owner-of-a-duo claim the full list would.
+     */
+    findRooms: async (query) => {
+      const needle = normalize(query.trim());
+      const mutedIds = await mutedRoomIdsOf(client);
+      const joined = client.getVisibleRooms().filter((room) => room.getMyMembership() === "join");
+      const directIds = await backfillMissingDirectRecords(client, joined);
+      const matches = joined.filter((room) => {
+        if (matchesQuery(room.normalizedName || room.name || "", needle)) {
+          return true;
+        }
+        if (!directIds.has(room.roomId)) {
+          return false;
+        }
+        const partnerId = room.guessDMUserId();
+        const partnerName = room.getMember(partnerId)?.name || localpartOf(partnerId);
+        return matchesQuery(partnerName, needle);
+      });
+      matches.sort((a, b) => b.getLastActiveTimestamp() - a.getLastActiveTimestamp());
+      const top = matches.slice(0, ROOM_SEARCH_LIMIT);
+      await Promise.all(top.map((room) => ensureMembersLoaded(room)));
+      const ownerNameCache = new Map<string, string | null>();
+      return Promise.all(
+        top.map((room) => projectRoom(client, room, session.userId, directIds.has(room.roomId), notificationModeOf(room, mutedIds.has(room.roomId)), ownerNameCache)),
+      );
     },
     timelineAt: async (roomId, eventId) => {
       const room = client.getRoom(roomId);
@@ -1648,6 +1765,18 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       await client.sendStateEvent(roomId, EventType.RoomAvatar, { url: mxcUrl }, "");
     },
     startDirect: async (userId) => {
+      // #207: a DM with this person may already exist — the account's own
+      // `m.direct` record of which rooms are direct, cross-checked against
+      // who each one is actually with (`guessDMUserId`). Reusing it is what
+      // keeps "message them" from the directory and from the one search box
+      // landing in the same conversation, never a second copy of it.
+      const directIds = directRoomIdsOf(client);
+      const existing = client
+        .getVisibleRooms()
+        .find((room) => room.getMyMembership() === "join" && directIds.has(room.roomId) && room.guessDMUserId() === userId);
+      if (existing) {
+        return existing.roomId;
+      }
       const { room_id } = await client.createRoom({ is_direct: true, invite: [userId] });
       // #208: the homeserver doesn't infer DM-ness from `is_direct` on
       // create — only this account's own `m.direct` record says so, and
@@ -1718,10 +1847,75 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       await client.setRoomAccountData(roomId, "duo.notifications", { mode });
     },
     searchPeople: async (query) => {
-      const { results } = await client.searchUserDirectory({ term: query.trim(), limit: PEOPLE_SEARCH_LIMIT });
-      return results
-        .filter((result) => result.user_id !== session.userId)
-        .map((result) => ({ userId: result.user_id, name: nonIdName(result.display_name, result.user_id) ?? localpartOf(result.user_id) }));
+      const term = query.trim();
+      if (term === "") {
+        return [];
+      }
+      const needle = normalize(term);
+      // De-duplicated by user id, first source wins the name shown — local
+      // membership is the most likely to be right about who someone is
+      // right now.
+      const found = new Map<string, { userId: string; name: string }>();
+      const add = (userId: string, name: string): void => {
+        if (userId !== session.userId && !found.has(userId)) {
+          found.set(userId, { userId, name });
+        }
+      };
+      // 1. Local: members of rooms already shared — instant, no network,
+      // and the one source that still answers when the directory below is
+      // slow or down.
+      for (const room of client.getVisibleRooms()) {
+        if (room.getMyMembership() !== "join") {
+          continue;
+        }
+        for (const member of room.getMembers()) {
+          if (member.membership !== "join" || member.userId === session.userId) {
+            continue;
+          }
+          const name = nonIdName(member.rawDisplayName ?? member.name, member.userId) ?? localpartOf(member.userId);
+          if (matchesQuery(name, needle) || matchesQuery(member.userId, needle)) {
+            add(member.userId, name);
+          }
+        }
+      }
+      // 2. The homeserver's user directory — membership-scoped there
+      // (Synapse runs `search_all_users: false`), so it answers only people
+      // who already share a room with this account. A failed directory read
+      // still leaves the local and exact-id sources standing.
+      try {
+        const { results } = await client.searchUserDirectory({ term, limit: PEOPLE_SEARCH_LIMIT });
+        for (const result of results) {
+          add(result.user_id, nonIdName(result.display_name, result.user_id) ?? localpartOf(result.user_id));
+        }
+      } catch {
+        // The directory is one of three sources; its absence isn't a refusal of the search.
+      }
+      // 3. Exact id: the one way to address someone the directory can't
+      // find because no room has introduced you yet. Only when the query is
+      // itself id-shaped, and used EXACTLY as typed (already trimmed above)
+      // — a user id is case-sensitive, and `removeHiddenChars`/`normalize`
+      // are fuzzy-matching tools, not safe for an exact lookup: the SDK's
+      // own `removeHiddenChars` folds visually-similar sequences (its
+      // homoglyph pass turns "m" into "rn", by its own comment), which
+      // would send `getProfileInfo` looking for a different id than the one
+      // typed.
+      if (USER_ID_SHAPE.test(term) && !found.has(term)) {
+        try {
+          const profile = await client.getProfileInfo(term);
+          add(term, nonIdName(profile.displayname, term) ?? localpartOf(term));
+        } catch {
+          // Not a real id, or the homeserver won't say — no exact match to add.
+        }
+      }
+      return [...found.values()].slice(0, PEOPLE_SEARCH_LIMIT);
+    },
+    getProfile: async (userId) => {
+      try {
+        const info = await client.getProfileInfo(userId);
+        return { userId, name: nonIdName(info.displayname, userId) ?? localpartOf(userId), avatarUrl: info.avatar_url ?? null };
+      } catch {
+        return null;
+      }
     },
     subscribe: (handler) => {
       const listener = (event: MatrixEvent, room: MatrixRoom | undefined): void => {
