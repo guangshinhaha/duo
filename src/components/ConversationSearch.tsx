@@ -1,5 +1,3 @@
-import { useState } from "react";
-import type { ReactNode } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { RoomDuoMessage } from "./RoomDuoMessage.js";
 import { RoomPersonMessage } from "./RoomPersonMessage.js";
@@ -10,95 +8,30 @@ import { mentionLabelOf } from "../workspace/mentions.js";
 import type { MessageSearchHit, MessageSearchPage, RoomSummary, SearchContextLine, WorkspaceConnection } from "../workspace/matrix.js";
 
 /**
- * #70: search what was said. The member types, the workspace searches the
- * messages of the conversations they are in (the homeserver's own search —
+ * #70: search what was said, projected. The workspace searches the messages
+ * of the conversations the member is in (the homeserver's own search —
  * membership-scoped there, not here), and each hit reads with its
  * conversation, its author, and the words around it, and opens at that
  * message in context.
  *
- * This is the SHARED search, and the surface says so beside the box: it
- * searches messages in conversations, on the workspace. The other search in
- * this product — what a duo knows (#46, the corpus) — is private, lives on
- * its owner's Mac, and is a different component reading a different store;
- * nothing here imports it, and nothing there imports this. The two carry
- * different labels because they are different questions.
+ * This is the SHARED search's renderer. The other search in this product —
+ * what a duo knows (#46, the corpus) — is private, lives on its owner's Mac,
+ * and is a different component reading a different store; nothing here
+ * imports it, and nothing there imports this.
  *
  * Attribution is the room's (#60): a duo's hit renders as that duo's message
  * from its user id ("carol's duo"), a person's by their name, and every
  * context line's label comes from the same grammar — so the words of a
  * duo's answer, found by search, are still visibly the duo's.
  *
- * While a search is active its results stand in place of the list (`children`);
- * clearing brings the list back.
+ * #207: the entry point for a search — the input, and the decision to run
+ * one — moved to `CommandSearch.tsx`, the one search box that also finds
+ * people and conversations. This module is now just the hand-off's answer:
+ * `CommandSearch` renders this in place of the conversation list once the
+ * member picks "Search messages for '…'", exactly the way this file used to
+ * show it itself, and `onClear` hands control back the same way.
  */
-export function ConversationSearch({
-  connection,
-  rooms,
-  titleOf,
-  children,
-}: {
-  connection: WorkspaceConnection;
-  rooms: readonly RoomSummary[];
-  /** How a conversation reads under its title — the list's own rule, so a hit says the same name the list does. */
-  titleOf: (room: RoomSummary) => string;
-  children: ReactNode;
-}) {
-  const [query, setQuery] = useState("");
-  const [submitted, setSubmitted] = useState("");
-
-  return (
-    <>
-      <form
-        aria-label="Search what was said"
-        className="mt-3 flex flex-col gap-1"
-        data-testid="message-search"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setSubmitted(query.trim());
-        }}
-        role="search"
-      >
-        <div className="flex gap-2">
-          <input
-            aria-label="Search what was said"
-            className="min-h-11 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-3 text-[var(--text)]"
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search what was said"
-            type="search"
-            value={query}
-          />
-          <button
-            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 type-body text-[var(--bg)]"
-            type="submit"
-          >
-            Search
-          </button>
-        </div>
-        {/* What this searches, in the member's terms — the other search says
-            its own scope, and the two never share a sentence. */}
-        <p className="type-provenance text-[var(--faint)]" data-testid="message-search-scope">
-          Messages in your conversations, searched on the workspace.
-        </p>
-      </form>
-      {submitted === "" ? (
-        children
-      ) : (
-        <MessageSearchResults
-          connection={connection}
-          onClear={() => {
-            setQuery("");
-            setSubmitted("");
-          }}
-          query={submitted}
-          rooms={rooms}
-          titleOf={titleOf}
-        />
-      )}
-    </>
-  );
-}
-
-function MessageSearchResults({
+export function MessageSearchResults({
   connection,
   query,
   rooms,

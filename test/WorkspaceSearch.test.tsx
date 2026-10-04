@@ -46,7 +46,12 @@ const DIRECT = "!direct:workspace.example";
 /** A room the member is NOT in — the workspace holds it, the member never sees it. */
 const SECRET = "!leadership:workspace.example";
 
-const SEARCH_LABEL = "Search what was said";
+// #207: the sidebar box widened from message-only search to the one box
+// (CommandSearch.tsx) that also finds people and conversations; its
+// accessible name says so now. Typing and choosing "Search messages for
+// '…'" still runs exactly this file's message search — `searchFor` drives
+// that hand-off instead of a dedicated submit button.
+const SEARCH_LABEL = "Search the workspace";
 
 function roomsFixture(): RoomSummary[] {
   const now = Date.now();
@@ -180,6 +185,17 @@ function searchConnection(state: {
     timelineAt: vi.fn(async (_roomId: string, eventId: string) => [...(state.around?.[eventId] ?? [])]),
     searchMessages,
     markRead: vi.fn(async () => {}),
+    // #207: CommandSearch's local filter runs on every mount/keystroke, and
+    // its people section debounces — this file is about message search
+    // (and the two searches staying apart), so these are minimal fakes; the
+    // matching rules themselves are pinned at the seam and in
+    // CommandSearch.test.tsx.
+    findRooms: vi.fn(async (query: string) => {
+      const needle = query.trim().toLowerCase();
+      return needle === "" ? state.rooms : state.rooms.filter((room) => (room.name ?? "").toLowerCase().includes(needle));
+    }),
+    searchPeople: vi.fn(async () => []),
+    getProfile: vi.fn(async () => null),
     subscribe: vi.fn((handler: (roomId: string) => void) => {
       listener = handler;
       return () => {
@@ -218,9 +234,19 @@ async function openConversations(fake: ReturnType<typeof searchConnection>) {
   await screen.findByTestId("conversations-list");
 }
 
+/**
+ * #207: the box now suggests as you type rather than searching messages on
+ * every submit — running a message search is choosing the explicit
+ * "Search messages for '…'" row (CommandSearch.tsx). A blank or
+ * whitespace-only term never gets that far (there is nothing to hand off
+ * to), matching the old "an empty box asks nothing of the workspace" rule.
+ */
 async function searchFor(term: string) {
-  fireEvent.change(screen.getByRole("searchbox", { name: SEARCH_LABEL }), { target: { value: term } });
-  fireEvent.click(within(screen.getByRole("search")).getByRole("button", { name: "Search" }));
+  fireEvent.change(screen.getByRole("combobox", { name: SEARCH_LABEL }), { target: { value: term } });
+  if (term.trim() === "") {
+    return;
+  }
+  fireEvent.click(await screen.findByTestId("command-search-messages"));
 }
 
 // The app's first import is the slow one (the whole route tree); pay it
@@ -503,8 +529,8 @@ describe("#70 AC3 — the two searches are distinguishable", () => {
     const fake = searchConnection({ rooms: roomsFixture(), index: [] });
     await openConversations(fake);
 
-    const scope = screen.getByTestId("message-search-scope");
-    expect(scope).toHaveTextContent(/messages in your conversations/i);
+    const scope = screen.getByTestId("command-search-scope");
+    expect(scope).toHaveTextContent(/people, conversations/i);
     expect(scope).toHaveTextContent(/workspace/i);
     expect(scope).not.toHaveTextContent(/your duo knows|corpus|private/i);
     expect(screen.getByRole("search", { name: SEARCH_LABEL })).toBeInTheDocument();

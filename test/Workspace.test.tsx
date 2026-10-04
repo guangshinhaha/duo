@@ -361,6 +361,23 @@ function fakeConnection(state: {
     searchPeople: vi.fn(async (query: string) =>
       (state.people ?? []).filter((person) => person.name.toLowerCase().includes(query.toLowerCase())),
     ),
+    // #207: local room matching and a direct profile lookup — minimal fakes,
+    // since the real matching rules are pinned at the seam
+    // (WorkspaceMatrixSeam.test.ts); this file only needs a whole connection.
+    findRooms: vi.fn(async (query: string) => {
+      const needle = query.trim().toLowerCase();
+      return needle === ""
+        ? [...state.rooms]
+        : state.rooms.filter(
+            (room) =>
+              (room.name ?? "").toLowerCase().includes(needle) ||
+              room.members.some((member) => (member.name ?? "").toLowerCase().includes(needle)),
+          );
+    }),
+    getProfile: vi.fn(async (userId: string) => {
+      const person = (state.people ?? []).find((candidate) => candidate.userId === userId);
+      return person ? { userId: person.userId, name: person.name, avatarUrl: null } : null;
+    }),
     // #70: search and landing at a hit are pinned by WorkspaceSearch.test.tsx;
     // this fake only has to be a whole connection.
     searchMessages: vi.fn(async () => ({ hits: [], next: null })),

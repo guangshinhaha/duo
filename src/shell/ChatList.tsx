@@ -5,7 +5,7 @@ import { AtSign, Ellipsis, Settings as SettingsIcon, SquarePen, UsersRound } fro
 import type { DuoApiConfig } from "../api/client.js";
 import { usePendingT4, useRecordOutcome } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
-import { ConversationSearch } from "../components/ConversationSearch.js";
+import { CommandSearch } from "../components/CommandSearch.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
 import { TickingCount, useLingering } from "../components/TickingCount.js";
@@ -660,7 +660,15 @@ export function ChatList({
     };
 
     return (
-      <ConversationSearch connection={connection} rooms={rooms.data} titleOf={roomTitle}>
+      <CommandSearch
+        connection={connection}
+        onStartedConversation={(roomId) => {
+          refresh();
+          window.location.hash = roomHref(roomId);
+        }}
+        rooms={rooms.data}
+        titleOf={roomTitle}
+      >
         {rooms.data.length === 0 ? (
           <p className="p-4 type-body text-[var(--muted)]" data-testid="conversations-empty">
             No conversations yet. When someone messages you, it appears here.
@@ -687,7 +695,7 @@ export function ChatList({
             )}
           </div>
         )}
-      </ConversationSearch>
+      </CommandSearch>
     );
   };
 

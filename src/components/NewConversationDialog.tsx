@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./primitives/Dialog.js";
-import { isDuoUserId, duoOwnerLabel, localpartOf } from "../workspace/identity.js";
+import { directoryEntryLabel } from "../workspace/identity.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 
 /**
@@ -9,6 +9,14 @@ import type { WorkspaceConnection } from "../workspace/matrix.js";
  * duos both, and a duo is addressed by what its user id says it is
  * ("carol's duo", from the `@duo-` grammar) — never by the display name a
  * profile chose for itself.
+ *
+ * #207: this dialog's own search now shares its road with the one search
+ * box (`CommandSearch.tsx`) — `searchPeople`'s three merged sources and the
+ * fixed `startDirect` (reuses a DM already open with this person) live at
+ * the seam (`matrix.ts`), so both surfaces answer the same way without this
+ * dialog knowing anything changed. Kept as a thin, dedicated way in from the
+ * pencil icon rather than retired, since nothing here duplicates
+ * CommandSearch's suggestion UI — it is still its own small form.
  */
 export function NewConversationDialog({
   connection,
@@ -110,7 +118,7 @@ function NewConversationBody({ connection, onStarted }: { connection: WorkspaceC
               onClick={() => start(person.userId)}
               type="button"
             >
-              {labelFor(person)}
+              {directoryEntryLabel(person)}
             </button>
           ))}
         </div>
@@ -122,12 +130,4 @@ function NewConversationBody({ connection, onStarted }: { connection: WorkspaceC
       </DialogClose>
     </>
   );
-}
-
-/** Who a directory entry reads as: a duo by its owner (from the id's grammar), a person by their name. */
-function labelFor(person: { userId: string; name: string }): string {
-  if (isDuoUserId(person.userId)) {
-    return `${duoOwnerLabel(person.userId) ?? localpartOf(person.userId)}'s duo`;
-  }
-  return person.name;
 }
