@@ -420,8 +420,8 @@ row. The three-group sidebar shipped in #132 is replaced by this.
    who and which duos are in it; in Your duo, its profile (#184).
 5. **The duo's profile** (tap its name): **Portrait**, **Knows**, **May do**, **Rules**,
    **Activity**. It is where you go to understand the duo, never where you must go to use it.
-6. **Settings** (list header): Notifications · Appearance · Devices · Ask links · Connect to
-   Claude · Advanced (connection) · End this duo.
+6. **Settings** (list header): Notifications · Appearance · Profile (#224, your own name and
+   picture) · Devices · Ask links · Connect to Claude · Advanced (connection) · End this duo.
 
 Where each old screen went: Review → tray + Waiting on you · Conversations → Chats · Duo → the
 Your duo chat · Confirmations → a card in the chat and in Your duo · Corrections → rule cards +

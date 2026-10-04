@@ -203,6 +203,9 @@ function fakeConnection(state: {
   };
   const connection: WorkspaceConnection = {
     userId: SESSION.userId,
+    profile: vi.fn(async () => ({ name: null, avatarUrl: null })),
+    setDisplayName: vi.fn(async () => {}),
+    setAvatarUrl: vi.fn(async () => "mxc://workspace.example/avatar"),
     rooms: vi.fn(async () =>
       // A fresh array of fresh objects per call, like the real seam's
       // projection: TanStack's structural sharing would otherwise see the

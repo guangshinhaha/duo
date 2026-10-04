@@ -255,6 +255,7 @@ function settingsSurface(section: SettingsSectionId | "index", shell: SurfaceCon
   return (
     <Settings
       api={shell.api}
+      connection={shell.connection}
       onConfigChange={shell.setApi}
       onDuoEnded={shell.onDuoEnded}
       onPairDuo={shell.onPairDuo}

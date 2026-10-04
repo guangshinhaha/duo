@@ -6,6 +6,7 @@ import type { DuoApiConfig } from "../src/api/client.js";
 import { Settings } from "../src/routes/Settings.js";
 import type { SettingsSectionId } from "../src/shell/routes.js";
 import { SETTINGS_SECTIONS } from "../src/shell/routes.js";
+import type { WorkspaceConnection } from "../src/workspace/matrix.js";
 import { stubDesktop } from "./desktop.js";
 
 /*
@@ -16,11 +17,25 @@ import { stubDesktop } from "./desktop.js";
 
 const api: DuoApiConfig = { baseUrl: "http://100.64.1.5:7717", token: "secret-token-1234" };
 
-function mount(section: SettingsSectionId | "index" | undefined, duo: DuoApiConfig | null = api) {
+function mount(
+  section: SettingsSectionId | "index" | undefined,
+  duo: DuoApiConfig | null = api,
+  connection: WorkspaceConnection | null = null,
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <Settings api={duo} onConfigChange={() => {}} onDuoEnded={() => {}} onPairDuo={() => {}} onSignOut={() => {}} onWorkspaceSignIn={() => {}} section={section} session={null} />
+      <Settings
+        api={duo}
+        connection={connection}
+        onConfigChange={() => {}}
+        onDuoEnded={() => {}}
+        onPairDuo={() => {}}
+        onSignOut={() => {}}
+        onWorkspaceSignIn={() => {}}
+        section={section}
+        session={null}
+      />
     </QueryClientProvider>,
   );
 }
@@ -44,6 +59,7 @@ describe("the index", () => {
     expect(links.map((link) => within(link).getAllByText(/./)[0]!.textContent)).toEqual([
       "Notifications",
       "Appearance",
+      "Profile",
       "Devices",
       "Ask links",
       "Connect to Claude",
@@ -81,6 +97,21 @@ describe("each section is on its own", () => {
     expect(screen.getByTestId("settings-theme")).toBeInTheDocument();
     expect(screen.getByText("Keyboard", { selector: "h2" })).toBeInTheDocument();
     expect(screen.queryByTestId("dnd-toggle")).toBeNull();
+  });
+
+  it("Profile offers to sign in when no workspace connection is up, and renders the profile editor when one is (#224)", async () => {
+    mount("profile", api, null);
+    expect(screen.getByTestId("settings-profile")).toHaveTextContent("Sign in to a workspace");
+    cleanup();
+
+    const connection = {
+      profile: vi.fn(async () => ({ name: "Ana", avatarUrl: null })),
+      setDisplayName: vi.fn(async () => {}),
+      setAvatarUrl: vi.fn(async () => "mxc://workspace.example/x"),
+      loadMedia: vi.fn(async () => null),
+    } as unknown as WorkspaceConnection;
+    mount("profile", api, connection);
+    expect(await screen.findByTestId("profile-name-input")).toHaveValue("Ana");
   });
 
   it("Devices, Ask links and Connect to Claude are each their own page", async () => {

@@ -195,6 +195,8 @@ type FakeClient = MatrixClient & {
   getEventTimeline: ReturnType<typeof vi.fn>;
   scrollback: ReturnType<typeof vi.fn>;
   setRoomReadMarkers: ReturnType<typeof vi.fn>;
+  setDisplayName: ReturnType<typeof vi.fn>;
+  setAvatarUrl: ReturnType<typeof vi.fn>;
 };
 
 /**
@@ -264,6 +266,8 @@ function fakeClient(
     getEventTimeline: vi.fn(async () => undefined),
     scrollback: vi.fn(async (room: Room) => room),
     setRoomReadMarkers: vi.fn(async () => ({})),
+    setDisplayName: vi.fn(async () => ({})),
+    setAvatarUrl: vi.fn(async () => ({})),
   };
   return client as unknown as FakeClient;
 }
@@ -2919,6 +2923,71 @@ describe("#212: the read marker and the unread line", () => {
 
     expect(client.setRoomReadMarkers).toHaveBeenCalledWith("!r:workspace.example", "$7");
     expect(client.sendReadReceipt).not.toHaveBeenCalled();
+  });
+});
+
+describe("the profile wire (#224)", () => {
+  it("reads the member's own name and picture from the homeserver's profile endpoint, not a local cache", async () => {
+    const client = fakeClient();
+    client.getProfileInfo.mockResolvedValueOnce({ displayname: "Ana", avatar_url: "mxc://workspace.example/ana-avatar" });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const profile = await connection.profile();
+
+    expect(client.getProfileInfo).toHaveBeenCalledWith(SESSION.userId);
+    expect(profile).toEqual({ name: "Ana", avatarUrl: "mxc://workspace.example/ana-avatar" });
+  });
+
+  it("answers nulls when the homeserver has neither on record, rather than guessing", async () => {
+    const client = fakeClient();
+    client.getProfileInfo.mockResolvedValueOnce({});
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.profile()).toEqual({ name: null, avatarUrl: null });
+  });
+
+  it("setDisplayName calls the SDK's own verb with exactly the name given", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.setDisplayName("Ana Ng");
+
+    expect(client.setDisplayName).toHaveBeenCalledWith("Ana Ng");
+  });
+
+  it("setAvatarUrl uploads the bytes through the same door as a share, then points the account's avatar at the upload", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const staged = { name: "me.png", mimeType: "image/png", size: 4, bytes: new ArrayBuffer(4) };
+
+    const mxcUri = await connection.setAvatarUrl(staged);
+
+    expect(client.uploadContent).toHaveBeenCalledWith(expect.any(Blob), { name: "me.png", type: "image/png" });
+    expect(client.setAvatarUrl).toHaveBeenCalledWith("mxc://workspace.example/abc123");
+    // The seam answers what it set — a caller can render it without asking the homeserver to repeat itself.
+    expect(mxcUri).toBe("mxc://workspace.example/abc123");
+  });
+
+  it("a refused name or picture change states its reason the same way a refused share does", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const refused = (errcode: string, message: string): MatrixError => Object.assign(new MatrixError({ errcode, error: message }), { errcode, message });
+
+    client.setDisplayName.mockRejectedValueOnce(refused("M_FORBIDDEN", "Display names may not be empty"));
+    await expect(connection.setDisplayName("")).rejects.toThrow("Display names may not be empty");
+
+    const staged = { name: "me.png", mimeType: "image/png", size: 4, bytes: new ArrayBuffer(4) };
+    client.uploadContent.mockRejectedValueOnce(refused("M_TOO_LARGE", "Upload request body is too large"));
+    await expect(connection.setAvatarUrl(staged)).rejects.toThrow("over the workspace's own upload limit");
+
+    // A connection drop between the upload and the account write is said as one, not a stack trace.
+    client.setAvatarUrl.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(connection.setAvatarUrl(staged)).rejects.toThrow("couldn't reach the workspace");
   });
 });
 

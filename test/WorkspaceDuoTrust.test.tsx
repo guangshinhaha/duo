@@ -103,6 +103,9 @@ function fakeConnection(timeline: RoomMessage[], roomList: RoomSummary[] = rooms
   let listener: ((roomId: string) => void) | null = null;
   const connection: WorkspaceConnection = {
     userId: SESSION.userId,
+    profile: vi.fn(async () => ({ name: null, avatarUrl: null })),
+    setDisplayName: vi.fn(async () => {}),
+    setAvatarUrl: vi.fn(async () => "mxc://workspace.example/avatar"),
     rooms: vi.fn(async () => roomList.map((room) => ({ ...room }))),
     timeline: vi.fn(async () => [...timeline]),
     timelineAt: vi.fn(async () => [...timeline]),
