@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import { useCreateDraft } from "../api/queries.js";
 import { readComposerBuffer, writeComposerBuffer } from "../composerBuffer.js";
+import { handleComposerKeyDown } from "../composerKeyDown.js";
 import { MutationError } from "./MutationError.js";
 import { useSyncStatus } from "../sync.js";
 import { Mark } from "./Mark.js";
@@ -13,9 +14,10 @@ import { Mark } from "./Mark.js";
  * stays in Review: asking is a conversation act, disposing is a triage
  * act, and the draft the daemon returns is pending either way.
  *
- * The field is a textarea (#27): a real question is rarely one line, so
- * Enter is a newline and Cmd/Ctrl-Enter submits — the chat-app convention
- * on both platforms. The typed question survives a failed submit
+ * The field is a textarea (#27): a real question can run past one line, so
+ * Shift+Enter inserts one while Enter sends (Cmd/Ctrl-Enter still does too)
+ * — the chat-app convention (#244), wired through the shared
+ * `handleComposerKeyDown`. The typed question survives a failed submit
  * (`setQuestion("")` runs in `onSuccess` only), a cancelled one (abort is
  * the owner's choice, not a failure — so it resets, not errors), and a
  * route switch (kept in `composerBuffer` outside the component, because
@@ -71,12 +73,7 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
             setQuestion(e.target.value);
             writeComposerBuffer(e.target.value);
           }}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-              e.preventDefault();
-              e.currentTarget.form?.requestSubmit();
-            }
-          }}
+          onKeyDown={handleComposerKeyDown}
         />
         <div className="flex flex-col gap-2">
           <button

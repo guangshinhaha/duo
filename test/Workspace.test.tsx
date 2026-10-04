@@ -3476,3 +3476,50 @@ describe("#223 — naming a conversation, setting its topic, and its picture", (
     expect(within(panel).queryByTestId("room-picture-pick")).toBeNull();
   });
 });
+
+/*
+ * #244: Enter sends, Shift+Enter makes a new line — the shared
+ * `handleComposerKeyDown` (composerKeyDown.test.tsx) wired into this
+ * composer's textarea. These are thin smoke tests confirming the wiring;
+ * the handler's own rules (IME, ⌘/Ctrl+Enter, Shift+Enter) are covered
+ * once, against a bare form, in composerKeyDown.test.tsx.
+ */
+describe("#244 — Enter sends in the conversation composer", () => {
+  it("Enter sends the message and clears the field; Shift+Enter only adds a line", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x") as HTMLTextAreaElement;
+    fireEvent.change(field, { target: { value: "shall we ship it" } });
+    fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
+    expect(fake.connection.send).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "shall we ship it"));
+    expect(field).toHaveValue("");
+  });
+});
+
+describe("#244 — Enter sends in the thread composer", () => {
+  it("Enter sends the reply and clears the field; Shift+Enter only adds a line", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...THREADED_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
+    await screen.findByTestId("thread-timeline");
+
+    const field = screen.getByLabelText("Reply in thread") as HTMLTextAreaElement;
+    fireEvent.change(field, { target: { value: "thanks!" } });
+    fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
+    expect(fake.connection.replyInThread).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(fake.connection.replyInThread).toHaveBeenCalledWith("!project-x:workspace.example", "$1", "thanks!"));
+    expect(field).toHaveValue("");
+  });
+});

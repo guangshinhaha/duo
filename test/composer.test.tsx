@@ -43,21 +43,45 @@ describe("#27 — the composer takes a real question", () => {
     writeComposerBuffer("");
   });
 
-  it("Enter alone is a newline, not a submit — only Cmd-Enter (or Ctrl-Enter) submits", async () => {
+  it("#244: Enter sends, Shift+Enter does not, and ⌘/Ctrl+Enter still send", async () => {
     renderWithClient(<Composer api={api} thread={null} threadLabel="General" />);
     const field = screen.getByLabelText("Question for your duo") as HTMLTextAreaElement;
 
     fireEvent.change(field, { target: { value: "first line\nsecond line" } });
-    fireEvent.keyDown(field, { key: "Enter" });
-    // Plain Enter has no handler — nothing was scheduled, so nothing ran.
+    fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
+    // Shift+Enter has no handler effect — nothing was scheduled, so nothing ran.
     expect(fetch).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+    fireEvent.keyDown(field, { key: "Enter" });
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    // A successful send clears the composer.
+    await waitFor(() => expect(field).toHaveValue(""));
 
     fireEvent.change(field, { target: { value: "another question" } });
-    fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+
+    fireEvent.change(field, { target: { value: "yet another question" } });
+    fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+  });
+
+  it("#244: an IME candidate confirmed with Enter does not send", () => {
+    renderWithClient(<Composer api={api} thread={null} threadLabel="General" />);
+    const field = screen.getByLabelText("Question for your duo") as HTMLTextAreaElement;
+
+    fireEvent.change(field, { target: { value: "日本語" } });
+    fireEvent.keyDown(field, { key: "Enter", isComposing: true });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(field).toHaveValue("日本語");
+  });
+
+  it("#244: Enter on an empty composer does nothing", () => {
+    renderWithClient(<Composer api={api} thread={null} threadLabel="General" />);
+    const field = screen.getByLabelText("Question for your duo");
+
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("the field grows to fit the question and stops at a readable cap", () => {
