@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
 import { workspaceSessionUrl } from "../src/api/hosted.js";
-import type { LiveArrival, NotificationMode, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
+import type { LiveArrival, NotificationMode, RoomInvite, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
 import { WorkspaceSignInDialog } from "../src/components/WorkspaceSignInDialog.js";
 import type { StagedShare } from "../src/workspace/sharing.js";
 
@@ -148,6 +148,8 @@ function fakeConnection(state: {
   rooms: RoomSummary[];
   timelines: Record<string, RoomMessage[]>;
   people?: Array<{ userId: string; name: string }>;
+  /** #214: pending invites, separate from `rooms` — an invite is not a conversation yet. */
+  invites?: RoomInvite[];
 }) {
   // Every surface that subscribes hears every arrival — the way the real
   // seam's client.on does. (#69's dispatcher subscribes beside the list
@@ -212,11 +214,51 @@ function fakeConnection(state: {
       });
       return roomId;
     }),
+    // #214: a fresh private group — the member its sole member until
+    // `invite` adds people, the way the real seam's `createRoom` behaves.
+    createRoom: vi.fn(async (name: string) => {
+      const roomId = `!fresh-${name.toLowerCase().replace(/[^a-z0-9-]/gi, "-")}:workspace.example`;
+      state.rooms.push({
+        roomId,
+        kind: "group",
+        name,
+        members: [],
+        latest: null,
+        unread: { notifications: 0, mentions: 0 },
+        muted: false,
+        notifications: "all",
+      });
+      return roomId;
+    }),
+    invite: vi.fn(async (roomId: string, userId: string) => {
+      const at = roomAt(roomId);
+      if (at >= 0 && !state.rooms[at]!.members.some((member) => member.userId === userId)) {
+        state.rooms[at] = { ...state.rooms[at]!, members: [...state.rooms[at]!.members, { userId, name: null }] };
+      }
+    }),
+    invites: vi.fn(async () => [...(state.invites ?? [])]),
+    joinRoom: vi.fn(async (roomId: string) => {
+      const invite = (state.invites ?? []).find((candidate) => candidate.roomId === roomId);
+      state.invites = (state.invites ?? []).filter((candidate) => candidate.roomId !== roomId);
+      if (invite) {
+        state.rooms.push({
+          roomId,
+          kind: invite.kind,
+          name: invite.name,
+          members: invite.inviterId ? [{ userId: invite.inviterId, name: invite.inviterName }] : [],
+          latest: null,
+          unread: { notifications: 0, mentions: 0 },
+          muted: false,
+          notifications: "all",
+        });
+      }
+    }),
     leave: vi.fn(async (roomId: string) => {
       const at = state.rooms.findIndex((room) => room.roomId === roomId);
       if (at >= 0) {
         state.rooms.splice(at, 1);
       }
+      state.invites = (state.invites ?? []).filter((candidate) => candidate.roomId !== roomId);
     }),
     // #69: the tri-state the surfaces write — the homeserver's own state
     // moves under it the way another device would see it move. ("nothing"
@@ -780,6 +822,154 @@ describe("#63 AC3 — conversations can be started, left and muted", () => {
     await waitFor(() => expect(screen.queryByText("announce")).toBeNull());
     // The others stand: leaving one conversation leaves the rest of the list.
     expect(screen.getAllByTestId("room-title").map((title) => title.textContent)).toEqual(["Bose", "project-x"]);
+  });
+});
+
+describe("#214 — creating a group conversation and inviting people", () => {
+  it("creates a private group and invites a colleague in the same flow", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new-room"));
+
+    fireEvent.change(await screen.findByLabelText("Group name"), { target: { value: "Launch Squad" } });
+    fireEvent.click(screen.getByTestId("new-room-create"));
+
+    await waitFor(() => expect(fake.connection.createRoom).toHaveBeenCalledWith("Launch Squad", ""));
+
+    // The same dialog moves from naming the room to inviting into it.
+    fireEvent.change(await screen.findByLabelText("Search people"), { target: { value: "carol" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    const results = await screen.findAllByTestId("new-room-person");
+    fireEvent.click(results[0]!); // Carol, not her duo
+
+    await waitFor(() => expect(fake.connection.invite).toHaveBeenCalledWith(expect.stringMatching(/^!fresh-/), "@carol:workspace.example"));
+    await screen.findByText(/Invited/);
+
+    fireEvent.click(screen.getByTestId("new-room-done"));
+
+    expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-room-dialog")).toBeNull();
+  });
+
+  it("skipping the invite step still creates the room — invitations aren't mandatory", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new-room"));
+    fireEvent.change(await screen.findByLabelText("Group name"), { target: { value: "Launch Squad" } });
+    fireEvent.click(screen.getByTestId("new-room-create"));
+
+    await waitFor(() => expect(fake.connection.createRoom).toHaveBeenCalled());
+    fireEvent.click(await screen.findByTestId("new-room-done"));
+
+    expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
+    expect(fake.connection.invite).not.toHaveBeenCalled();
+  });
+
+  it("inviting a colleague into an existing room uses that room's own invite — not a new direct message", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    fireEvent.click(within(entryFor("project-x")).getByTestId("room-more"));
+    fireEvent.click(screen.getByRole("button", { name: "Invite to project-x" }));
+
+    fireEvent.change(await screen.findByLabelText("Search people"), { target: { value: "carol" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click((await screen.findAllByTestId("invite-to-room-person"))[0]!);
+
+    await waitFor(() => expect(fake.connection.invite).toHaveBeenCalledWith("!project-x:workspace.example", "@carol:workspace.example"));
+  });
+
+  it("a direct conversation has no 'Invite' control — it's just its two members", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    fireEvent.click(within(entryFor("Bose")).getByTestId("room-more"));
+
+    expect(screen.queryByRole("button", { name: "Invite to Bose" })).toBeNull();
+  });
+
+  it("an invite across organisations is refused, and the server's own sentence is shown beside that person — the room and dialog stand", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    // The org wall's own refusal (digital-duo#235's duo_org_wall, ERR_INVITE)
+    // — the seam forwards it verbatim; this is what the UI must show.
+    vi.mocked(fake.connection.invite).mockRejectedValueOnce(new Error("The workspace said: Invites across organisations are not allowed."));
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    fireEvent.click(within(entryFor("project-x")).getByTestId("room-more"));
+    fireEvent.click(screen.getByRole("button", { name: "Invite to project-x" }));
+    fireEvent.change(await screen.findByLabelText("Search people"), { target: { value: "carol" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click((await screen.findAllByTestId("invite-to-room-person"))[0]!);
+
+    expect(await screen.findByTestId("invite-to-room-error")).toHaveTextContent("Invites across organisations are not allowed.");
+    // Refused, not silently dropped — and nothing else about the room moved.
+    expect(screen.getByTestId("invite-to-room-dialog")).toBeInTheDocument();
+  });
+
+  it("an invitee sees a pending invite and can accept it, landing in the room", async () => {
+    seedSession();
+    const invite: RoomInvite = { roomId: "!team:workspace.example", kind: "group", name: "team", inviterId: "@bose:workspace.example", inviterName: "Bose" };
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, invites: [invite] });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+
+    const row = await screen.findByTestId("pending-invite");
+    expect(row).toHaveTextContent("team");
+    expect(row).toHaveTextContent("Invited by Bose");
+    // It is not also a room in the ordinary list — it can't be opened yet.
+    expect(screen.queryAllByTestId("room-title").map((title) => title.textContent)).not.toContain("team");
+
+    fireEvent.click(within(row).getByTestId("pending-invite-accept"));
+
+    await waitFor(() => expect(fake.connection.joinRoom).toHaveBeenCalledWith("!team:workspace.example"));
+    expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
+    expect(screen.queryByTestId("pending-invite")).toBeNull();
+  });
+
+  it("an invitee can decline a pending invite — it's gone, the way leaving a room works", async () => {
+    seedSession();
+    const invite: RoomInvite = { roomId: "!team:workspace.example", kind: "group", name: "team", inviterId: "@bose:workspace.example", inviterName: "Bose" };
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, invites: [invite] });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    const row = await screen.findByTestId("pending-invite");
+
+    fireEvent.click(within(row).getByTestId("pending-invite-decline"));
+
+    await waitFor(() => expect(fake.connection.leave).toHaveBeenCalledWith("!team:workspace.example"));
+    await waitFor(() => expect(screen.queryByTestId("pending-invite")).toBeNull());
+  });
+
+  it("a direct-message invite reads as a message request, not 'invited by' noise", async () => {
+    seedSession();
+    const invite: RoomInvite = { roomId: "!dm:workspace.example", kind: "direct", name: null, inviterId: "@bose:workspace.example", inviterName: "Bose" };
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, invites: [invite] });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+
+    const row = await screen.findByTestId("pending-invite");
+    expect(row).toHaveTextContent("Bose");
+    expect(row).toHaveTextContent("Wants to message you");
   });
 });
 

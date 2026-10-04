@@ -5,6 +5,7 @@ import {
   MatrixError,
   MsgType,
   NotificationCountType,
+  Preset,
   PushRuleKind,
   ReceiptType,
   RelationType,
@@ -103,6 +104,25 @@ export interface RoomSummary {
   readonly muted: boolean;
   /** What may interrupt from this room (#69) — the same server answer on every device; `muted` is its "nothing" half. */
   readonly notifications: NotificationMode;
+}
+
+/**
+ * A room invite as the invitee reads it (#214): who invited, what kind of
+ * room it is, and its name — enough to decide without joining first.
+ * Deliberately not a `RoomSummary`: an unaccepted invite is Synapse's
+ * stripped slice of room state (`invite_room_state`), not the room itself —
+ * folding the two together would make `rooms()` show a room this member
+ * cannot yet open, or `invites()` promise facts (a member list, a latest
+ * word) that stripped state doesn't carry.
+ */
+export interface RoomInvite {
+  readonly roomId: string;
+  readonly kind: RoomKind;
+  /** The room's own name — null when it has none (mirrors `RoomSummary.name`). */
+  readonly name: string | null;
+  /** Who sent the invite — null on the rare stripped state that doesn't say. */
+  readonly inviterId: string | null;
+  readonly inviterName: string | null;
 }
 
 /** One aggregated reaction under a message: the emoji, how many, and whether this member is among them. */
@@ -345,6 +365,38 @@ export interface WorkspaceConnection {
   markRead(roomId: string): Promise<void>;
   /** Creates a direct conversation with a workspace user (a person or a colleague's duo) and answers its room id. */
   startDirect(userId: string): Promise<string>;
+  /**
+   * Creates a named, private group conversation (#214) and answers its room
+   * id — `preset: private_chat`, invite-only, the member its sole member
+   * until they invite people (now or later, through `invite`). There is no
+   * "channel" counterpart here: a channel "findable in the org" needs an
+   * org-scoped room directory, and the only directory Matrix has is the
+   * homeserver's own room directory, which the org wall refuses every
+   * member's attempt to publish into (`M_FORBIDDEN`, unconditionally —
+   * `deploy/synapse/modules/duo_org_wall/rules.py`'s `may_publish`). Rather
+   * than guess at a join rule that might leak a room across orgs, this seam
+   * offers group rooms only until that gap is closed server-side.
+   */
+  createRoom(name: string, topic: string): Promise<string>;
+  /**
+   * Invites a workspace user into an existing room (#214) — unlike
+   * `startDirect`, this adds someone to a room that already exists, during
+   * its creation or long after. The org wall refuses an invite across
+   * organisations with its own short, person-safe sentence (`M_FORBIDDEN`,
+   * "Invites across organisations are not allowed."); this surfaces exactly
+   * that sentence rather than inventing one, so the UI shows what the
+   * server decided, never a client-side guess about who belongs where.
+   */
+  invite(roomId: string, userId: string): Promise<void>;
+  /**
+   * The invites waiting on this member's decision (#214): every room the
+   * homeserver has sent an invite for that isn't joined or declined yet.
+   * Reads from Synapse's stripped `invite_room_state` — what an invited
+   * (not-yet-joined) client is handed — so this answers before `joinRoom`.
+   */
+  invites(): Promise<readonly RoomInvite[]>;
+  /** Accepts a pending invite (#214): joins the room the invite named. Declining is `leave` — Matrix models both the same way. */
+  joinRoom(roomId: string): Promise<void>;
   /** Leaves a conversation — the homeserver drops the membership, for every device at once. */
   leave(roomId: string): Promise<void>;
   /**
@@ -424,6 +476,21 @@ function shareFailure(error: unknown, name: string): Error {
     if (error.errcode === "M_TOO_LARGE") {
       return new Error(`${name} is over the workspace's own upload limit.`);
     }
+    return new Error(`The workspace said: ${error.message}${/[.!?]$/.test(error.message) ? "" : "."}`);
+  }
+  return new Error("The connection dropped — we couldn't reach the workspace.");
+}
+
+/**
+ * Turns a room verb's refusal into the reason the member reads (#214): the
+ * workspace's own words when it has them — the org wall's refusals (a
+ * cross-org invite, a public room, a directory publish) are already a
+ * short, person-safe sentence by design (`rules.py`'s module docstring),
+ * so this frames rather than rewrites them — and a connection problem when
+ * there is no answer at all.
+ */
+function roomFailure(error: unknown): Error {
+  if (error instanceof MatrixError) {
     return new Error(`The workspace said: ${error.message}${/[.!?]$/.test(error.message) ? "" : "."}`);
   }
   return new Error("The connection dropped — we couldn't reach the workspace.");
@@ -853,6 +920,11 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       const directIds = directRoomIdsOf(client);
       return client
         .getRooms()
+        // #214: a room this member has been invited to but not joined is not
+        // a conversation yet — it has no timeline, no member list the server
+        // will hand over, nothing this projection can honestly fill in. It
+        // surfaces through `invites()` instead, until accepted.
+        .filter((room) => room.getMyMembership() === "join")
         .map((room) => projectRoom(room, session.userId, directIds.has(room.roomId), notificationModeOf(room, mutedIds.has(room.roomId))))
         .sort((a, b) => (b.latest?.at ?? Number.MIN_SAFE_INTEGER) - (a.latest?.at ?? Number.MIN_SAFE_INTEGER));
     },
@@ -1069,6 +1141,53 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
     startDirect: async (userId) => {
       const { room_id } = await client.createRoom({ is_direct: true, invite: [userId] });
       return room_id;
+    },
+    createRoom: async (name, topic) => {
+      const trimmedTopic = topic.trim();
+      try {
+        const { room_id } = await client.createRoom({
+          preset: Preset.PrivateChat,
+          name: name.trim(),
+          ...(trimmedTopic === "" ? {} : { topic: trimmedTopic }),
+        });
+        return room_id;
+      } catch (error) {
+        throw roomFailure(error);
+      }
+    },
+    invite: async (roomId, userId) => {
+      try {
+        await client.invite(roomId, userId);
+      } catch (error) {
+        throw roomFailure(error);
+      }
+    },
+    invites: async () => {
+      return client
+        .getRooms()
+        .filter((room) => room.getMyMembership() === "invite")
+        .map((room) => {
+          // A DM invite says so structurally (the `is_direct` flag `startDirect`
+          // set, read back by the SDK's own DM heuristic) — never guessed from
+          // member count, the same rule `directRoomIdsOf` follows for joined
+          // rooms. Anything else is a group: this seam creates no channel yet.
+          const direct = room.getDMInviter() !== undefined;
+          const inviterId = room.getDMInviter() ?? room.getMember(session.userId)?.events.member?.getSender() ?? null;
+          return {
+            roomId: room.roomId,
+            kind: direct ? "direct" : room.getJoinRule() === "public" ? "channel" : "group",
+            name: room.name || null,
+            inviterId,
+            inviterName: inviterId === null ? null : room.getMember(inviterId)?.name || localpartOf(inviterId),
+          } satisfies RoomInvite;
+        });
+    },
+    joinRoom: async (roomId) => {
+      try {
+        await client.joinRoom(roomId);
+      } catch (error) {
+        throw roomFailure(error);
+      }
     },
     leave: async (roomId) => {
       await client.leave(roomId);

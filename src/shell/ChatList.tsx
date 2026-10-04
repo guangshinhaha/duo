@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ellipsis, Settings as SettingsIcon, SquarePen } from "lucide-react";
+import { Ellipsis, Settings as SettingsIcon, SquarePen, UsersRound } from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
 import { usePendingT4, useRecordOutcome } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
@@ -10,6 +10,9 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../compon
 import { useHeld } from "../components/primitives/useHeld.js";
 import { TickingCount, useLingering } from "../components/TickingCount.js";
 import { NewConversationDialog } from "../components/NewConversationDialog.js";
+import { NewRoomDialog } from "../components/NewRoomDialog.js";
+import { InviteToRoomDialog } from "../components/InviteToRoomDialog.js";
+import { PendingInvites } from "../components/PendingInvites.js";
 import { NoDuoPanel } from "../components/NoDuoPanel.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -183,6 +186,9 @@ export function ChatList({
   const phone = !useMediaQuery(DESKTOP_QUERY);
   const workspaceAccess = useWorkspaceAccess();
   const [newOpen, setNewOpen] = useState(false);
+  const [newRoomOpen, setNewRoomOpen] = useState(false);
+  // #214: who to invite into — set from a held room's "more" panel.
+  const [inviteTarget, setInviteTarget] = useState<RoomSummary | null>(null);
   const [leaveTarget, setLeaveTarget] = useState<RoomSummary | null>(null);
   // The leave dialog keeps its words while it plays its exit.
   const heldLeave = useHeld(leaveTarget);
@@ -564,6 +570,18 @@ export function ChatList({
                         <option value="mentions">Mentions</option>
                         <option value="nothing">Nothing</option>
                       </select>
+                      {/* #214: invite someone into THIS room — a direct conversation is just its two members, so there's nothing to invite into. */}
+                      {room.kind !== "direct" && (
+                        <button
+                          aria-label={`Invite to ${title}`}
+                          className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
+                          data-testid="room-invite"
+                          onClick={() => setInviteTarget(room)}
+                          type="button"
+                        >
+                          Invite
+                        </button>
+                      )}
                       <button
                         aria-label={`Leave ${title}`}
                         className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
@@ -600,6 +618,17 @@ export function ChatList({
               <SquarePen aria-label="New conversation" size={18} />
             </button>
           )}
+          {connection && (
+            <button
+              aria-label="New group"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--muted)]"
+              data-testid="conversations-new-room"
+              onClick={() => setNewRoomOpen(true)}
+              type="button"
+            >
+              <UsersRound aria-label="New group" size={18} />
+            </button>
+          )}
           <a
             aria-label="Settings"
             className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--muted)]"
@@ -632,6 +661,8 @@ export function ChatList({
           renderWaiting()
         ) : (
           <>
+            {/* #214: a room invite isn't a conversation yet — it reads above the list it would otherwise just sit inside, unopenable. */}
+            {connection && <PendingInvites connection={connection} />}
             {api ? (
               <>
                 <DuoRow active={duoActive} api={api} waiting={duoWaiting} />
@@ -657,6 +688,32 @@ export function ChatList({
             setNewOpen(false);
             refresh();
             window.location.hash = roomHref(roomId);
+          }}
+        />
+      )}
+      {connection && (
+        <NewRoomDialog
+          connection={connection}
+          open={newRoomOpen}
+          onOpenChange={setNewRoomOpen}
+          onCreated={(roomId) => {
+            setNewRoomOpen(false);
+            refresh();
+            window.location.hash = roomHref(roomId);
+          }}
+        />
+      )}
+      {connection && inviteTarget && (
+        <InviteToRoomDialog
+          connection={connection}
+          roomId={inviteTarget.roomId}
+          roomTitle={roomTitle(inviteTarget)}
+          open={inviteTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setInviteTarget(null);
+              setOpenMore(null);
+            }
           }}
         />
       )}
