@@ -167,8 +167,14 @@ function openRoomIdFromHash(hash: string): string | null {
  * read from the same cache the list renders — and do-not-disturb holds any
  * of it back, recorded, visibly, for afterwards. Nothing here changes what
  * any surface renders; it only decides whether the shell speaks.
+ *
+ * Exported for #221's tests: this is also the browser notification's whole
+ * gate — `postNotification` (notifications.ts) is the only thing past it
+ * that differs by shell, so a test exercising this function directly is
+ * exercising the real per-room mode logic a browser notification obeys,
+ * not a second copy of it.
  */
-async function dispatchArrival(
+export async function dispatchArrival(
   connection: WorkspaceConnection,
   roomId: string,
   arrival: LiveArrival | undefined,

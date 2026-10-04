@@ -251,3 +251,116 @@ describe("#52 — a confirmation is waiting: notified natively, and the click on
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #221: the browser half. Every test here runs with the Tauri plugin
+ * rejecting — the same "window.__TAURI_INTERNALS__ is undefined" shape the
+ * real plugin throws outside the shell — so `postNotification` falls
+ * through to the Web Notification API exactly the way it does in a real
+ * browser tab.
+ */
+describe("#221 — the browser path: Web Notification API when there is no Tauri shell", () => {
+  class MockNotification {
+    static permission: "default" | "granted" | "denied" = "default";
+    static requestPermission: () => Promise<"default" | "granted" | "denied"> = vi.fn();
+    static instances: MockNotification[] = [];
+    onclick: (() => void) | null = null;
+    close = vi.fn();
+    readonly title: string;
+    readonly body: string;
+    constructor(title: string, options?: { body?: string }) {
+      this.title = title;
+      this.body = options?.body ?? "";
+      MockNotification.instances.push(this);
+    }
+  }
+
+  function hideAndUnfocusTab(): void {
+    Object.defineProperty(document, "hidden", { value: true, configurable: true });
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    plugin.isPermissionGranted.mockReset();
+    plugin.requestPermission.mockReset();
+    plugin.sendNotification.mockReset();
+    plugin.onAction.mockReset();
+    plugin.isPermissionGranted.mockRejectedValue(new Error("window.__TAURI_INTERNALS__ is undefined"));
+
+    MockNotification.permission = "default";
+    MockNotification.requestPermission = vi.fn<() => Promise<"default" | "granted" | "denied">>().mockResolvedValue("granted");
+    MockNotification.instances = [];
+    vi.stubGlobal("Notification", MockNotification);
+
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    Object.defineProperty(document, "hidden", { value: false, configurable: true });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    Object.defineProperty(document, "hidden", { value: false, configurable: true });
+    window.location.hash = "";
+  });
+
+  it("asks nothing and shows nothing while the tab is visible and focused", async () => {
+    const { postNotification } = await import("../src/notifications.js");
+    await postNotification("Bob in project-x: ship it", "#chat/x");
+    expect(MockNotification.requestPermission).not.toHaveBeenCalled();
+    expect(MockNotification.instances).toHaveLength(0);
+  });
+
+  it("asks for permission only once a message would have notified while hidden — never on load", async () => {
+    hideAndUnfocusTab();
+    const { postNotification } = await import("../src/notifications.js");
+    // Importing the module (the app "loading") asks nothing by itself.
+    expect(MockNotification.requestPermission).not.toHaveBeenCalled();
+    await postNotification("Bob in project-x: ship it", "#chat/x");
+    expect(MockNotification.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a browser notification for a message while the tab is in the background", async () => {
+    hideAndUnfocusTab();
+    const { postNotification } = await import("../src/notifications.js");
+    await postNotification("Bob in project-x: ship it", "#chat/x");
+    expect(MockNotification.instances).toHaveLength(1);
+    expect(MockNotification.instances[0]!.title).toBe("Duo");
+    expect(MockNotification.instances[0]!.body).toBe("Bob in project-x: ship it");
+  });
+
+  it("never re-asks, and never shows, once the browser has denied permission", async () => {
+    hideAndUnfocusTab();
+    MockNotification.permission = "denied";
+    const { postNotification } = await import("../src/notifications.js");
+    await postNotification("one", "#chat/x");
+    await postNotification("two", "#chat/x");
+    expect(MockNotification.requestPermission).not.toHaveBeenCalled();
+    expect(MockNotification.instances).toHaveLength(0);
+  });
+
+  it("clicking it focuses the tab and opens the conversation it was about", async () => {
+    hideAndUnfocusTab();
+    const focusSpy = vi.spyOn(window, "focus").mockImplementation(() => {});
+    const { postNotification } = await import("../src/notifications.js");
+    await postNotification("Bob in project-x: ship it", "#chat/%21project-x%3Aworkspace.example");
+
+    const notification = MockNotification.instances[0]!;
+    notification.onclick?.();
+
+    expect(focusSpy).toHaveBeenCalled();
+    expect(window.location.hash).toBe("#chat/%21project-x%3Aworkspace.example");
+    expect(notification.close).toHaveBeenCalled();
+  });
+
+  it("never fires a browser notification when the Tauri path is active, even hidden — no double notification in the Mac app", async () => {
+    hideAndUnfocusTab();
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const { postNotification } = await import("../src/notifications.js");
+    await postNotification("Bob in project-x: ship it", "#chat/x");
+    expect(MockNotification.instances).toHaveLength(0);
+    expect(MockNotification.requestPermission).not.toHaveBeenCalled();
+  });
+});

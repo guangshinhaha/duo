@@ -20,6 +20,70 @@ import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js"
  */
 let permission: "unknown" | "granted" | "denied" = "unknown";
 
+/**
+ * #221: whether this tab is running inside the Tauri shell at all — the
+ * global every Tauri webview injects (tray or main window alike, the same
+ * one `shell/native.ts`'s `isTrayWindow` reads a field of). Checked before
+ * ever touching the Web Notification API below, so a member running the Mac
+ * app never gets a second, independent notification system stacked on top
+ * of the native one — "the native path is already active" is a yes/no this
+ * answers once, synchronously, with no await and no side effect.
+ */
+function isTauriShell(): boolean {
+  try {
+    return "__TAURI_INTERNALS__" in window;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * #221: the plain-browser half of this module (the Web Notification API —
+ * `MIT`-licensed, standard, no package). Cinny's `SystemNotification.tsx`
+ * (AGPL-3.0) was read for the approach only — ask at the moment a
+ * notification would otherwise be silent, show while the tab can't be seen,
+ * route a click to what it was about — and nothing from it is copied here.
+ *
+ * Permission is asked for here, lazily, the first time a message would have
+ * notified: never on load, and never merely because the tab opened. A tab
+ * that is visible and focused shows nothing and asks nothing — the open
+ * window already said it, same as the Tauri path's own open-room check one
+ * level up in `dispatchArrival` (App.tsx). `Notification.permission`
+ * itself is the cache; this module keeps none of its own; a denial is the
+ * browser's own standing answer and is never re-asked.
+ */
+async function postBrowserNotification(body: string, hash: string): Promise<void> {
+  if (isTauriShell()) {
+    // The native path is active; a second, browser-level notification here
+    // would be the same arrival said twice.
+    return;
+  }
+  if (typeof Notification === "undefined" || typeof document === "undefined") {
+    return; // no Notification API in this environment (or a test's jsdom-ish stand-in)
+  }
+  if (!document.hidden && document.hasFocus()) {
+    return; // the tab is right here; nothing to catch the member's eye for
+  }
+  try {
+    if (Notification.permission === "denied") {
+      return;
+    }
+    const granted = Notification.permission === "granted" ? true : (await Notification.requestPermission()) === "granted";
+    if (!granted) {
+      return;
+    }
+    const notification = new Notification("Duo", { body });
+    notification.onclick = () => {
+      window.focus();
+      window.location.hash = hash;
+      notification.close();
+    };
+  } catch {
+    // A failed browser notification must never break the arrival that
+    // triggered it — same law the Tauri half keeps below.
+  }
+}
+
 /*
  * #25: a notification opens what it is about. The plugin's action callback
  * echoes the notification's own options, and its only caller-controllable
@@ -63,20 +127,30 @@ export async function ensureNotificationPermission(): Promise<boolean> {
   }
 }
 
-/** Posts one notification under the app's name, opening `hash` when clicked. */
+/**
+ * Posts one notification under the app's name, opening `hash` when clicked.
+ * The Tauri path first — unchanged, and wins whenever it's actually
+ * available, so the Mac app behaves exactly as it did before #221. A plain
+ * browser tab has no such plugin: `ensureNotificationPermission` feature-
+ * detects that by the plugin's own calls rejecting, and #221's browser path
+ * below picks it up from there (`postBrowserNotification` re-checks
+ * `isTauriShell` itself, so a real Tauri denial never falls through to a
+ * second permission system either).
+ */
 export async function postNotification(body: string, hash: string): Promise<void> {
-  if (!(await ensureNotificationPermission())) {
+  if (await ensureNotificationPermission()) {
+    try {
+      const id = nextNotificationId++;
+      hashByNotificationId.set(id, hash);
+      boundNotificationIds();
+      sendNotification({ id, title: "Duo", body });
+    } catch {
+      // A failed notification must never break the surface that triggered it —
+      // the message is still in the conversation either way.
+    }
     return;
   }
-  try {
-    const id = nextNotificationId++;
-    hashByNotificationId.set(id, hash);
-    boundNotificationIds();
-    sendNotification({ id, title: "Duo", body });
-  } catch {
-    // A failed notification must never break the surface that triggered it —
-    // the message is still in the conversation either way.
-  }
+  await postBrowserNotification(body, hash);
 }
 
 export async function notifyDraftReady(draftId: string): Promise<void> {
