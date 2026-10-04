@@ -176,7 +176,6 @@ type FakeClient = MatrixClient & {
   deletePushRule: ReturnType<typeof vi.fn>;
   setRoomAccountData: ReturnType<typeof vi.fn>;
   searchUserDirectory: ReturnType<typeof vi.fn>;
-  getProfileInfo: ReturnType<typeof vi.fn>;
   sendReadReceipt: ReturnType<typeof vi.fn>;
   sendEvent: ReturnType<typeof vi.fn>;
   redactEvent: ReturnType<typeof vi.fn>;
@@ -238,9 +237,6 @@ function fakeClient(
         { user_id: "@duo-carol:workspace.example", display_name: undefined },
       ],
     })),
-    getProfileInfo: vi.fn(async () => {
-      throw new Error("no such user");
-    }),
     sendReadReceipt: vi.fn(async () => ({})),
     sendEvent: vi.fn(async () => ({})),
     redactEvent: vi.fn(async () => ({})),
