@@ -221,6 +221,20 @@ export interface UrlPreview {
   readonly image: string | null;
 }
 
+/**
+ * This member's own workspace identity, as the homeserver itself holds it
+ * (#224) — never this app's cache of it, and never a daemon's registry
+ * entry: once a member has set either field themselves, the homeserver's
+ * copy IS the fact, which is what keeps this feature from fighting a
+ * daemon that also writes a default name on provisioning (digital-duo#272).
+ * Both fields are null until someone has ever set them.
+ */
+export interface WorkspaceProfile {
+  readonly name: string | null;
+  /** The homeserver's own `mxc://` reference — null when no picture is set. Resolve it with `loadMedia` to render it. */
+  readonly avatarUrl: string | null;
+}
+
 /** One aggregated reaction under a message: the emoji, how many, and whether this member is among them. */
 export interface ReactionSummary {
   readonly key: string;
@@ -472,6 +486,31 @@ export interface WorkspaceConnection {
   renewToken?(accessToken: string): void;
   /** Whose connection this is — the member's own user id, the way the surface tells its own messages (editable, deletable) from everyone else's. */
   readonly userId: string;
+  /**
+   * This member's own name and picture, read straight from the homeserver's
+   * profile endpoint (#224) — not the live timeline's cache of it, so it
+   * answers the truth even for an account in no room yet.
+   */
+  profile(): Promise<WorkspaceProfile>;
+  /**
+   * Sets this member's own workspace display name (#224). The homeserver
+   * folds the new name into every room's member state on its own, which is
+   * the whole of "colleagues see it everywhere" — nothing else here makes
+   * that happen. Once a member has called this, the account's name is
+   * theirs to keep; nothing in this client ever overwrites it again on its
+   * own (a daemon's own reconcile, digital-duo#272, is a separate door that
+   * this client has no part in).
+   */
+  setDisplayName(name: string): Promise<void>;
+  /**
+   * Sets this member's own workspace picture (#224): uploads the bytes
+   * through the same door #66's `uploadFile` does, then points the
+   * account's avatar at the result — and answers the `mxc://` reference it
+   * set, so a caller can render it straight away rather than asking the
+   * homeserver to repeat itself. Propagation to every room is the
+   * homeserver's job, the same as `setDisplayName`.
+   */
+  setAvatarUrl(file: StagedShare): Promise<string>;
   /** The member's conversations, ordered by latest activity — the server's answer, not this device's cache of it. */
   rooms(): Promise<readonly RoomSummary[]>;
   timeline(roomId: string): Promise<readonly RoomMessage[]>;
@@ -808,13 +847,16 @@ export async function signIn(homeserverUrl: string, username: string, password: 
 }
 
 /**
- * Turns whatever the homeserver or the network did to a share into the
- * reason the member reads (#66 AC4): the workspace's own upload limit is
- * named as such (this client can't know its size — the homeserver owns that
- * door, beside this app's own share limits), any other refusal carries the
- * workspace's own words, and no answer at all is a connection problem.
+ * Turns whatever the homeserver or the network did to an upload into the
+ * reason the member reads (#66 AC4, reused by #224's picture upload): the
+ * workspace's own upload limit is named as such (this client can't know its
+ * size — the homeserver owns that door, beside this app's own share
+ * limits), any other refusal carries the workspace's own words, and no
+ * answer at all is a connection problem. `name` is what the limit was
+ * over — a file's name for a share, or a plain "Your picture"/"Your name"
+ * for a profile change.
  */
-function shareFailure(error: unknown, name: string): Error {
+function workspaceFailure(error: unknown, name: string): Error {
   if (error instanceof MatrixError) {
     if (error.errcode === "M_TOO_LARGE") {
       return new Error(`${name} is over the workspace's own upload limit.`);
@@ -1627,6 +1669,41 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       client.setAccessToken(accessToken);
     },
     userId: session.userId,
+    // #224: the profile endpoint, not the timeline's cached User — the
+    // truth even for an account in no room yet, and the same door every
+    // other client (including one the daemon drives) reads to see what
+    // this member last set.
+    profile: async () => {
+      const info = await client.getProfileInfo(session.userId);
+      return { name: info.displayname ?? null, avatarUrl: info.avatar_url ?? null };
+    },
+    setDisplayName: async (name) => {
+      try {
+        await client.setDisplayName(name);
+      } catch (error) {
+        throw workspaceFailure(error, "Your name");
+      }
+    },
+    setAvatarUrl: async (file) => {
+      // Same upload door as #66's uploadFile: the homeserver's media store,
+      // the same bytes-in, reference-out shape — just pointed at the
+      // account's own avatar field instead of a room message.
+      let content_uri: string;
+      try {
+        ({ content_uri } = await client.uploadContent(new Blob([file.bytes], { type: file.mimeType }), {
+          name: file.name,
+          type: file.mimeType,
+        }));
+      } catch (error) {
+        throw workspaceFailure(error, file.name);
+      }
+      try {
+        await client.setAvatarUrl(content_uri);
+      } catch (error) {
+        throw workspaceFailure(error, "Your picture");
+      }
+      return content_uri;
+    },
     rooms: async () => {
       // The mute half of the projection lives in the account's push rules —
       // one read for the whole list. The mode's audible half lives in each
@@ -1884,7 +1961,7 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
           ...(onProgress === undefined ? {} : { progressHandler: (progress) => onProgress(progress.loaded, progress.total) }),
         }));
       } catch (error) {
-        throw shareFailure(error, staged.name);
+        throw workspaceFailure(error, staged.name);
       }
       return { name: staged.name, mimeType: staged.mimeType, size: staged.size, url: content_uri, image: isImageType(staged.mimeType) };
     },
@@ -1902,7 +1979,7 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
           file.image ? { ...facts, msgtype: MsgType.Image } : { ...facts, msgtype: MsgType.File },
         );
       } catch (error) {
-        throw shareFailure(error, file.name);
+        throw workspaceFailure(error, file.name);
       }
     },
     loadMedia: async (url) => {

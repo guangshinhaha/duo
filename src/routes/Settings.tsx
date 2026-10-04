@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import type { WorkspaceSession } from "../workspace/matrix.js";
+import type { WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
 import { isHostedAccess, useWorkspaceAccess } from "../workspace/access.js";
 import { HostedWorkspaceStatus } from "../components/HostedWorkspaceStatus.js";
+import { WorkspaceProfile } from "../components/WorkspaceProfile.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,6 +55,7 @@ function maskedToken(token: string): string {
 export function Settings({
   api,
   session,
+  connection,
   onConfigChange,
   onSignOut,
   onPairDuo,
@@ -76,6 +78,8 @@ export function Settings({
   section?: SettingsSectionId | "index";
   api: DuoApiConfig | null;
   session: WorkspaceSession | null;
+  /** The live workspace connection (#224's Profile section needs it to read and write the member's own name and picture) — null until one is up. */
+  connection?: WorkspaceConnection | null;
   onConfigChange: (config: DuoApiConfig | null) => void;
   onSignOut: () => void;
   onPairDuo: () => void;
@@ -280,6 +284,16 @@ export function Settings({
       </section>
 
       </>
+    ),
+    profile: connection ? (
+      <WorkspaceProfile connection={connection} />
+    ) : (
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-profile">
+        <h2 className="type-heading">Profile</h2>
+        <p className="type-provenance text-[var(--muted)]">
+          Sign in to a workspace to set your name and picture there.
+        </p>
+      </section>
     ),
     devices: api ? (
       <>
