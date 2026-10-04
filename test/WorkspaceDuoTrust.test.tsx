@@ -92,6 +92,7 @@ function message(over: Partial<RoomMessage> & Pick<RoomMessage, "eventId" | "sen
     reactions: [],
     thread: null,
     threadRootEventId: null,
+    replyToEventId: null,
     parts: null,
     ...over,
   };
