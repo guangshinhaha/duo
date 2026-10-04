@@ -31,11 +31,12 @@ import {
 import { normalize } from "matrix-js-sdk/lib/utils";
 import { duoOwnerUserIdOf, localpartOf } from "./identity.js";
 import { normalizeHomeserverUrl } from "../homeserver.js";
+import { markdownToHtml } from "./markdown.js";
 import {
-  formattedBodyWithMentions,
   mentionAnchorsFrom,
   mentionLabelOf,
   partsFromBody,
+  withMentionAnchors,
   type MessageMention,
   type MessagePart,
 } from "./mentions.js";
@@ -1653,16 +1654,24 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       return [...hits].sort((a, b) => b.originServerTs - a.originServerTs);
     },
     send: async (roomId, body, mentions = [], replyToEventId) => {
-      // #65: the spec's mention wire shape (§User and room mentions). The
-      // HTML half rides only when something was anchored; the intent half
-      // always does — empty when nothing is mentioned, because the legacy
-      // display-name push rules otherwise fire on any message that merely
-      // contains a name.
-      const formatted = formattedBodyWithMentions(body, mentions);
+      // #216: mentions anchor into the markdown SOURCE first — the body
+      // with each addressed mention's words replaced by its matrix.to
+      // anchor, still otherwise exactly what was typed — and markdown
+      // turns the mix into the finished `formatted_body`. #65's own rule
+      // (anchor text is the body's text there) still holds: `marked`
+      // leaves an already-complete inline `<a>` tag's text untouched
+      // beyond its own entity-escaping (a quote mark, not the
+      // asterisks/underscores markdown would otherwise read as syntax),
+      // which `mentions.ts`'s `unescapeHtml` already accounts for on the
+      // way back in. `format`/`formatted_body` now ride on EVERY text
+      // send, mentions or not: markdown is always applied, and a plain
+      // sentence is still its own (trivial) formatting — `body` is what
+      // every client, formatting-aware or not, reads regardless (#216 AC2).
       await client.sendMessage(roomId, {
         msgtype: MsgType.Text,
         body,
-        ...(formatted === null ? {} : { format: "org.matrix.custom.html", formatted_body: formatted }),
+        format: "org.matrix.custom.html",
+        formatted_body: markdownToHtml(withMentionAnchors(body, mentions)),
         "m.mentions": { user_ids: [...new Set(mentions.map((mention) => mention.userId))] },
         // #215: a quote outside a thread is the spec's plain reply
         // relation — no `rel_type`, unlike every other relation this seam

@@ -630,9 +630,14 @@ describe("the projection from Matrix events to room messages", () => {
     // #65: even a mention-less send carries m.mentions — the spec
     // recommends it on every event, because the legacy display-name push
     // rules otherwise fire on any message that happens to contain a name.
+    // #216: every text send now also carries a markdown-derived
+    // formatted_body, mentions or not — a plain sentence is still its own
+    // (trivial) formatting.
     expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
       msgtype: MsgType.Text,
       body: "thanks all",
+      format: "org.matrix.custom.html",
+      formatted_body: "<p>thanks all</p>\n",
       "m.mentions": { user_ids: [] },
     });
 
@@ -725,8 +730,10 @@ describe("the projection from Matrix events to room messages", () => {
       format: "org.matrix.custom.html",
       // A duo's anchor text is the grammar's — "@carol's duo" from
       // @duo-carol — never the caller's claim, so every reader's pill
-      // names the duo, not a name the sender chose.
-      formatted_body: "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol's duo</a> what's our refund policy?",
+      // names the duo, not a name the sender chose. #216: wrapped in a
+      // paragraph and its apostrophe entity-encoded — markdown's own doing,
+      // on top of the anchor the mention wire always built.
+      formatted_body: "<p><a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol&#39;s duo</a> what&#39;s our refund policy?</p>\n",
       "m.mentions": { user_ids: ["@duo-carol:workspace.example"] },
     });
     // The mention-less half of the wire contract is pinned by the send
@@ -752,9 +759,10 @@ describe("the pills half of the mention wire (#65)", () => {
       msgtype: MsgType.Text,
       body: "@Carol, @carol's duo — what's our refund policy?",
       format: "org.matrix.custom.html",
+      // #216: same paragraph wrap and apostrophe-encoding as above.
       formatted_body:
-        '<a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>, ' +
-        "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol's duo</a> — what's our refund policy?",
+        '<p><a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>, ' +
+        "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol&#39;s duo</a> — what&#39;s our refund policy?</p>\n",
       "m.mentions": { user_ids: ["@carol:workspace.example", "@duo-carol:workspace.example"] },
     });
   });
@@ -927,6 +935,8 @@ describe("#215 — a reply outside a thread", () => {
     expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
       msgtype: MsgType.Text,
       body: "yes, 30 days",
+      format: "org.matrix.custom.html",
+      formatted_body: "<p>yes, 30 days</p>\n",
       "m.mentions": { user_ids: [] },
       "m.relates_to": { "m.in_reply_to": { event_id: "$1000" } },
     });
@@ -992,6 +1002,71 @@ describe("#215 — a reply outside a thread", () => {
     expect(messages.find((message) => message.eventId === "$2000")?.replyToEventId).toBe("$1000");
     expect(messages.find((message) => message.eventId === "$1000")?.replyToEventId).toBeNull();
     expect(messages.find((message) => message.eventId === "$3000")?.replyToEventId).toBeNull();
+  });
+});
+
+describe("#216 — writing in markdown", () => {
+  it("bold, a list and a mention compose on one send — the plain body stays untouched, the mention still anchors", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.send("!project-x:workspace.example", "**urgent** @carol's duo:\n- 30 days\n- full amount", [
+      { userId: "@duo-carol:workspace.example", label: "The Refund Bot" },
+    ]);
+
+    const [, content] = vi.mocked(client.sendMessage).mock.calls[0]!;
+    // #216 AC2: the plain body always rides exactly as typed — markdown
+    // syntax and all — for a client that can't render HTML.
+    expect(content.body).toBe("**urgent** @carol's duo:\n- 30 days\n- full amount");
+    expect(content.format).toBe("org.matrix.custom.html");
+    // Bold rendered, the list rendered, and the mention's anchor still
+    // wraps exactly "@carol's duo" — markdown mixing with the mention
+    // syntax mangled neither.
+    expect(content.formatted_body).toContain("<strong>urgent</strong>");
+    expect(content.formatted_body).toContain("<li>30 days</li>");
+    expect(content.formatted_body).toContain(
+      '<a href="https://matrix.to/#/@duo-carol:workspace.example">@carol&#39;s duo</a>',
+    );
+    expect(content["m.mentions"]).toEqual({ user_ids: ["@duo-carol:workspace.example"] });
+  });
+
+  it("a mention survives the round trip through markdown and back into parts — the apostrophe marked's escaper adds doesn't break the match", async () => {
+    const events = [
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.text",
+        body: "@carol's duo, what's our refund policy?",
+        ts: 1_000,
+        format: "org.matrix.custom.html",
+        // Exactly what `markdownToHtml(withMentionAnchors(...))` produces:
+        // wrapped in a paragraph, the anchor's own apostrophe entity-encoded.
+        formattedBody:
+          '<p><a href="https://matrix.to/#/@duo-carol:workspace.example">@carol&#39;s duo</a>, what&#39;s our refund policy?</p>\n',
+      }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message!.parts).toEqual([
+      { kind: "mention", userId: "@duo-carol:workspace.example", label: "carol's duo" },
+      { kind: "text", text: ", what's our refund policy?" },
+    ]);
   });
 });
 
