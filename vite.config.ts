@@ -16,6 +16,17 @@ import tailwindcss from "@tailwindcss/vite";
 // instance during `npm run dev` the same way the built app does.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // matrix-js-sdk's HTTP layer calls the bare Node global `global.fetch(...)`
+  // (lib/http-api/fetch.js). Vite's browser build never defines `global` —
+  // it's Node-only — so every real-browser call throws `ReferenceError:
+  // global is not defined` synchronously, before any network request, which
+  // `App.tsx`'s workspace-connect try/catch then swallows silently (report
+  // "failed", no console output). Vitest never caught this because tests run
+  // inside a real Node process, where `global` always exists regardless of
+  // the happy-dom/jsdom environment. `globalThis` is the single aliased
+  // global object browsers and Node both already expose — point `global` at
+  // it, as `window.global`, for any bundled code built against Node's API.
+  define: { global: "globalThis" },
   // Two entries: the paired owner app (`index.html`) and the no-install
   // asker page (`ask.html`, duo #1/#2). Both must be named explicitly —
   // an `input` object replaces Vite's default `index.html`-only entry —
