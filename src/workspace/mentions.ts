@@ -95,6 +95,45 @@ const unescapeHtml = (text: string): string =>
  */
 export const addressed = (userId: string, label: string): string => `@${mentionLabelOf(userId, label)}`;
 
+/**
+ * The pill's classes (#65/#213): dashed, the same idiom a duo's own
+ * messages wear, for a duo-shaped id; solid for a person. The one home of
+ * this string — `Room.tsx`'s JSX pill and `sanitizeMatrixHtml.ts`'s pill
+ * (built for a mention anchor inside another client's `formatted_body`,
+ * where there's no React tree to mount a component into) both read it from
+ * here, so a mention looks the same wherever it renders.
+ */
+export function mentionPillClassName(userId: string): string {
+  return `rounded-[var(--r-sm)] border px-1 ${
+    isDuoUserId(userId)
+      ? "border-dashed border-[var(--edge)] bg-[var(--surface-2)] text-[var(--text)]"
+      : "border-[var(--accent)] text-[var(--text)]"
+  }`;
+}
+
+/**
+ * The user id a matrix.to permalink href names, or null when the href
+ * isn't a user permalink (a room/event permalink, or anything else) — the
+ * one place that knows the matrix.to user-anchor shape. `mentionAnchorsFrom`
+ * walks a whole `formatted_body` string with this same shape baked into its
+ * regex; this sibling checks a single href already parsed into a live
+ * anchor element (#213's formatted-HTML renderer meets mentions as DOM
+ * nodes, not text to regex over).
+ */
+export function userIdOfMatrixToHref(href: string): string | null {
+  const match = /^https:\/\/matrix\.to\/#\/([^?#]+)$/.exec(href);
+  if (!match) {
+    return null;
+  }
+  let userId = match[1]!;
+  try {
+    userId = decodeURIComponent(userId);
+  } catch {
+    // A malformed escape sequence stays as-is — it won't start with "@" below.
+  }
+  return userId.startsWith("@") ? userId : null;
+}
+
 function anchorOf(userId: string, text: string): string {
   return `<a href="https://matrix.to/#/${userId}">${escapeHtml(text)}</a>`;
 }

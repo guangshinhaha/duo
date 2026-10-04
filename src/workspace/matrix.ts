@@ -37,6 +37,7 @@ import {
   mentionLabelOf,
   partsFromBody,
   withMentionAnchors,
+  type MentionAnchor,
   type MessageMention,
   type MessagePart,
 } from "./mentions.js";
@@ -276,6 +277,25 @@ export interface RoomMessage {
    * edit, and words that moved render honestly as words.
    */
   readonly parts: readonly MessagePart[] | null;
+  /**
+   * #213: this turn's `formatted_body`, when it carries one
+   * (`format === "org.matrix.custom.html"`) — another client's bold,
+   * lists, code, quotes, tables. Absent for plain words, a share, or a
+   * fold (an edit): the same cases `parts` already goes null for, since
+   * both are read off the same `formatted_body`. The render sanitizes
+   * this to the spec's allowed tag list before showing it — never shown
+   * raw.
+   */
+  readonly formattedBody?: string;
+  /**
+   * #213: the already-resolved label for each mention anchor the
+   * `formattedBody` above carries, keyed by user id — the identical
+   * resolution `parts` uses (room membership for a person, the id's
+   * grammar for a duo), computed once here so the formatted-HTML renderer
+   * never needs the SDK's own membership lookup to show a pill correctly.
+   * Absent alongside `formattedBody` when there's nothing to carry it for.
+   */
+  readonly mentionLabels?: Readonly<Record<string, string>>;
   /** The share this message IS, when it is one — null/absent for text. Sharing reaches people, never any corpus. */
   readonly file?: SharedFile;
   /** The homeserver's epoch-ms timestamp — server time, not arrival time. */
@@ -857,21 +877,40 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     const member = room.getMember(senderId);
     return nonIdName(member?.rawDisplayName ?? member?.name, senderId) ?? localpartOf(senderId);
   };
+  // #213: a turn's formatted half, read only under the spec's own gate —
+  // `format` must say so, and `formatted_body` must actually be the string
+  // it promises. Absent for anything else (a share's content never carries
+  // either), so the render falls back to the plain body honestly rather
+  // than guessing at a shape that isn't there.
+  const formattedBodyOf = (content: Record<string, unknown>): string | undefined =>
+    content?.format === "org.matrix.custom.html" && typeof content?.formatted_body === "string" ? content.formatted_body : undefined;
   // #65: the pills the message was sent with, read from its formatted
   // body's matrix.to user anchors. A person's label prefers the room's own
   // record of their name (membership), else the anchor's text minus its
   // addressing "@" — the display name as of sending, the spec's own
   // guidance for anchor text. A duo's label is always the grammar's,
   // whatever the anchor claimed.
-  const partsOfEvent = (body: string, content: Record<string, unknown>): readonly MessagePart[] | null => {
-    return partsFromBody(
-      body,
-      mentionAnchorsFrom(typeof content?.formatted_body === "string" ? content.formatted_body : undefined),
-      (anchor) => {
-        const member = room.getMember(anchor.userId);
-        return mentionLabelOf(anchor.userId, nonIdName(member?.rawDisplayName ?? member?.name, anchor.userId) ?? anchor.text.replace(/^@/, ""));
-      },
-    );
+  const labelOfAnchor = (anchor: MentionAnchor): string => {
+    const member = room.getMember(anchor.userId);
+    return mentionLabelOf(anchor.userId, nonIdName(member?.rawDisplayName ?? member?.name, anchor.userId) ?? anchor.text.replace(/^@/, ""));
+  };
+  const partsOfEvent = (body: string, formattedBody: string | undefined): readonly MessagePart[] | null =>
+    partsFromBody(body, mentionAnchorsFrom(formattedBody), labelOfAnchor);
+  // #213: the same anchors' labels, keyed by user id, for the formatted-HTML
+  // renderer — it reads `formatted_body` itself (sanitized) and needs a
+  // pill's label without reaching back into the SDK's membership, which
+  // only this seam may import. Absent when there's nothing to key (no
+  // anchors) rather than an empty object for every plain-formatted turn.
+  const mentionLabelsOf = (formattedBody: string | undefined): Readonly<Record<string, string>> | undefined => {
+    const anchors = mentionAnchorsFrom(formattedBody);
+    if (anchors.length === 0) {
+      return undefined;
+    }
+    const labels: Record<string, string> = {};
+    for (const anchor of anchors) {
+      labels[anchor.userId] = labelOfAnchor(anchor);
+    }
+    return labels;
   };
 
   // Pass one — the bases: every conversation turn (text, and a shared
@@ -883,6 +922,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     senderName: string;
     body: string;
     parts: readonly MessagePart[] | null;
+    formattedBody: string | undefined;
+    mentionLabels: Readonly<Record<string, string>> | undefined;
     file: SharedFile | undefined;
     ts: number;
     edited: boolean;
@@ -914,6 +955,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
         senderName: nameOf(senderId),
         body: "",
         parts: null,
+        formattedBody: undefined,
+        mentionLabels: undefined,
         file: undefined,
         ts: event.getTs(),
         edited: false,
@@ -957,8 +1000,13 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
           body: String(newBody),
           // The fold keeps the replacement's words and drops the pills:
           // this client sends no anchors with an edit, and words that
-          // moved render honestly as words.
+          // moved render honestly as words. The formatted half goes with
+          // them — the base's old `formatted_body` would otherwise outlive
+          // the words it was shaped for, showing stale formatting over the
+          // edit's plain ones.
           parts: null,
+          formattedBody: undefined,
+          mentionLabels: undefined,
           file: base.file === undefined ? undefined : { ...base.file, name: String(newBody) },
           edited: true,
         });
@@ -966,16 +1014,28 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       continue;
     }
     const content = event.getContent() as
-      | { body?: unknown; formatted_body?: unknown; filename?: unknown; url?: unknown; info?: { mimetype?: unknown; size?: unknown } }
+      | {
+          body?: unknown;
+          format?: unknown;
+          formatted_body?: unknown;
+          filename?: unknown;
+          url?: unknown;
+          info?: { mimetype?: unknown; size?: unknown };
+        }
       | undefined;
     const body = String(content?.body ?? "");
+    // #213: a share's content never carries `formatted_body` for its own
+    // caption today — only a text turn's formatted half is read.
+    const formattedBody = isShare ? undefined : formattedBodyOf(content ?? {});
     bases.set(event.getId() ?? "", {
       msgtype: msgtype as string,
       senderId,
       senderName: nameOf(senderId),
       body,
       // #65: a share's label carries no pills — only a text turn has parts.
-      parts: isShare ? null : partsOfEvent(body, content ?? {}),
+      parts: isShare ? null : partsOfEvent(body, formattedBody),
+      formattedBody,
+      mentionLabels: isShare ? undefined : mentionLabelsOf(formattedBody),
       // A share's facts are the sender's own declarations, carried as
       // declared — the homeserver owns the reference; the client asserts
       // nothing about either.
@@ -1055,6 +1115,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       senderName: base.senderName,
       body: base.body,
       parts: base.parts,
+      formattedBody: base.formattedBody,
+      mentionLabels: base.mentionLabels,
       file: base.file,
       originServerTs: base.ts,
       edited: base.edited,

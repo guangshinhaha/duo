@@ -6,13 +6,14 @@ import { RoomDuoAnswer } from "../components/RoomDuoAnswer.js";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
 import { LinkPreviewCard } from "../components/LinkPreviewCard.js";
+import { MessageBodyHtml } from "../components/MessageBodyHtml.js";
 import { InfoButton } from "../shell/InfoButton.js";
 import { useStickToEnd } from "../shell/stickToEnd.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { roomTitle } from "../shell/roomTitle.js";
-import { addressed, mentionLabelOf, type MessageMention } from "../workspace/mentions.js";
+import { addressed, mentionLabelOf, mentionPillClassName, type MessageMention } from "../workspace/mentions.js";
 import type { RoomMemberRef, RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
@@ -80,15 +81,7 @@ function threadPreviewLabel(reply: { senderId: string; senderName: string }): st
  */
 function MentionPill({ userId, label }: { userId: string; label: string }) {
   return (
-    <span
-      className={`rounded-[var(--r-sm)] border px-1 ${
-        isDuoUserId(userId)
-          ? "border-dashed border-[var(--edge)] bg-[var(--surface-2)] text-[var(--text)]"
-          : "border-[var(--accent)] text-[var(--text)]"
-      }`}
-      data-mentioned-user={userId}
-      data-testid="room-mention"
-    >
+    <span className={mentionPillClassName(userId)} data-mentioned-user={userId} data-testid="room-mention">
       {addressed(userId, label)}
     </span>
   );
@@ -542,7 +535,16 @@ export function MessageBody({
         />
       ) : (
         <>
-          {messageWords(message)}
+          {/* #213: another client's rich text — once there's a `formatted_body`
+              it's the richer of the two, so it renders in place of the plain
+              parts/body `messageWords` would otherwise show (which is itself
+              only ever non-null when a `formatted_body` carried the mention
+              anchors it was built from — see matrix.ts's `partsOfEvent`). */}
+          {message.formattedBody !== undefined ? (
+            <MessageBodyHtml formattedBody={message.formattedBody} loadMedia={loadMedia} mentionLabels={message.mentionLabels ?? {}} />
+          ) : (
+            messageWords(message)
+          )}
           {previewUrl !== null && <LinkPreviewCard getUrlPreview={getUrlPreview} loadMedia={loadMedia} url={previewUrl} />}
         </>
       )
