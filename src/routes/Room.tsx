@@ -94,6 +94,40 @@ function MentionPill({ userId, label }: { userId: string; label: string }) {
   );
 }
 
+/**
+ * #215: the quote a reply carries — who it answers and a snippet of what
+ * they said, read from this device's own copy of the conversation (never a
+ * second fetch). `quoted` is undefined when that copy doesn't hold the
+ * original: the row still says it's a reply (the row below still renders),
+ * it just can't say to what — honest about the gap rather than inventing
+ * words. Clicking a quote whose original IS held brings it into view
+ * (`onJump`, wired to `Room`'s own scroll-and-highlight, the same one a
+ * search landing uses) — a simple in-page jump, not a permalink (#225).
+ */
+function ReplyQuote({ quoted, onJump }: { quoted: RoomMessage | undefined; onJump?: () => void }) {
+  if (quoted === undefined) {
+    return (
+      <p className="mb-1 rounded-[var(--r-sm)] border-l-2 border-[var(--edge)] pl-2 type-provenance italic text-[var(--faint)]" data-testid="reply-quote">
+        Replying to a message not shown here
+      </p>
+    );
+  }
+  const label = mentionLabelOf(quoted.senderId, quoted.senderName);
+  const snippet = quoted.redacted ? "Message deleted" : quoted.file !== undefined ? quoted.file.name : plainPreview(quoted.body);
+  const quoteBody = (
+    <p className="mb-1 line-clamp-2 rounded-[var(--r-sm)] border-l-2 border-[var(--edge)] pl-2 text-left type-provenance text-[var(--muted)]">
+      <span className="text-[var(--text)]">{label}</span> {snippet}
+    </p>
+  );
+  return onJump === undefined ? (
+    <div data-testid="reply-quote">{quoteBody}</div>
+  ) : (
+    <button className="block w-full" data-testid="reply-quote" type="button" onClick={onJump}>
+      {quoteBody}
+    </button>
+  );
+}
+
 /** The message's words for rendering: the plain body, or its parts with a pill at each mention (#65). */
 function messageWords(message: RoomMessage): ReactNode {
   if (message.parts === null) {
@@ -198,6 +232,22 @@ export function Room({
   const seen = useRef<{ roomId: string; at: string | undefined; ids: Set<string> | null }>({ roomId, at, ids: null });
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // #215: the message the composer is about to quote — the room holds this,
+  // not the composer, because it's set from a row's own "Reply" action.
+  const [replyTarget, setReplyTarget] = useState<RoomMessage | null>(null);
+  // #215: every row's own element, by event id — a reply's quote elsewhere
+  // in the same window scrolls to it directly; nothing here is a permalink
+  // (#225) or reaches past what this device already has on screen.
+  const rowElements = useRef(new Map<string, HTMLDivElement>());
+  // #215: the row a quote was just clicked into — reuses the same outline
+  // a search landing (`at`) already draws, briefly, so clicking a quote
+  // reads as "there it is" rather than a silent jump.
+  const [jumpedTo, setJumpedTo] = useState<string | null>(null);
+  const jumpToMessage = (eventId: string): void => {
+    rowElements.current.get(eventId)?.scrollIntoView?.({ block: "center" });
+    setJumpedTo(eventId);
+    window.setTimeout(() => setJumpedTo((current) => (current === eventId ? null : current)), 1500);
+  };
 
   if (!connection || timeline.isLoading) {
     return (
@@ -286,7 +336,9 @@ export function Room({
             mainFlow.map((message) => (
               <RoomEntry
                 key={message.eventId}
-                focused={message.eventId === at}
+                // #215: a search landing and a reply's own jump share one
+                // outline — whichever brought this row into view.
+                focused={message.eventId === at || message.eventId === jumpedTo}
                 // Only what someone else says rises in: the owner's own words already appeared where they typed them, and their echo id changing must not play it twice.
                 live={already !== null && !already.has(message.eventId) && message.senderId !== connection.userId}
                 message={message}
@@ -297,6 +349,15 @@ export function Room({
                 onDelete={(message) => {
                   setDeleteError(null);
                   setDeleteTarget(message);
+                }}
+                onReply={at === undefined ? setReplyTarget : undefined}
+                onJumpToReply={jumpToMessage}
+                registerRow={(eventId, element) => {
+                  if (element) {
+                    rowElements.current.set(eventId, element);
+                  } else {
+                    rowElements.current.delete(eventId);
+                  }
                 }}
               />
             ))
@@ -309,7 +370,14 @@ export function Room({
         {at === undefined && drafts}
       </div>
       {at === undefined ? (
-        <RoomComposer connection={connection} roomId={roomId} roomName={roomName} members={room?.members ?? []} />
+        <RoomComposer
+          connection={connection}
+          roomId={roomId}
+          roomName={roomName}
+          members={room?.members ?? []}
+          replyTarget={replyTarget}
+          onCancelReply={() => setReplyTarget(null)}
+        />
       ) : (
         // A window into history has no composer: the words go to the live
         // conversation, one link away.
@@ -407,6 +475,7 @@ export function MessageBody({
   onToggleReaction,
   onRetry,
   onCancel,
+  onJumpToReply,
 }: {
   message: RoomMessage;
   /** The member's own authenticated fetch of a shared file's bytes — the connection's, passed down so this stays a pure render. */
@@ -420,6 +489,8 @@ export function MessageBody({
   onRetry?: (message: RoomMessage) => void;
   /** #209: takes a failed send back — the row goes. */
   onCancel?: (message: RoomMessage) => void;
+  /** #215: the quote above a reply is clickable — brings its original into view, when this device already holds it (see `Room`'s `jumpToMessage`). */
+  onJumpToReply?: (eventId: string) => void;
 }) {
   const fromDuo = isDuoUserId(message.senderId);
   // #67: a duo's composed words read back as an answer, an outcome, or
@@ -454,6 +525,13 @@ export function MessageBody({
       </div>
     );
   }
+  // #215: the message this one quotes — read straight out of the window
+  // this device already holds (`conversation`), never fetched fresh. Absent
+  // when the message isn't a reply, or when its target isn't in that
+  // window (an older message this device hasn't loaded, or one since
+  // struck off the server and gone from every copy) — the quote then
+  // simply doesn't render rather than guess at words nobody here has.
+  const quoted = message.replyToEventId === null ? undefined : conversation.find((candidate) => candidate.eventId === message.replyToEventId);
   const content =
     message.file === undefined ? (
       duoReading ? (
@@ -474,9 +552,19 @@ export function MessageBody({
   return (
     <div className="flex flex-col gap-1">
       {fromDuo ? (
-        <RoomDuoMessage ownerName={duoOwnerLabel(message.senderId) ?? message.senderName}>{content}</RoomDuoMessage>
+        <RoomDuoMessage ownerName={duoOwnerLabel(message.senderId) ?? message.senderName}>
+          {message.replyToEventId !== null && (
+            <ReplyQuote quoted={quoted} onJump={onJumpToReply && (() => onJumpToReply(message.replyToEventId!))} />
+          )}
+          {content}
+        </RoomDuoMessage>
       ) : (
-        <RoomPersonMessage authorName={message.senderName}>{content}</RoomPersonMessage>
+        <RoomPersonMessage authorName={message.senderName}>
+          {message.replyToEventId !== null && (
+            <ReplyQuote quoted={quoted} onJump={onJumpToReply && (() => onJumpToReply(message.replyToEventId!))} />
+          )}
+          {content}
+        </RoomPersonMessage>
       )}
       <p className="type-provenance text-[var(--faint)]">
         <Timestamp iso={new Date(message.originServerTs).toISOString()} />
@@ -553,6 +641,9 @@ function RoomEntry({
   refresh,
   conversation,
   onDelete,
+  onReply,
+  onJumpToReply,
+  registerRow,
 }: {
   message: RoomMessage;
   /** Arrived while the room was open: it rises in. History never animates. */
@@ -564,6 +655,12 @@ function RoomEntry({
   refresh: () => void;
   conversation: readonly RoomMessage[];
   onDelete: (message: RoomMessage) => void;
+  /** #215: starts a reply to this message — the composer takes it from here. */
+  onReply?: (message: RoomMessage) => void;
+  /** #215: brings a quoted original into view — passed straight through to `MessageBody`. */
+  onJumpToReply?: (eventId: string) => void;
+  /** #215: this row's own element, held by `Room` so a reply's quote elsewhere can scroll to it. */
+  registerRow?: (eventId: string, element: HTMLDivElement | null) => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -602,7 +699,10 @@ function RoomEntry({
       className={`flex flex-col gap-1 ${live ? "motion-rise" : ""} ${focused ? "rounded-[var(--r-md)] outline outline-2 outline-offset-4 outline-[var(--accent)]" : ""}`}
       data-focused={focused ? "true" : undefined}
       data-testid="room-message"
-      ref={rowRef}
+      ref={(element) => {
+        rowRef.current = element;
+        registerRow?.(message.eventId, element);
+      }}
     >
       <MessageBody
         message={message}
@@ -617,6 +717,7 @@ function RoomEntry({
           connection.cancel(roomId, target.eventId);
           refresh();
         }}
+        onJumpToReply={onJumpToReply}
       />
       {message.thread !== null && message.thread.replyCount > 0 && message.thread.latestReply !== null && (
         <p className="type-provenance text-[var(--muted)]" data-testid="room-thread-preview">
@@ -660,6 +761,11 @@ function RoomEntry({
             }}
           >
             {linkState === "copied" ? "Copied" : linkState === "failed" ? "Copy failed" : "Copy link"}
+          </button>
+        )}
+        {onReply && !message.redacted && (
+          <button className={rowActionClass} disabled={busy} data-testid="reply-action" onClick={() => onReply(message)}>
+            Reply
           </button>
         )}
         {own && !message.redacted && message.file === undefined && (
@@ -818,11 +924,17 @@ function RoomComposer({
   roomId,
   roomName,
   members,
+  replyTarget = null,
+  onCancelReply,
 }: {
   connection: WorkspaceConnection;
   roomId: string;
   roomName: string;
   members: readonly RoomMemberRef[];
+  /** #215: the message this send will quote — set by a row's "Reply" action, held by `Room`. */
+  replyTarget?: RoomMessage | null;
+  /** #215: cancels the reply in progress — the composer never holds this state itself, so cancelling and sending both just ask `Room` to let go of it. */
+  onCancelReply?: () => void;
 }) {
   const fileInput = useRef<HTMLInputElement | null>(null);
   const [text, setText] = useState("");
@@ -839,9 +951,21 @@ function RoomComposer({
   const trimmed = text.trim();
   const disabled = (trimmed.length === 0 && attachments.length === 0) || pending;
   const duos = members.filter((member) => isDuoUserId(member.userId));
+  // #217: a drag that enters a child element fires its own dragenter/
+  // dragleave — a plain boolean would flicker the indicator every time the
+  // pointer crosses an inner element's edge. The counter only reaches zero
+  // once the drag has actually left every element of the composer.
+  const dragDepth = useRef(0);
+  const [dragActive, setDragActive] = useState(false);
 
-  /** Stages what this app will share and says why about what it won't — the refusal names the limit and keeps everything. */
-  const stage = (files: FileList): void => {
+  /**
+   * Stages what this app will share and says why about what it won't — the
+   * refusal names the limit and keeps everything. #217: the exact same
+   * door the file picker's input already used — a pasted image and a
+   * dropped file are just a different SOURCE of the same `File` objects,
+   * never a second validation path to keep in step with this one.
+   */
+  const stage = (files: Iterable<File>): void => {
     // Snapshot before the first await: resetting the input's value after
     // handing its FileList over empties the live list, and the member's
     // pick must not depend on that timing.
@@ -883,8 +1007,34 @@ function RoomComposer({
 
   return (
     <form
-      className="border-t border-[var(--edge)] p-4"
+      className="relative border-t border-[var(--edge)] p-4"
       data-testid="room-composer"
+      // #217: drag-and-drop onto the composer area feeds the exact same
+      // `stage` door the file picker uses — one validation path, two ways
+      // in. `onDragOver` must still preventDefault even though this app
+      // does nothing else there: without it the browser's own "this isn't
+      // a drop target" refusal wins and `onDrop` never fires.
+      onDragEnter={(e) => {
+        e.preventDefault();
+        dragDepth.current += 1;
+        setDragActive(true);
+      }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) {
+          setDragActive(false);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        dragDepth.current = 0;
+        setDragActive(false);
+        if (e.dataTransfer.files.length > 0) {
+          stage(e.dataTransfer.files);
+        }
+      }}
       onSubmit={(e) => {
         e.preventDefault();
         if (disabled) {
@@ -893,6 +1043,11 @@ function RoomComposer({
         const body = trimmed;
         const toShare = attachments;
         const livePicks = picks.filter((pick) => text.includes(addressed(pick.userId, pick.label)));
+        // #215: captured once, up front — `replyTarget` is `Room`'s state,
+        // and `onCancelReply` below (the same call Cancel makes) asks it to
+        // let go the instant the words are on their way, same as the text
+        // and the attachments do.
+        const replyingTo = replyTarget;
         setPending(true);
         setError(null);
         // The share walks one attachment at a time, in the order staged, so
@@ -920,8 +1075,16 @@ function RoomComposer({
               // convention is the asker's own file messages immediately
               // preceding their text, same sender, same room. Same
               // fire-and-forget (#209): the row carries its own
-              // "Sending…"/failed state from here on.
-              (livePicks.length > 0 ? connection.send(roomId, body, livePicks) : connection.send(roomId, body)).catch(() => undefined);
+              // "Sending…"/failed state from here on. #215: a reply rides
+              // the same call, as a fourth argument only when it applies —
+              // every other shape of this call (no mentions, no reply)
+              // stays exactly as it was.
+              (replyingTo !== null
+                ? connection.send(roomId, body, livePicks, replyingTo.eventId)
+                : livePicks.length > 0
+                  ? connection.send(roomId, body, livePicks)
+                  : connection.send(roomId, body)
+              ).catch(() => undefined);
             }
             // The words are already on their way — the SDK's own local echo
             // carries them in the room's timeline — so the composer clears
@@ -929,6 +1092,7 @@ function RoomComposer({
             setText("");
             setPicks([]);
             setAttachments([]);
+            onCancelReply?.();
           } catch (error) {
             // Only an upload throws here — a refused send lives on its own
             // row instead (caught above). The rest stay attached and the
@@ -945,6 +1109,36 @@ function RoomComposer({
         })();
       }}
     >
+      {dragActive && (
+        // #217: the visible drop-target — covers the composer for as long
+        // as the drag sits over it, pointer-events off so the drop itself
+        // still lands on the form underneath.
+        <div
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[var(--r-sm)] border-2 border-dashed border-[var(--accent)] bg-[var(--surface-2)]"
+          data-testid="composer-drop-target"
+        >
+          <p className="type-body text-[var(--text)]">Drop to attach</p>
+        </div>
+      )}
+      {replyTarget !== null && (
+        // #215: what Send is about to quote — the words at hand, not a
+        // second fetch, and a cancel that leaves the composer's own text
+        // and attachments exactly as they stood.
+        <div className="mb-2 flex items-start gap-2 rounded-[var(--r-sm)] border-l-2 border-[var(--accent)] bg-[var(--surface-2)] px-2 py-1" data-testid="reply-preview">
+          <p className="min-w-0 flex-1 truncate type-provenance text-[var(--muted)]">
+            Replying to <span className="text-[var(--text)]">{mentionLabelOf(replyTarget.senderId, replyTarget.senderName)}</span>:{" "}
+            {replyTarget.file !== undefined ? replyTarget.file.name : plainPreview(replyTarget.body)}
+          </p>
+          <button
+            className="inline-flex items-center rounded-full px-1 text-[var(--muted)]"
+            data-testid="reply-preview-cancel"
+            type="button"
+            onClick={() => onCancelReply?.()}
+          >
+            <X aria-label="Cancel reply" className="size-3.5" />
+          </button>
+        </div>
+      )}
       {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1" data-testid="attachment-row">
           {attachments.map((attachment, index) => (
@@ -1008,6 +1202,15 @@ function RoomComposer({
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
               e.preventDefault();
               e.currentTarget.form?.requestSubmit();
+            }
+          }}
+          onPaste={(e) => {
+            // #217: a pasted screenshot arrives as a clipboard file, the
+            // same shape the picker and a drop both hand to `stage` — a
+            // paste that's just words (the ordinary case) has none, and
+            // nothing here changes.
+            if (e.clipboardData.files.length > 0) {
+              stage(e.clipboardData.files);
             }
           }}
         />

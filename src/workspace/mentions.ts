@@ -68,8 +68,22 @@ export function mentionLabelOf(userId: string, claimedLabel: string): string {
 const escapeHtml = (text: string): string =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+/**
+ * #216: besides the three this module itself ever produces, a formatted
+ * body's anchor text may now come back through a markdown library's own
+ * escaper (`markdown.ts`) — `marked` entity-encodes a quote mark inside an
+ * inline HTML tag's own text even where it leaves the surrounding plain
+ * text alone. Decoding `&#39;`/`&quot;` here too is what keeps a label like
+ * "carol's duo" matching the plain body's literal apostrophe after a round
+ * trip through markdown, same as `&amp;` already has to.
+ */
 const unescapeHtml = (text: string): string =>
-  text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  text
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
 
 /**
  * The words a pill occupies in the body: the label, addressed — this
@@ -86,31 +100,32 @@ function anchorOf(userId: string, text: string): string {
 }
 
 /**
- * The wire shape of a mentioning message's HTML half, or null when no
- * mention's words occur in the body (nothing to anchor — the mention ids
- * still ride `m.mentions`). Each mention's next in-order occurrence is
- * wrapped in its matrix.to anchor; the walk is left-to-right so two
- * mentions can't claim the same words. A duo's anchor text is derived
- * from its id here — the caller's label is advisory only.
+ * #216: the body with each mention's addressed words replaced, in place, by
+ * its matrix.to anchor — markdown SOURCE, not finished HTML: the plain-text
+ * stretches between anchors are left exactly as typed (never HTML-escaped
+ * here), so `markdown.ts` is the one place that decides what `**x**` and a
+ * bare `&` become. Each mention's next in-order occurrence is claimed,
+ * left-to-right, so two mentions can't anchor the same words — the same
+ * walk the spec's anchor convention has always used here. A duo's anchor
+ * text is derived from its id, never the caller's claimed label.
+ *
+ * Unlike the HTML-producing walk this replaces, this one never answers
+ * null: a body with nothing to anchor is simply handed back unchanged,
+ * ready for `markdown.ts` regardless of whether anything was mentioned.
  */
-export function formattedBodyWithMentions(body: string, mentions: readonly MessageMention[]): string | null {
+export function withMentionAnchors(body: string, mentions: readonly MessageMention[]): string {
   const pieces: string[] = [];
   let at = 0;
-  let anchored = false;
   for (const mention of mentions) {
     const words = addressed(mention.userId, mention.label);
     const found = body.indexOf(words, at);
     if (found < 0) {
       continue; // the words aren't in the body — the id still rides m.mentions
     }
-    pieces.push(escapeHtml(body.slice(at, found)), anchorOf(mention.userId, words));
+    pieces.push(body.slice(at, found), anchorOf(mention.userId, words));
     at = found + words.length;
-    anchored = true;
   }
-  if (!anchored) {
-    return null;
-  }
-  pieces.push(escapeHtml(body.slice(at)));
+  pieces.push(body.slice(at));
   return pieces.join("");
 }
 

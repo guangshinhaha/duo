@@ -116,6 +116,7 @@ function messageFor(over: Partial<RoomMessage> & Pick<RoomMessage, "eventId" | "
     reactions: [],
     thread: null,
     threadRootEventId: null,
+    replyToEventId: null,
     parts: null,
     ...over,
   };
@@ -209,16 +210,31 @@ function fakeConnection(state: {
       state.rooms.map((room) => ({ ...room, members: [...room.members] })),
     ),
     timeline: vi.fn(async (roomId: string) => [...(state.timelines[roomId] ?? [])]),
-    send: vi.fn(async (roomId: string, body: string, mentions?: Parameters<WorkspaceConnection["send"]>[2]) => {
-      const eventId = `~send-${(pendingSeq += 1)}`;
-      const outcome = localEcho(
-        roomId,
-        messageFor({ eventId, senderId: SESSION.userId, senderName: "ana", body, pending: true, parts: mentions?.length ? [] : null }),
-      );
-      if (outcome === "failed") {
-        throw new Error("offline");
-      }
-    }),
+    send: vi.fn(
+      async (
+        roomId: string,
+        body: string,
+        mentions?: Parameters<WorkspaceConnection["send"]>[2],
+        replyToEventId?: Parameters<WorkspaceConnection["send"]>[3],
+      ) => {
+        const eventId = `~send-${(pendingSeq += 1)}`;
+        const outcome = localEcho(
+          roomId,
+          messageFor({
+            eventId,
+            senderId: SESSION.userId,
+            senderName: "ana",
+            body,
+            pending: true,
+            parts: mentions?.length ? [] : null,
+            replyToEventId: replyToEventId ?? null,
+          }),
+        );
+        if (outcome === "failed") {
+          throw new Error("offline");
+        }
+      },
+    ),
     // #66's share half: the upload resolves the staged bytes to the stable
     // reference (reporting full progress, the honest single-chunk case),
     // sendFile is the wire act, and loadMedia is the member's own
@@ -1522,6 +1538,84 @@ describe("#64 AC3 — threads and reactions work", () => {
   });
 });
 
+describe("#215 — replying to a message with a quote, outside a thread", () => {
+  it("Reply loads the composer with a cancellable quote, and Send carries it to the wire and renders it", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "Reply" }));
+    const preview = await screen.findByTestId("reply-preview");
+    expect(preview).toHaveTextContent("Bose");
+    expect(preview).toHaveTextContent("what's our refund policy?");
+
+    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "30 days" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // Same frame as the click (#209): the quote preview clears with the
+    // rest of the composer, and never waits on the homeserver.
+    expect(screen.queryByTestId("reply-preview")).toBeNull();
+    expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "30 days", [], "$1");
+
+    // The sent reply shows a quote of the original (#215 AC2).
+    const sent = await waitFor(() => messageRow("30 days"));
+    const quote = within(sent).getByTestId("reply-quote");
+    expect(quote).toHaveTextContent("Bose");
+    expect(quote).toHaveTextContent("what's our refund policy?");
+  });
+
+  it("Cancel clears the quote without touching the words already typed", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "Reply" }));
+    await screen.findByTestId("reply-preview");
+    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "still drafting" } });
+
+    fireEvent.click(screen.getByTestId("reply-preview-cancel"));
+
+    expect(screen.queryByTestId("reply-preview")).toBeNull();
+    expect(screen.getByLabelText("Message project-x")).toHaveValue("still drafting");
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    // No reply target survives the cancel: an ordinary send, same shape as
+    // ever (#64 AC1's own assertion pins this exact 2-argument call).
+    expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "still drafting");
+  });
+
+  it("clicking a reply's quote scrolls to the original and marks it", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    const scrollIntoView = vi.fn();
+    Object.assign(HTMLElement.prototype, { scrollIntoView });
+
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "Reply" }));
+    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "30 days" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const sent = await waitFor(() => messageRow("30 days"));
+
+    scrollIntoView.mockClear();
+    fireEvent.click(within(sent).getByTestId("reply-quote"));
+
+    expect(scrollIntoView).toHaveBeenCalled();
+    await waitFor(() => expect(messageRow("what's our refund policy?")).toHaveAttribute("aria-current", "true"));
+  });
+});
+
 describe("#64 AC4 — read state is maintained", () => {
   it("opening a thread directly receipts the room — the read position holds on the thread route too", async () => {
     seedSession();
@@ -2654,6 +2748,82 @@ describe("#66 — sharing files and images in a conversation", () => {
     expect(screen.getByLabelText("Message project-x")).toHaveValue("what does this say?");
     expect(fake.connection.sendFile).not.toHaveBeenCalled();
     expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("#217 — paste or drop a screenshot or file into the composer", () => {
+  async function openRoom() {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    return fake;
+  }
+
+  it("pasting an image from the clipboard attaches it, the same door the file picker uses", async () => {
+    await openRoom();
+    const file = new File([new Uint8Array([1, 2, 3])], "screenshot.png", { type: "image/png" });
+
+    fireEvent.paste(screen.getByLabelText("Message project-x"), { clipboardData: { files: [file] } });
+
+    await waitFor(() => expect(screen.getByTestId("attachment-chip")).toHaveTextContent("screenshot.png"));
+  });
+
+  it("a paste with no files (ordinary text) attaches nothing", async () => {
+    await openRoom();
+
+    fireEvent.paste(screen.getByLabelText("Message project-x"), { clipboardData: { files: [] } });
+
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+  });
+
+  it("dropping a file attaches it with the existing upload flow, and a drop-target shows only while dragging", async () => {
+    const fake = await openRoom();
+    const composer = screen.getByTestId("room-composer");
+    const file = new File([new Uint8Array(10)], "notes.txt", { type: "text/plain" });
+
+    expect(screen.queryByTestId("composer-drop-target")).toBeNull();
+    fireEvent.dragEnter(composer, { dataTransfer: { files: [] } });
+    expect(screen.getByTestId("composer-drop-target")).toBeInTheDocument();
+
+    fireEvent.drop(composer, { dataTransfer: { files: [file] } });
+    expect(screen.queryByTestId("composer-drop-target")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("attachment-chip")).toHaveTextContent("notes.txt"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(fake.connection.sendFile).toHaveBeenCalledWith("!project-x:workspace.example", {
+        name: "notes.txt",
+        mimeType: "text/plain",
+        size: 10,
+        url: "mxc://workspace.example/notes.txt",
+        image: false,
+      }),
+    );
+  });
+
+  it("the existing upload limits and errors apply to a dropped file too — nothing bypasses the picker's own refusal", async () => {
+    await openRoom();
+    const composer = screen.getByTestId("room-composer");
+    const tooBig = new File([new Uint8Array(17 * 1024 * 1024)], "deck.pdf", { type: "application/pdf" });
+
+    fireEvent.drop(composer, { dataTransfer: { files: [tooBig] } });
+
+    await waitFor(() => expect(screen.getByTestId("room-composer-error")).toHaveTextContent("deck.pdf"));
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+  });
+
+  it("a drag that leaves without dropping clears the indicator", async () => {
+    await openRoom();
+    const composer = screen.getByTestId("room-composer");
+
+    fireEvent.dragEnter(composer, { dataTransfer: { files: [] } });
+    expect(screen.getByTestId("composer-drop-target")).toBeInTheDocument();
+    fireEvent.dragLeave(composer, { dataTransfer: { files: [] } });
+
+    expect(screen.queryByTestId("composer-drop-target")).toBeNull();
   });
 });
 

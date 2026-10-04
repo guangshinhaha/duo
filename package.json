@@ -28,6 +28,7 @@
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-notification": "^2.4.0",
     "lucide-react": "^1.47.0",
+    "marked": "^18.0.14",
     "matrix-js-sdk": "^34.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

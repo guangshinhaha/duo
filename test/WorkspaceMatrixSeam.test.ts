@@ -83,6 +83,8 @@ function fakeEvent(
     mentions?: string[];
     /** The event's relation — a replacement, an annotation, or a thread reply. */
     relatesTo?: { rel_type: string; event_id: string; key?: string; is_falling_back?: boolean };
+    /** #215: a plain reply's target — the spec's shape with no `rel_type` at all, distinct from `relatesTo` above (which always carries one). Mutually exclusive with it in practice; never both at once. */
+    replyToEventId?: string;
     /** A replacement's new body, under m.new_content. */
     newContent?: { msgtype: string; body: string };
     /** A file message's share: the upload's stable reference and the declared facts. */
@@ -107,7 +109,8 @@ function fakeEvent(
       url: shape.url,
       info: shape.info,
       "m.new_content": shape.newContent,
-      "m.relates_to": shape.relatesTo,
+      "m.relates_to":
+        shape.relatesTo ?? (shape.replyToEventId === undefined ? undefined : { "m.in_reply_to": { event_id: shape.replyToEventId } }),
     }),
     getTs: () => shape.ts,
     isRedacted: () => shape.redacted ?? false,
@@ -576,6 +579,7 @@ describe("the projection from Matrix events to room messages", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
         parts: null,
       },
       {
@@ -590,6 +594,7 @@ describe("the projection from Matrix events to room messages", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
         parts: null,
       },
       {
@@ -608,6 +613,7 @@ describe("the projection from Matrix events to room messages", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
       },
     ]);
     // The topic event is still not a conversation turn.
@@ -624,9 +630,14 @@ describe("the projection from Matrix events to room messages", () => {
     // #65: even a mention-less send carries m.mentions — the spec
     // recommends it on every event, because the legacy display-name push
     // rules otherwise fire on any message that happens to contain a name.
+    // #216: every text send now also carries a markdown-derived
+    // formatted_body, mentions or not — a plain sentence is still its own
+    // (trivial) formatting.
     expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
       msgtype: MsgType.Text,
       body: "thanks all",
+      format: "org.matrix.custom.html",
+      formatted_body: "<p>thanks all</p>\n",
       "m.mentions": { user_ids: [] },
     });
 
@@ -719,8 +730,10 @@ describe("the projection from Matrix events to room messages", () => {
       format: "org.matrix.custom.html",
       // A duo's anchor text is the grammar's — "@carol's duo" from
       // @duo-carol — never the caller's claim, so every reader's pill
-      // names the duo, not a name the sender chose.
-      formatted_body: "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol's duo</a> what's our refund policy?",
+      // names the duo, not a name the sender chose. #216: wrapped in a
+      // paragraph and its apostrophe entity-encoded — markdown's own doing,
+      // on top of the anchor the mention wire always built.
+      formatted_body: "<p><a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol&#39;s duo</a> what&#39;s our refund policy?</p>\n",
       "m.mentions": { user_ids: ["@duo-carol:workspace.example"] },
     });
     // The mention-less half of the wire contract is pinned by the send
@@ -746,9 +759,10 @@ describe("the pills half of the mention wire (#65)", () => {
       msgtype: MsgType.Text,
       body: "@Carol, @carol's duo — what's our refund policy?",
       format: "org.matrix.custom.html",
+      // #216: same paragraph wrap and apostrophe-encoding as above.
       formatted_body:
-        '<a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>, ' +
-        "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol's duo</a> — what's our refund policy?",
+        '<p><a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>, ' +
+        "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol&#39;s duo</a> — what&#39;s our refund policy?</p>\n",
       "m.mentions": { user_ids: ["@carol:workspace.example", "@duo-carol:workspace.example"] },
     });
   });
@@ -829,6 +843,7 @@ describe("the pills half of the mention wire (#65)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
         parts: null, // the fold's words stand plain — pills don't survive an edit
       },
       {
@@ -843,6 +858,7 @@ describe("the pills half of the mention wire (#65)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
         parts: null,
       },
       {
@@ -857,6 +873,7 @@ describe("the pills half of the mention wire (#65)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
         // The anchor words "@Carol" aren't in the body: degrade to plain.
         parts: null,
       },
@@ -896,6 +913,7 @@ describe("the pills half of the mention wire (#65)", () => {
       reactions: [],
       thread: null,
       threadRootEventId: null,
+      replyToEventId: null,
       parts: [
         { kind: "mention", userId: "@carol:workspace.example", label: "Carol" },
         { kind: "text", text: ", " },
@@ -903,6 +921,152 @@ describe("the pills half of the mention wire (#65)", () => {
         { kind: "text", text: " — what's our refund policy?" },
       ],
     });
+  });
+});
+
+describe("#215 — a reply outside a thread", () => {
+  it("send with a reply target rides the spec's plain reply relation — no rel_type, composable with mentions", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.send("!project-x:workspace.example", "yes, 30 days", [], "$1000");
+
+    expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
+      msgtype: MsgType.Text,
+      body: "yes, 30 days",
+      format: "org.matrix.custom.html",
+      formatted_body: "<p>yes, 30 days</p>\n",
+      "m.mentions": { user_ids: [] },
+      "m.relates_to": { "m.in_reply_to": { event_id: "$1000" } },
+    });
+  });
+
+  it("a reply carries no relation at all when no target is given — the ordinary send stays ordinary", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.send("!project-x:workspace.example", "np", []);
+
+    const [, content] = vi.mocked(client.sendMessage).mock.calls[0]!;
+    expect(content).not.toHaveProperty("m.relates_to");
+  });
+
+  it("the projection reads a plain reply's target into replyToEventId — a thread reply's own fallback never leaks into it", async () => {
+    const events = [
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "what's our refund policy?", ts: 1_000 }),
+      // A plain reply outside any thread (#215): no rel_type at all.
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@ana:workspace.example",
+        msgtype: "m.text",
+        body: "30 days",
+        ts: 2_000,
+        replyToEventId: "$1000",
+      }),
+      // A thread reply, for contrast: rel_type m.thread — never read as a
+      // #215-style reply, even though the spec's thread fallback nests the
+      // very same "m.in_reply_to" key a level deeper than this fixture
+      // models (the seam's own condition requires rel_type to be absent,
+      // which a thread relation never is).
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.text",
+        body: "in thread",
+        ts: 3_000,
+        relatesTo: { rel_type: "m.thread", event_id: "$1000" },
+      }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@bose:workspace.example", name: "Bose" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timeline("!project-x:workspace.example");
+    expect(messages.find((message) => message.eventId === "$2000")?.replyToEventId).toBe("$1000");
+    expect(messages.find((message) => message.eventId === "$1000")?.replyToEventId).toBeNull();
+    expect(messages.find((message) => message.eventId === "$3000")?.replyToEventId).toBeNull();
+  });
+});
+
+describe("#216 — writing in markdown", () => {
+  it("bold, a list and a mention compose on one send — the plain body stays untouched, the mention still anchors", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.send("!project-x:workspace.example", "**urgent** @carol's duo:\n- 30 days\n- full amount", [
+      { userId: "@duo-carol:workspace.example", label: "The Refund Bot" },
+    ]);
+
+    const [, content] = vi.mocked(client.sendMessage).mock.calls[0]!;
+    // #216 AC2: the plain body always rides exactly as typed — markdown
+    // syntax and all — for a client that can't render HTML.
+    expect(content.body).toBe("**urgent** @carol's duo:\n- 30 days\n- full amount");
+    expect(content.format).toBe("org.matrix.custom.html");
+    // Bold rendered, the list rendered, and the mention's anchor still
+    // wraps exactly "@carol's duo" — markdown mixing with the mention
+    // syntax mangled neither.
+    expect(content.formatted_body).toContain("<strong>urgent</strong>");
+    expect(content.formatted_body).toContain("<li>30 days</li>");
+    expect(content.formatted_body).toContain(
+      '<a href="https://matrix.to/#/@duo-carol:workspace.example">@carol&#39;s duo</a>',
+    );
+    expect(content["m.mentions"]).toEqual({ user_ids: ["@duo-carol:workspace.example"] });
+  });
+
+  it("a mention survives the round trip through markdown and back into parts — the apostrophe marked's escaper adds doesn't break the match", async () => {
+    const events = [
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.text",
+        body: "@carol's duo, what's our refund policy?",
+        ts: 1_000,
+        format: "org.matrix.custom.html",
+        // Exactly what `markdownToHtml(withMentionAnchors(...))` produces:
+        // wrapped in a paragraph, the anchor's own apostrophe entity-encoded.
+        formattedBody:
+          '<p><a href="https://matrix.to/#/@duo-carol:workspace.example">@carol&#39;s duo</a>, what&#39;s our refund policy?</p>\n',
+      }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message!.parts).toEqual([
+      { kind: "mention", userId: "@duo-carol:workspace.example", label: "carol's duo" },
+      { kind: "text", text: ", what's our refund policy?" },
+    ]);
   });
 });
 
@@ -1782,6 +1946,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [{ key: "👍", count: 2, mine: true }],
         thread: { replyCount: 1, latestReply: { senderId: "@duo-carol:workspace.example", senderName: "duo-carol", body: "np, 30 days" } },
         threadRootEventId: null,
+        replyToEventId: null,
         parts: null, // a fold keeps the words and drops the pills — see the #65 projection test
       },
       {
@@ -1796,6 +1961,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [], // the only 🎉 was redacted before it ever counted
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
         parts: null,
       },
       {
@@ -1810,6 +1976,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: "$1000", // a thread reply: carried, not a row of the main flow
+        replyToEventId: null,
         parts: null,
       },
       {
@@ -1824,6 +1991,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
         parts: null,
       },
       {
@@ -1838,6 +2006,7 @@ describe("the timeline projection the message surface reads (#64)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
         parts: null,
       },
     ]);
@@ -2411,6 +2580,7 @@ describe("the share wire (#66)", () => {
         reactions: [],
         thread: null,
         threadRootEventId: null,
+        replyToEventId: null,
       },
     ]);
   });

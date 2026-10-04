@@ -31,11 +31,12 @@ import {
 import { normalize } from "matrix-js-sdk/lib/utils";
 import { duoOwnerUserIdOf, localpartOf } from "./identity.js";
 import { normalizeHomeserverUrl } from "../homeserver.js";
+import { markdownToHtml } from "./markdown.js";
 import {
-  formattedBodyWithMentions,
   mentionAnchorsFrom,
   mentionLabelOf,
   partsFromBody,
+  withMentionAnchors,
   type MessageMention,
   type MessagePart,
 } from "./mentions.js";
@@ -290,6 +291,18 @@ export interface RoomMessage {
   /** The root this message answers inside a thread — null in the main flow. */
   readonly threadRootEventId: string | null;
   /**
+   * #215: the message this one quotes, outside a thread — the spec's plain
+   * reply relation (`m.relates_to["m.in_reply_to"]`, no `rel_type`), read
+   * only when that's what it is: a thread reply's own fallback carries the
+   * same key nested a level deeper (inside the thread relation), and that
+   * is never read as this field — a thread already owns its replies, a
+   * second "replying to" badge on top would say the same thing twice. Null
+   * when the message isn't a reply, or quotes something not held in this
+   * device's own copy of the conversation (`conversation`, at the render
+   * site) — the quote then simply doesn't render, rather than guessing.
+   */
+  readonly replyToEventId: string | null;
+  /**
    * #64 AC1 / #209: this device's own send, still on its way — read straight
    * from matrix-js-sdk's own local-echo state (`room.getPendingEvents()`,
    * `event.status` SENDING/QUEUED/SENT), never a second copy this client
@@ -462,8 +475,13 @@ export interface WorkspaceConnection {
    * (empty when nothing is mentioned): the spec recommends it on each
    * event so the legacy display-name push rules can't fire on a message
    * that merely contains a name.
+   *
+   * #215: `replyToEventId`, when given, rides the spec's plain reply
+   * relation (`m.relates_to["m.in_reply_to"]`) — a quote outside any
+   * thread. It composes with mentions on the same event: a reply can
+   * still address someone.
    */
-  send(roomId: string, body: string, mentions?: readonly MessageMention[]): Promise<void>;
+  send(roomId: string, body: string, mentions?: readonly MessageMention[], replyToEventId?: string): Promise<void>;
   /**
    * #66: uploads bytes to the homeserver's media store and answers the
    * stable reference the file message will carry. The upload is the share's
@@ -779,6 +797,8 @@ interface Relation {
   readonly rel_type?: string;
   readonly event_id?: string;
   readonly key?: string;
+  /** #215: a plain reply's target — present with no `rel_type` for a reply outside a thread; a thread's own fallback nests this one level deeper, under the thread relation, which is a different shape entirely. */
+  readonly "m.in_reply_to"?: { readonly event_id?: string };
 }
 
 function relationOf(event: MatrixEvent): Relation | undefined {
@@ -868,6 +888,7 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     edited: boolean;
     redacted: boolean;
     threadRootEventId: string | null;
+    replyToEventId: string | null;
     pending: boolean;
     failed: boolean;
   }
@@ -898,6 +919,7 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
         edited: false,
         redacted: true,
         threadRootEventId: null,
+        replyToEventId: null,
         // A redaction only ever strikes a confirmed event — never one still
         // on its way, so the local-echo flags are moot here.
         pending: false,
@@ -970,6 +992,15 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       edited: false,
       redacted: false,
       threadRootEventId: relation?.rel_type === RelationType.Thread && relation.event_id !== undefined ? relation.event_id : null,
+      // #215: a plain reply carries the relation with no `rel_type` at
+      // all — a thread reply's `rel_type` is `m.thread`, an edit's is
+      // `m.replace` (handled above, never reaching here), so "no
+      // rel_type, but an in-reply-to" is unambiguously this and nothing
+      // else.
+      replyToEventId:
+        relation?.rel_type === undefined && typeof relation?.["m.in_reply_to"]?.event_id === "string"
+          ? relation["m.in_reply_to"].event_id
+          : null,
       ...localEchoFlagsOf(event),
     });
   }
@@ -1045,6 +1076,7 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
           }
         : null,
       threadRootEventId: base.threadRootEventId,
+      replyToEventId: base.replyToEventId,
       pending: base.pending ? true : undefined,
       failed: base.failed ? true : undefined,
     });
@@ -1621,18 +1653,31 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       // is read back deliberately rather than trusted.
       return [...hits].sort((a, b) => b.originServerTs - a.originServerTs);
     },
-    send: async (roomId, body, mentions = []) => {
-      // #65: the spec's mention wire shape (§User and room mentions). The
-      // HTML half rides only when something was anchored; the intent half
-      // always does — empty when nothing is mentioned, because the legacy
-      // display-name push rules otherwise fire on any message that merely
-      // contains a name.
-      const formatted = formattedBodyWithMentions(body, mentions);
+    send: async (roomId, body, mentions = [], replyToEventId) => {
+      // #216: mentions anchor into the markdown SOURCE first — the body
+      // with each addressed mention's words replaced by its matrix.to
+      // anchor, still otherwise exactly what was typed — and markdown
+      // turns the mix into the finished `formatted_body`. #65's own rule
+      // (anchor text is the body's text there) still holds: `marked`
+      // leaves an already-complete inline `<a>` tag's text untouched
+      // beyond its own entity-escaping (a quote mark, not the
+      // asterisks/underscores markdown would otherwise read as syntax),
+      // which `mentions.ts`'s `unescapeHtml` already accounts for on the
+      // way back in. `format`/`formatted_body` now ride on EVERY text
+      // send, mentions or not: markdown is always applied, and a plain
+      // sentence is still its own (trivial) formatting — `body` is what
+      // every client, formatting-aware or not, reads regardless (#216 AC2).
       await client.sendMessage(roomId, {
         msgtype: MsgType.Text,
         body,
-        ...(formatted === null ? {} : { format: "org.matrix.custom.html", formatted_body: formatted }),
+        format: "org.matrix.custom.html",
+        formatted_body: markdownToHtml(withMentionAnchors(body, mentions)),
         "m.mentions": { user_ids: [...new Set(mentions.map((mention) => mention.userId))] },
+        // #215: a quote outside a thread is the spec's plain reply
+        // relation — no `rel_type`, unlike every other relation this seam
+        // sends (replace, annotation, thread). Absent entirely when this
+        // isn't a reply, never sent as some empty/null placeholder.
+        ...(replyToEventId === undefined ? {} : { "m.relates_to": { "m.in_reply_to": { event_id: replyToEventId } } }),
       });
     },
     // The share path (#66): upload bytes, then send the message that
