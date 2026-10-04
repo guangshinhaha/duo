@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceProfile } from "../src/components/WorkspaceProfile.js";
 import type { WorkspaceConnection } from "../src/workspace/matrix.js";
+import type { StagedShare } from "../src/workspace/sharing.js";
 
 /*
  * #224: set your own name and picture in the workspace. `profile()`,
@@ -135,7 +136,7 @@ describe("changing the picture", () => {
   }
 
   it("uploads the picked image and shows it once the homeserver accepts", async () => {
-    const setAvatarUrl = vi.fn(async () => "mxc://workspace.example/fresh");
+    const setAvatarUrl = vi.fn<(file: StagedShare) => Promise<string>>(async () => "mxc://workspace.example/fresh");
     const loadMedia = vi.fn(async (url: string) => (url === "mxc://workspace.example/fresh" ? new Blob(["x"], { type: "image/png" }) : null));
     const connection = fakeConnection({ avatarUrl: null, setAvatarUrl, loadMedia });
     render(<WorkspaceProfile connection={connection} />);
