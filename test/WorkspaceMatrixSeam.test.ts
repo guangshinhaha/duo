@@ -146,6 +146,7 @@ type FakeClient = MatrixClient & {
   redactEvent: ReturnType<typeof vi.fn>;
   uploadContent: ReturnType<typeof vi.fn>;
   mxcUrlToHttp: ReturnType<typeof vi.fn>;
+  getUrlPreview: ReturnType<typeof vi.fn>;
 };
 
 /**
@@ -195,6 +196,13 @@ function fakeClient(
     redactEvent: vi.fn(async () => ({})),
     uploadContent: vi.fn(async () => ({ content_uri: "mxc://workspace.example/abc123" })),
     mxcUrlToHttp: vi.fn(() => "https://workspace.example/_matrix/media/v3/download/workspace.example/abc123"),
+    getUrlPreview: vi.fn(async () => ({
+      "og:title": "Example",
+      "og:type": "website",
+      "og:url": "https://example.com",
+      "og:description": "An example page.",
+      "og:image": "mxc://workspace.example/preview1",
+    })),
   };
   return client as unknown as FakeClient;
 }
@@ -1382,6 +1390,35 @@ describe("the share wire (#66)", () => {
     expect(await connection.loadMedia("not-a-reference")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
+  });
+
+  it("#219: a link preview reads the homeserver's Open Graph fields, or null for anything short of all three missing or a refusal", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const preview = await connection.getUrlPreview("https://example.com");
+    expect(client.getUrlPreview).toHaveBeenCalledWith("https://example.com", expect.any(Number));
+    expect(preview).toEqual({
+      title: "Example",
+      description: "An example page.",
+      // Usually an mxc:// reference — Synapse re-hosts the image through
+      // its own media store rather than handing back a raw third-party URL.
+      image: "mxc://workspace.example/preview1",
+    });
+
+    // A field the homeserver left out reads as null, never as an empty string.
+    client.getUrlPreview.mockResolvedValueOnce({ "og:title": "Title only", "og:type": "website", "og:url": "https://example.com" });
+    expect(await connection.getUrlPreview("https://example.com")).toEqual({ title: "Title only", description: null, image: null });
+
+    // Nothing preview-able at all is null, not an empty object a card would render blank.
+    client.getUrlPreview.mockResolvedValueOnce({ "og:type": "website", "og:url": "https://example.com" });
+    expect(await connection.getUrlPreview("https://example.com")).toBeNull();
+
+    // A homeserver that refuses outright (previews off, or a page it won't
+    // fetch) is the same quiet null — never an error a member sees.
+    client.getUrlPreview.mockRejectedValueOnce(new Error("preview_url is disabled"));
+    expect(await connection.getUrlPreview("https://example.com")).toBeNull();
   });
 
   it("a refused upload or send states its reason: the workspace's own limit, its own words, or the connection", async () => {
