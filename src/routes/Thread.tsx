@@ -5,7 +5,6 @@ import { InfoButton } from "../shell/InfoButton.js";
 import { MessageBody } from "./Room.js";
 import { roomTitle } from "../shell/roomTitle.js";
 import type { RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
-import { localpartOf } from "../workspace/identity.js";
 
 /** #70: bring the message a search hit landed at into view — the ref runs once, when its row mounts. */
 const focusIntoView = (element: HTMLElement | null): void => {
@@ -135,6 +134,16 @@ export function ThreadView({
       .catch(() => undefined)
       .finally(refresh);
   };
+  // #209: same Retry/Cancel contract as the main flow's rows — acts on
+  // matrix-js-sdk's own local echo through the connection, never a second
+  // copy of the reply this client invented.
+  const retryMessage = (message: RoomMessage): void => {
+    void connection.retry(roomId, message.eventId).catch(() => undefined).finally(refresh);
+  };
+  const cancelMessage = (message: RoomMessage): void => {
+    connection.cancel(roomId, message.eventId);
+    refresh();
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -167,6 +176,8 @@ export function ThreadView({
                 loadMedia={connection.loadMedia}
                 getUrlPreview={connection.getUrlPreview}
                 onToggleReaction={toggleReaction}
+                onRetry={retryMessage}
+                onCancel={cancelMessage}
               />
             </div>
           )}
@@ -184,6 +195,8 @@ export function ThreadView({
                 loadMedia={connection.loadMedia}
                 getUrlPreview={connection.getUrlPreview}
                 onToggleReaction={toggleReaction}
+                onRetry={retryMessage}
+                onCancel={cancelMessage}
               />
             </div>
           ))}
@@ -194,13 +207,13 @@ export function ThreadView({
   );
 }
 
-/** Distinguishes one optimistic reply from the next — the homeserver's event ids replace these. */
-let echoSequence = 0;
-
 /**
- * The thread's composer: same idiom and same optimistic contract as the
- * conversation's (#64 AC1), posting through the thread verb so the reply
- * belongs to the thread, never the main flow.
+ * The thread's composer: same idiom and the same instant render as the
+ * conversation's (#64 AC1 / #209) — matrix-js-sdk's own local echo puts the
+ * reply's row in the thread the moment `replyInThread` is called, and the
+ * composer clears without waiting on the homeserver. A failed reply keeps
+ * its row, marked failed, with Retry and Cancel (`MessageBody`, wired
+ * above) — the composer itself never held the words past Enter.
  */
 function ThreadComposer({
   connection,
@@ -211,12 +224,9 @@ function ThreadComposer({
   roomId: string;
   rootEventId: string;
 }) {
-  const queryClient = useQueryClient();
   const [text, setText] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const trimmed = text.trim();
-  const disabled = trimmed.length === 0 || pending;
+  const disabled = trimmed.length === 0;
 
   return (
     <form
@@ -228,44 +238,11 @@ function ThreadComposer({
           return;
         }
         const body = trimmed;
-        const echoId = `pending-thread-${(echoSequence += 1)}`;
-        setPending(true);
-        setError(null);
-        // The optimistic copy, related to the root so it renders in the
-        // thread at once; the refetch replaces it with the record and
-        // re-reads the root's summary of its thread.
-        queryClient.setQueryData<readonly RoomMessage[]>(["workspace", "timeline", roomId], (current) => [
-          ...(current ?? []),
-          {
-            eventId: echoId,
-            roomId,
-            senderId: connection.userId,
-            senderName: localpartOf(connection.userId),
-            body,
-            parts: null,
-            originServerTs: Date.now(),
-            edited: false,
-            redacted: false,
-            reactions: [],
-            thread: null,
-            threadRootEventId: rootEventId,
-            pending: true,
-          },
-        ]);
-        connection
-          .replyInThread(roomId, rootEventId, body)
-          .then(() => setText(""))
-          .catch(() => {
-            setError("Couldn't send — try again.");
-            queryClient.setQueryData<readonly RoomMessage[]>(["workspace", "timeline", roomId], (current) =>
-              (current ?? []).filter((row) => row.eventId !== echoId),
-            );
-          })
-          .finally(() => {
-            setPending(false);
-            // The root's summary of its thread re-reads with the record.
-            void queryClient.invalidateQueries({ queryKey: ["workspace"] });
-          });
+        // #209: fire-and-forget — the reply's row (related to the root, so
+        // it renders in the thread at once) carries its own "Sending…" or
+        // failed state from here on; the composer clears the same frame.
+        connection.replyInThread(roomId, rootEventId, body).catch(() => undefined);
+        setText("");
       }}
     >
       <div className="flex items-start gap-2">
@@ -277,7 +254,6 @@ function ThreadComposer({
           value={text}
           onChange={(e) => {
             setText(e.target.value);
-            setError(null);
           }}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -291,14 +267,9 @@ function ThreadComposer({
           disabled={disabled}
           type="submit"
         >
-          {pending ? "Sending…" : "Send"}
+          Send
         </button>
       </div>
-      {error && (
-        <p className="mt-2 type-body text-[var(--refused)]" data-testid="thread-composer-error">
-          {error}
-        </p>
-      )}
     </form>
   );
 }

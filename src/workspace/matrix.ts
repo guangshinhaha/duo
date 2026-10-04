@@ -1,11 +1,13 @@
 import {
   ClientEvent,
   createClient,
+  EventStatus,
   EventType,
   MatrixError,
   Method,
   MsgType,
   NotificationCountType,
+  PendingEventOrdering,
   Preset,
   PushRuleKind,
   ReceiptType,
@@ -237,8 +239,22 @@ export interface RoomMessage {
   readonly thread: ThreadSummary | null;
   /** The root this message answers inside a thread — null in the main flow. */
   readonly threadRootEventId: string | null;
-  /** #64 AC1: this device's own optimistic copy — sent, not yet the homeserver's record. */
+  /**
+   * #64 AC1 / #209: this device's own send, still on its way — read straight
+   * from matrix-js-sdk's own local-echo state (`room.getPendingEvents()`,
+   * `event.status` SENDING/QUEUED/SENT), never a second copy this client
+   * invented. True until the homeserver's echo folds it into the live
+   * timeline, at which point it is an ordinary row.
+   */
   readonly pending?: boolean;
+  /**
+   * #209: the homeserver never got this message (`EventStatus.NOT_SENT`) and
+   * the SDK has stopped retrying it on its own — the row stays, with its
+   * words, so Retry (`WorkspaceConnection.retry`) or Cancel
+   * (`WorkspaceConnection.cancel`) can act on it. Never set alongside
+   * `pending`.
+   */
+  readonly failed?: boolean;
 }
 
 /**
@@ -449,6 +465,18 @@ export interface WorkspaceConnection {
    */
   replyInThread(roomId: string, rootEventId: string, body: string): Promise<void>;
   /**
+   * #209: tries a failed send again — the same row, the same words. Acts on
+   * matrix-js-sdk's own local echo (`client.resendEvent`); a row that isn't
+   * failed, or has already gone, costs nothing to ask again.
+   */
+  retry(roomId: string, eventId: string): Promise<void>;
+  /**
+   * #209: takes a failed send back — the row goes, nothing is retried.
+   * Synchronous: cancelling a local echo (`client.cancelPendingEvent`)
+   * never reaches the homeserver, so there is nothing to await.
+   */
+  cancel(roomId: string, eventId: string): void;
+  /**
    * Receipts the room's latest event — the member's read position, held by
    * the account, so every device reads the conversation as read (#63).
    */
@@ -521,7 +549,9 @@ export interface WorkspaceConnection {
    * The arrival half (#69) rides only for a NEW text message — sender,
    * words, and whether it mentions the member, which is what a
    * notification decides on. An amendment or a reaction is room news,
-   * not message news: the roomId arrives, the arrival doesn't.
+   * not message news: the roomId arrives, the arrival doesn't — and so is
+   * this device's own send changing status (#209: queued, sent, failed,
+   * retried, cancelled), which rides the same arrival-less way.
    */
   subscribe(handler: (roomId: string, arrival?: LiveArrival) => void): () => void;
   /** Stops the connection. Idempotent. */
@@ -629,7 +659,12 @@ function firstPreparedSync(client: MatrixClient): Promise<void> {
       client.off(ClientEvent.Sync, onSync);
     };
     client.on(ClientEvent.Sync, onSync);
-    client.startClient({ lazyLoadMembers: true });
+    // #209: Detached pending-event ordering keeps this device's own
+    // in-flight sends out of the live timeline and in `room.getPendingEvents()`
+    // instead — the projection folds them back in itself (`timelineOf`),
+    // which is what lets a send render the instant it's handed to the SDK,
+    // synchronously, before any network answer.
+    client.startClient({ lazyLoadMembers: true, pendingEventOrdering: PendingEventOrdering.Detached });
   });
 }
 
@@ -654,6 +689,34 @@ function relationOf(event: MatrixEvent): Relation | undefined {
 }
 
 /**
+ * This device's own sends still in flight (#209): matrix-js-sdk's own
+ * local-echo list, read defensively — a room the projection builds from a
+ * search window, or a seam fixture that never asked for Detached ordering,
+ * has none, and that is never this projection's problem to raise.
+ */
+function pendingEventsOf(room: MatrixRoom): readonly MatrixEvent[] {
+  try {
+    return room.getPendingEvents();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * #209: whether an event is this device's own send still on its way, or one
+ * the homeserver never got — read straight from matrix-js-sdk's own
+ * `event.status`, never a second, hand-rolled copy of it. A confirmed event
+ * (synced, not a local echo) carries no status at all, so both are false.
+ */
+function localEchoFlagsOf(event: MatrixEvent): { pending: boolean; failed: boolean } {
+  const status = event.status;
+  return {
+    pending: status === EventStatus.SENDING || status === EventStatus.QUEUED || status === EventStatus.ENCRYPTING || status === EventStatus.SENT,
+    failed: status === EventStatus.NOT_SENT,
+  };
+}
+
+/**
  * The timeline projection #64's message surface reads: same-sender
  * replacements fold into the base they amend (a stranger's edit is a claim,
  * not a change), reactions aggregate under their target and key with the
@@ -666,8 +729,13 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     return [];
   }
   // #70: the live timeline, or — landing at a search hit — the window the
-  // homeserver's /context holds around it. One projection either way.
-  const events = around ?? room.getLiveTimeline().getEvents();
+  // homeserver's /context holds around it. One projection either way. The
+  // live view also folds in this device's own sends still in flight (#209):
+  // matrix-js-sdk's own local-echo list (Detached ordering keeps these out
+  // of the live timeline proper), appended after it the way they were said
+  // — a context window never carries them, there being nothing "in flight"
+  // about history.
+  const events = around ?? [...room.getLiveTimeline().getEvents(), ...pendingEventsOf(room)];
   const nameOf = (senderId: string): string => room.getMember(senderId)?.name || localpartOf(senderId);
   // #65: the pills the message was sent with, read from its formatted
   // body's matrix.to user anchors. A person's label prefers the room's own
@@ -697,6 +765,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     edited: boolean;
     redacted: boolean;
     threadRootEventId: string | null;
+    pending: boolean;
+    failed: boolean;
   }
   const bases = new Map<string, Base>();
   for (const event of events) {
@@ -725,6 +795,10 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
         edited: false,
         redacted: true,
         threadRootEventId: null,
+        // A redaction only ever strikes a confirmed event — never one still
+        // on its way, so the local-echo flags are moot here.
+        pending: false,
+        failed: false,
       });
       continue;
     }
@@ -793,6 +867,7 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       edited: false,
       redacted: false,
       threadRootEventId: relation?.rel_type === RelationType.Thread && relation.event_id !== undefined ? relation.event_id : null,
+      ...localEchoFlagsOf(event),
     });
   }
 
@@ -867,6 +942,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
           }
         : null,
       threadRootEventId: base.threadRootEventId,
+      pending: base.pending ? true : undefined,
+      failed: base.failed ? true : undefined,
     });
   }
   return messages;
@@ -1363,6 +1440,22 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         } as unknown as { "m.in_reply_to"?: { event_id: string } },
       });
     },
+    retry: async (roomId, eventId) => {
+      const room = client.getRoom(roomId);
+      const event = room && pendingEventsOf(room).find((pending) => pending.getId() === eventId);
+      if (!room || !event) {
+        // Already gone (sent, or cancelled from elsewhere) — nothing to retry.
+        return;
+      }
+      await client.resendEvent(event, room);
+    },
+    cancel: (roomId, eventId) => {
+      const room = client.getRoom(roomId);
+      const event = room && pendingEventsOf(room).find((pending) => pending.getId() === eventId);
+      if (event) {
+        client.cancelPendingEvent(event);
+      }
+    },
     markRead: async (roomId) => {
       const events = client.getRoom(roomId)?.getLiveTimeline().getEvents() ?? [];
       const last = events[events.length - 1];
@@ -1492,9 +1585,19 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         }
         handler(room.roomId, arrival);
       };
+      // #209: this device's own send changing status (queued → sent →
+      // folded into the live timeline, or → failed, or retried, or
+      // cancelled) is room news the same way a reaction or an amendment
+      // is — the roomId rides, no arrival, because it is never a NEW
+      // message a notification should act on.
+      const localEchoListener = (_event: MatrixEvent, room: MatrixRoom): void => {
+        handler(room.roomId);
+      };
       client.on(RoomEvent.Timeline, listener);
+      client.on(RoomEvent.LocalEchoUpdated, localEchoListener);
       return () => {
         client.off(RoomEvent.Timeline, listener);
+        client.off(RoomEvent.LocalEchoUpdated, localEchoListener);
       };
     },
     stop: async () => {

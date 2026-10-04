@@ -20,7 +20,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("matrix-js-sdk", () => ({
   createClient: vi.fn(),
   ClientEvent: { Sync: "sync" },
-  RoomEvent: { Timeline: "timeline" },
+  // #209: LocalEchoUpdated alongside Timeline — the seam's `subscribe`
+  // listens for both (room news with no arrival vs. a message's arrival).
+  RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated" },
   SyncState: { Prepared: "PREPARED", Error: "ERROR" },
   MsgType: { Text: "m.text", File: "m.file", Image: "m.image" },
   ReceiptType: { Read: "m.read", FullyRead: "m.fully_read", ReadPrivate: "m.read.private" },
@@ -37,12 +39,23 @@ vi.mock("matrix-js-sdk", () => ({
     RoomPowerLevels: "m.room.power_levels",
   },
   RelationType: { Annotation: "m.annotation", Replace: "m.replace", Thread: "m.thread", Reference: "m.reference" },
+  // #209: Detached pending-event ordering (startClient) and the local-echo
+  // statuses the projection maps to pending/failed.
+  PendingEventOrdering: { Chronological: "chronological", Detached: "detached" },
+  EventStatus: {
+    NOT_SENT: "not_sent",
+    ENCRYPTING: "encrypting",
+    SENDING: "sending",
+    QUEUED: "queued",
+    SENT: "sent",
+    CANCELLED: "cancelled",
+  },
   MatrixError: class MatrixError extends Error {
     errcode?: string;
   },
 }));
 
-import { ClientEvent, createClient, MatrixError, MsgType, ReceiptType, RoomEvent } from "matrix-js-sdk";
+import { ClientEvent, createClient, EventStatus, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent } from "matrix-js-sdk";
 import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
 
@@ -101,12 +114,15 @@ function fakeEvent(
   } as unknown as MatrixEvent;
 }
 
-function fakeRoom(): Room {
+function fakeRoom(pendingEvents: MatrixEvent[] = []): Room {
   const member = (userId: string): RoomMember | null =>
     userId === "@bose:workspace.example" ? ({ name: "Bose" } as RoomMember) : null;
   return {
     roomId: "!project-x:workspace.example",
     name: "project-x",
+    // #209: this device's own sends still in flight — empty unless a test
+    // asks otherwise (the local-echo projection tests below).
+    getPendingEvents: () => pendingEvents,
     getLiveTimeline: () => ({
       getEvents: () => [
         fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "what's our refund policy?", ts: 1_700_000_000_000 }),
@@ -158,6 +174,9 @@ type FakeClient = MatrixClient & {
   setRoomName: ReturnType<typeof vi.fn>;
   setRoomTopic: ReturnType<typeof vi.fn>;
   sendStateEvent: ReturnType<typeof vi.fn>;
+  resendEvent: ReturnType<typeof vi.fn>;
+  cancelPendingEvent: ReturnType<typeof vi.fn>;
+  getEventTimeline: ReturnType<typeof vi.fn>;
 };
 
 /**
@@ -217,6 +236,9 @@ function fakeClient(
     setRoomName: vi.fn(async () => ({})),
     setRoomTopic: vi.fn(async () => ({})),
     sendStateEvent: vi.fn(async () => ({})),
+    resendEvent: vi.fn(async () => ({})),
+    cancelPendingEvent: vi.fn(() => {}),
+    getEventTimeline: vi.fn(async () => undefined),
   };
   return client as unknown as FakeClient;
 }
@@ -243,6 +265,8 @@ function summaryRoom(shape: {
   avatarUrl?: string;
   /** #223: `m.room.power_levels`' content — absent models a room with no such state at all (the spec's own defaults apply). */
   powerLevels?: { events?: Record<string, number>; state_default?: number };
+  /** #209: this device's own sends still in flight — empty unless a test asks otherwise. */
+  pendingEvents?: MatrixEvent[];
 }): Room {
   return {
     roomId: shape.roomId,
@@ -252,6 +276,8 @@ function summaryRoom(shape: {
     getMembers: () => shape.members.map((member) => ({ userId: member.userId, name: member.name, membership: "join" })),
     getUnreadNotificationCount: (type?: string) => (type === "highlight" ? shape.highlightCount : shape.notificationCount),
     getLiveTimeline: () => ({ getEvents: () => shape.events }),
+    getPendingEvents: () => shape.pendingEvents ?? [],
+    getUnfilteredTimelineSet: () => ({}),
     // Membership lookup and the member list agree, the way the SDK's do —
     // the timeline projection resolves sender names through this door.
     getMember: (userId: string) => {
@@ -330,6 +356,17 @@ describe("the seam's persistence contract (#62 AC4)", () => {
     expect(options.accessToken).toBe("syt_workspace_token");
     expect(options.userId).toBe("@ana:workspace.example");
     expect(Object.keys(options).filter((key) => PERSISTENCE_KEYS.test(key))).toEqual([]);
+  });
+
+  it("starts the client with Detached pending-event ordering (#209) — the projection folds the local echo back in itself", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+
+    await connectPrepared(client);
+
+    expect(client.startClient).toHaveBeenCalledWith(
+      expect.objectContaining({ lazyLoadMembers: true, pendingEventOrdering: PendingEventOrdering.Detached }),
+    );
   });
 
   it("sign-in's throwaway client is built the same way and stopped, not parked", async () => {
@@ -1493,6 +1530,163 @@ describe("the timeline projection the message surface reads (#64)", () => {
       "!project-x:workspace.example",
       "!project-x:workspace.example",
     ]);
+  });
+});
+
+/**
+ * #209: the local-echo projection — this device's own sends, read from
+ * matrix-js-sdk's own pending-event list (`getPendingEvents`) and its
+ * `event.status`, folded into the live view exactly where the issue asked:
+ * after the live timeline, marked pending or failed, never a second copy
+ * this client invents.
+ */
+describe("the local-echo projection (#209)", () => {
+  /** A pending event the way matrix-js-sdk's own local echo shapes one: a temporary `~room:txn` id and a live `status`. */
+  function pendingEvent(shape: { id: string; sender: string; body: string; status: string; ts?: number }): MatrixEvent {
+    return {
+      ...fakeEvent({ type: "m.room.message", sender: shape.sender, msgtype: "m.text", body: shape.body, ts: shape.ts ?? 9_000_000 }),
+      getId: () => shape.id,
+      status: shape.status,
+    } as unknown as MatrixEvent;
+  }
+
+  it("a send still in flight renders after the live timeline, marked pending — never a row this client wrote itself", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "ship it", ts: 1_000 })],
+          pendingEvents: [
+            pendingEvent({ id: "~!project-x:workspace.example:txn1", sender: "@ana:workspace.example", body: "on it", status: EventStatus.SENDING }),
+          ],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timeline("!project-x:workspace.example");
+    expect(messages.map((message) => message.body)).toEqual(["ship it", "on it"]);
+    expect(messages[1]).toMatchObject({ eventId: "~!project-x:workspace.example:txn1", body: "on it", pending: true, failed: undefined });
+    expect(messages[0]!.pending).toBeUndefined();
+  });
+
+  it("a send the homeserver never got renders failed, not pending — EventStatus.NOT_SENT", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          pendingEvents: [
+            pendingEvent({ id: "~!project-x:workspace.example:txn2", sender: "@ana:workspace.example", body: "offline", status: EventStatus.NOT_SENT }),
+          ],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message).toMatchObject({ body: "offline", pending: undefined, failed: true });
+  });
+
+  it("a search window never carries a pending send — nothing \"in flight\" about history (#70)", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          pendingEvents: [
+            pendingEvent({ id: "~!project-x:workspace.example:txn3", sender: "@ana:workspace.example", body: "on it", status: EventStatus.SENDING }),
+          ],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    client.getEventTimeline.mockResolvedValue({
+      getEvents: () => [fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "history", ts: 500 })],
+    });
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timelineAt("!project-x:workspace.example", "$500");
+    expect(messages.map((message) => message.body)).toEqual(["history"]);
+  });
+
+  it("retry hands the SAME pending event back to the SDK — client.resendEvent, by the room's own pending list", async () => {
+    const pending = pendingEvent({ id: "~!project-x:workspace.example:txn4", sender: "@ana:workspace.example", body: "offline", status: EventStatus.NOT_SENT });
+    const room = summaryRoom({
+      roomId: "!project-x:workspace.example",
+      name: "project-x",
+      joinRule: "invite",
+      members: [{ userId: "@ana:workspace.example", name: "ana" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+      pendingEvents: [pending],
+    });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.retry("!project-x:workspace.example", "~!project-x:workspace.example:txn4");
+    expect(client.resendEvent).toHaveBeenCalledWith(pending, room);
+
+    // An id this room has no pending event for costs nothing to ask again.
+    await connection.retry("!project-x:workspace.example", "~gone");
+    expect(client.resendEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancel hands the SAME pending event to client.cancelPendingEvent, synchronously", async () => {
+    const pending = pendingEvent({ id: "~!project-x:workspace.example:txn5", sender: "@ana:workspace.example", body: "offline", status: EventStatus.NOT_SENT });
+    const room = summaryRoom({
+      roomId: "!project-x:workspace.example",
+      name: "project-x",
+      joinRule: "invite",
+      members: [{ userId: "@ana:workspace.example", name: "ana" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+      pendingEvents: [pending],
+    });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    connection.cancel("!project-x:workspace.example", "~!project-x:workspace.example:txn5");
+    expect(client.cancelPendingEvent).toHaveBeenCalledWith(pending);
+  });
+
+  it("subscribe fires on this device's own local-echo status changes too — room news, no arrival", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const heard: Array<{ roomId: string; arrival: unknown }> = [];
+    connection.subscribe((roomId, arrival) => heard.push({ roomId, arrival }));
+    const localEchoHandler = client.on.mock.calls.find(([event]) => event === RoomEvent.LocalEchoUpdated)?.[1] as (
+      event: MatrixEvent,
+      room: Room,
+    ) => void;
+    const room = client.getRoom("!x")!;
+
+    localEchoHandler?.(pendingEvent({ id: "~x", sender: "@ana:workspace.example", body: "offline", status: EventStatus.NOT_SENT }), room);
+
+    expect(heard).toEqual([{ roomId: "!project-x:workspace.example", arrival: undefined }]);
   });
 });
 
