@@ -13,7 +13,7 @@ import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { roomTitle } from "../shell/roomTitle.js";
 import { addressed, mentionLabelOf, type MessageMention } from "../workspace/mentions.js";
-import type { RoomMemberRef, RoomMessage, SharedFile, WorkspaceConnection } from "../workspace/matrix.js";
+import type { RoomMemberRef, RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
@@ -383,6 +383,8 @@ export function MessageBody({
   getUrlPreview,
   conversation = [],
   onToggleReaction,
+  onRetry,
+  onCancel,
 }: {
   message: RoomMessage;
   /** The member's own authenticated fetch of a shared file's bytes — the connection's, passed down so this stays a pure render. */
@@ -392,6 +394,10 @@ export function MessageBody({
   /** The room's timeline, in order — what a passed-on question reads to see whether its owner has answered (#67). */
   conversation?: readonly RoomMessage[];
   onToggleReaction?: (message: RoomMessage, key: string, mine: boolean) => void;
+  /** #209: tries a failed send again — offered only where a failed row can appear (the composer's own, main flow and thread alike). */
+  onRetry?: (message: RoomMessage) => void;
+  /** #209: takes a failed send back — the row goes. */
+  onCancel?: (message: RoomMessage) => void;
 }) {
   const fromDuo = isDuoUserId(message.senderId);
   // #67: a duo's composed words read back as an answer, an outcome, or
@@ -460,6 +466,31 @@ export function MessageBody({
         {message.pending && (
           <span className="ml-1" data-testid="room-message-pending">
             Sending…
+          </span>
+        )}
+        {message.failed && (
+          <span className="ml-1" data-testid="room-message-failed">
+            Not sent.
+            {onRetry && (
+              <button
+                className="ml-1 underline"
+                data-testid="room-message-retry"
+                type="button"
+                onClick={() => onRetry(message)}
+              >
+                Retry
+              </button>
+            )}
+            {onCancel && (
+              <button
+                className="ml-1 underline"
+                data-testid="room-message-cancel"
+                type="button"
+                onClick={() => onCancel(message)}
+              >
+                Cancel
+              </button>
+            )}
           </span>
         )}
       </p>
@@ -555,6 +586,11 @@ function RoomEntry({
         onToggleReaction={(target, key, mine) =>
           run(mine ? connection.unreact(roomId, target.eventId, key) : connection.react(roomId, target.eventId, key))
         }
+        onRetry={(target) => run(connection.retry(roomId, target.eventId))}
+        onCancel={(target) => {
+          connection.cancel(roomId, target.eventId);
+          refresh();
+        }}
       />
       {message.thread !== null && message.thread.replyCount > 0 && message.thread.latestReply !== null && (
         <p className="type-provenance text-[var(--muted)]" data-testid="room-thread-preview">
@@ -704,18 +740,18 @@ function mentionTokenAtEnd(text: string): string | null {
   return token.startsWith("@") ? token : null;
 }
 
-/** Distinguishes one optimistic copy from the next — the homeserver's event ids replace these. */
-let echoSequence = 0;
-
 /**
  * The member's half of the room: a person saying something, in the chat-app
  * idiom this client already uses for asking (#27 — Enter is a newline,
- * Cmd/Ctrl-Enter submits). #64 AC1: the words render immediately as the
- * sender's own marked copy, and the homeserver's echo replaces them; a
- * failed send takes the copy back and keeps the text. #65: an "@" the
- * member types offers the room's members — people and the duos present,
- * clearly distinguished — and the picks ride the wire as m.mentions.
- * failed send takes the copy back and keeps the text.
+ * Cmd/Ctrl-Enter submits). #64 AC1 / #209: the composer clears and the words
+ * render immediately as the sender's own marked copy — matrix-js-sdk's own
+ * local echo (`connect()`'s Detached pending-event ordering), never a
+ * second copy this client writes into a cache. A failed send keeps its row,
+ * marked failed, with Retry and Cancel (`MessageBody`/`RoomEntry`); the
+ * composer itself never held the words past Enter, so there is nothing for
+ * it to take back. #65: an "@" the member types offers the room's members —
+ * people and the duos present, clearly distinguished — and the picks ride
+ * the wire as m.mentions.
  *
  * #66 adds the share: files attach here, refuse or stage by this app's own
  * named share limits, then ride the submit — each attachment uploads and
@@ -738,7 +774,6 @@ function RoomComposer({
   roomName: string;
   members: readonly RoomMemberRef[];
 }) {
-  const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement | null>(null);
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<StagedShare[]>([]);
@@ -754,35 +789,6 @@ function RoomComposer({
   const trimmed = text.trim();
   const disabled = (trimmed.length === 0 && attachments.length === 0) || pending;
   const duos = members.filter((member) => isDuoUserId(member.userId));
-
-  const appendEcho = (row: RoomMessage): void => {
-    queryClient.setQueryData<readonly RoomMessage[]>(["workspace", "timeline", roomId], (current) => [...(current ?? []), row]);
-  };
-  const dropEchoes = (ids: readonly string[]): void => {
-    if (ids.length === 0) {
-      return;
-    }
-    const drop = new Set(ids);
-    queryClient.setQueryData<readonly RoomMessage[]>(["workspace", "timeline", roomId], (current) =>
-      (current ?? []).filter((row) => !drop.has(row.eventId)),
-    );
-  };
-  const echoRow = (eventId: string, shared: SharedFile): RoomMessage => ({
-    eventId,
-    roomId,
-    senderId: connection.userId,
-    senderName: localpartOf(connection.userId),
-    body: shared.name,
-    parts: null,
-    file: shared,
-    originServerTs: Date.now(),
-    edited: false,
-    redacted: false,
-    reactions: [],
-    thread: null,
-    threadRootEventId: null,
-    pending: true,
-  });
 
   /** Stages what this app will share and says why about what it won't — the refusal names the limit and keeps everything. */
   const stage = (files: FileList): void => {
@@ -839,14 +845,11 @@ function RoomComposer({
         const livePicks = picks.filter((pick) => text.includes(addressed(pick.userId, pick.label)));
         setPending(true);
         setError(null);
-        // The share walks one attachment at a time, in the order staged,
-        // and stops at the first thing the workspace refuses: the rest stay
-        // attached and the words stay typed, because a question sent past a
-        // failed share would ride the wrong set of files — the member
-        // decides again, with the reason stated (#66 AC4).
+        // The share walks one attachment at a time, in the order staged, so
+        // each upload still starts only once the share ahead of it has left
+        // for the wire — the association convention (core #190) needs that
+        // order, even though none of these sends are awaited for it (#209).
         void (async () => {
-          let completedEchoes: string[] = [];
-          const unfinishedEchoes: string[] = [];
           let sharedCount = 0;
           try {
             for (const staged of toShare) {
@@ -854,51 +857,36 @@ function RoomComposer({
               const shared = await connection.uploadFile(staged, (sent, total) => {
                 setStatus(total > 0 ? `Uploading ${staged.name}… ${Math.round((sent / total) * 100)}%` : `Uploading ${staged.name}…`);
               });
-              const echoId = `pending-${(echoSequence += 1)}`;
-              unfinishedEchoes.push(echoId);
-              appendEcho(echoRow(echoId, shared));
               setStatus(`Sharing ${staged.name}…`);
-              await connection.sendFile(roomId, shared);
-              completedEchoes = [...completedEchoes, echoId];
+              // #209: handed to the homeserver without waiting on it —
+              // matrix-js-sdk's own local echo puts the share's row in the
+              // timeline the instant this call is made. A refusal shows on
+              // that row (failed, with Retry), not here.
+              connection.sendFile(roomId, shared).catch(() => undefined);
               sharedCount += 1;
             }
             if (body.length > 0) {
               // The question goes last and contiguous: the association
               // convention is the asker's own file messages immediately
-              // preceding their text, same sender, same room.
-              const echoId = `pending-${(echoSequence += 1)}`;
-              unfinishedEchoes.push(echoId);
-              appendEcho({
-                eventId: echoId,
-                roomId,
-                senderId: connection.userId,
-                senderName: localpartOf(connection.userId),
-                body,
-                parts: null,
-                originServerTs: Date.now(),
-                edited: false,
-                redacted: false,
-                reactions: [],
-                thread: null,
-                threadRootEventId: null,
-                pending: true,
-              });
-              await (livePicks.length > 0 ? connection.send(roomId, body, livePicks) : connection.send(roomId, body));
-              completedEchoes = [...completedEchoes, echoId];
+              // preceding their text, same sender, same room. Same
+              // fire-and-forget (#209): the row carries its own
+              // "Sending…"/failed state from here on.
+              (livePicks.length > 0 ? connection.send(roomId, body, livePicks) : connection.send(roomId, body)).catch(() => undefined);
             }
+            // The words are already on their way — the SDK's own local echo
+            // carries them in the room's timeline — so the composer clears
+            // without waiting on the homeserver (#209).
             setText("");
             setPicks([]);
             setAttachments([]);
           } catch (error) {
-            // The optimistic copies of what never became the homeserver's
-            // record go; what did complete keeps its copy until the
-            // subscription's refetch lands the real rows.
-            dropEchoes(unfinishedEchoes.filter((id) => !completedEchoes.includes(id)));
+            // Only an upload throws here — a refused send lives on its own
+            // row instead (caught above). The rest stay attached and the
+            // words stay typed: a question sent past a failed share would
+            // ride the wrong set of files (#66 AC4).
             setAttachments(toShare.slice(sharedCount));
             setError(
-              sharedCount < toShare.length
-                ? `The workspace didn't take ${toShare[sharedCount]!.name}. ${error instanceof Error && error.message.length > 0 ? `${error.message} ` : ""}It's still attached and your words are still here. Try again.`
-                : "Couldn't send — try again.",
+              `The workspace didn't take ${toShare[sharedCount]!.name}. ${error instanceof Error && error.message.length > 0 ? `${error.message} ` : ""}It's still attached and your words are still here. Try again.`,
             );
           } finally {
             setPending(false);

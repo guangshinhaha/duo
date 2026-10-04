@@ -160,6 +160,8 @@ function fakeConnection(state: {
   people?: Array<{ userId: string; name: string }>;
   /** #214: pending invites, separate from `rooms` — an invite is not a conversation yet. */
   invites?: RoomInvite[];
+  /** #209: the next `send`/`replyInThread` ends in the row going failed, like the homeserver refused it — consumed once. */
+  failNextSend?: boolean;
 }) {
   // Every surface that subscribes hears every arrival — the way the real
   // seam's client.on does. (#69's dispatcher subscribes beside the list
@@ -168,6 +170,36 @@ function fakeConnection(state: {
   const roomAt = (roomId: string): number => state.rooms.findIndex((room) => room.roomId === roomId);
   const timelineOf = (roomId: string): RoomMessage[] => (state.timelines[roomId] ??= []);
   const messageAt = (roomId: string, eventId: string): number => timelineOf(roomId).findIndex((message) => message.eventId === eventId);
+  /** Tells every subscriber room news with no arrival — #209's own send changing status is this, the same as a reaction or an amendment. */
+  const notify = (roomId: string): void => {
+    for (const listener of listeners) {
+      listener(roomId);
+    }
+  };
+  let pendingSeq = 0;
+  /**
+   * #209: the local-echo half every send-like verb shares — a pending row
+   * lands in the SAME timeline `timeline()` reads (never a second, cache-only
+   * copy), synchronously with the call, the way matrix-js-sdk's own
+   * `room.addPendingEvent` does. `state.failNextSend` (consumed once) turns
+   * the eventual answer into a failure — the row stays, marked failed, in
+   * place of the homeserver's confirmation this fake never fabricates.
+   */
+  const localEcho = (roomId: string, row: RoomMessage): string => {
+    const list = timelineOf(roomId);
+    list.push(row);
+    notify(roomId);
+    if (state.failNextSend) {
+      state.failNextSend = false;
+      const at = messageAt(roomId, row.eventId);
+      if (at >= 0) {
+        list[at] = { ...list[at]!, pending: false, failed: true };
+      }
+      notify(roomId);
+      return "failed";
+    }
+    return "ok";
+  };
   const connection: WorkspaceConnection = {
     userId: SESSION.userId,
     rooms: vi.fn(async () =>
@@ -177,7 +209,16 @@ function fakeConnection(state: {
       state.rooms.map((room) => ({ ...room, members: [...room.members] })),
     ),
     timeline: vi.fn(async (roomId: string) => [...(state.timelines[roomId] ?? [])]),
-    send: vi.fn(async () => {}),
+    send: vi.fn(async (roomId: string, body: string, mentions?: Parameters<WorkspaceConnection["send"]>[2]) => {
+      const eventId = `~send-${(pendingSeq += 1)}`;
+      const outcome = localEcho(
+        roomId,
+        messageFor({ eventId, senderId: SESSION.userId, senderName: "ana", body, pending: true, parts: mentions?.length ? [] : null }),
+      );
+      if (outcome === "failed") {
+        throw new Error("offline");
+      }
+    }),
     // #66's share half: the upload resolves the staged bytes to the stable
     // reference (reporting full progress, the honest single-chunk case),
     // sendFile is the wire act, and loadMedia is the member's own
@@ -193,7 +234,10 @@ function fakeConnection(state: {
         image: staged.mimeType.startsWith("image/"),
       };
     }),
-    sendFile: vi.fn(async () => {}),
+    sendFile: vi.fn(async (roomId: string, file: SharedFile) => {
+      const eventId = `~share-${(pendingSeq += 1)}`;
+      localEcho(roomId, messageFor({ eventId, senderId: SESSION.userId, senderName: "ana", body: file.name, file, pending: true }));
+    }),
     loadMedia: vi.fn(async (url: string): Promise<Blob | null> => new Blob([`bytes of ${url}`], { type: "application/octet-stream" })),
     // #219: no fixture in this file posts a link a card should render —
     // LinkPreview.test.tsx pins the preview itself — so this fake simply
@@ -366,19 +410,44 @@ function fakeConnection(state: {
       };
     }),
     replyInThread: vi.fn(async (roomId: string, rootEventId: string, body: string) => {
-      const list = timelineOf(roomId);
-      const at = messageAt(roomId, rootEventId);
-      const reply = messageFor({ eventId: `$t${list.length + 1}`, senderId: SESSION.userId, senderName: "ana", body, threadRootEventId: rootEventId });
-      list.push(reply);
-      if (at >= 0) {
-        const root = list[at]!;
-        list[at] = {
+      const eventId = `~reply-${(pendingSeq += 1)}`;
+      const rootAt = messageAt(roomId, rootEventId);
+      if (rootAt >= 0) {
+        const list = timelineOf(roomId);
+        const root = list[rootAt]!;
+        list[rootAt] = {
           ...root,
           thread: {
             replyCount: (root.thread?.replyCount ?? 0) + 1,
             latestReply: { senderId: SESSION.userId, senderName: "ana", body },
           },
         };
+      }
+      const outcome = localEcho(
+        roomId,
+        messageFor({ eventId, senderId: SESSION.userId, senderName: "ana", body, threadRootEventId: rootEventId, pending: true }),
+      );
+      if (outcome === "failed") {
+        throw new Error("refused");
+      }
+    }),
+    // #209: Retry tries the SAME row again (flips it back to pending — the
+    // test confirms it the ordinary way, via `deliver`); Cancel takes the
+    // row back outright, the way `client.cancelPendingEvent` does.
+    retry: vi.fn(async (roomId: string, eventId: string) => {
+      const list = timelineOf(roomId);
+      const at = messageAt(roomId, eventId);
+      if (at >= 0) {
+        list[at] = { ...list[at]!, pending: true, failed: false };
+        notify(roomId);
+      }
+    }),
+    cancel: vi.fn((roomId: string, eventId: string) => {
+      const list = timelineOf(roomId);
+      const at = messageAt(roomId, eventId);
+      if (at >= 0) {
+        list.splice(at, 1);
+        notify(roomId);
       }
     }),
   };
@@ -391,8 +460,20 @@ function fakeConnection(state: {
     deliver: (message: RoomMessage, mentionsMe = false) => {
       const list = timelineOf(message.roomId);
       const at = list.findIndex((existing) => existing.eventId === message.eventId);
+      // #209: the homeserver's echo of THIS device's own send swaps the
+      // matching pending row in place — the real seam's local-echo id swap
+      // (`handleRemoteEcho`), never a second, duplicate row.
+      const pendingAt =
+        at < 0 && message.senderId === SESSION.userId
+          ? list.findIndex(
+              (existing) =>
+                existing.pending === true && existing.body === message.body && existing.threadRootEventId === message.threadRootEventId,
+            )
+          : -1;
       if (at >= 0) {
         list[at] = message;
+      } else if (pendingAt >= 0) {
+        list[pendingAt] = message;
       } else {
         list.push(message);
         // #65: a first-time arrival that mentions this user moves the
@@ -1089,20 +1170,49 @@ describe("#64 AC1 — messages send and arrive", () => {
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    // Immediately — nothing has arrived from anywhere yet; the row is this
-    // device's own optimistic copy, marked as on its way. The waitFor only
-    // rides out the cache's microtask flush: no arrival is coming (deliver
-    // is the only arrival path, and it hasn't run), so the row can owe to
-    // the click alone.
+    // Same frame as the click — the composer never waits on the homeserver
+    // to clear (#209): no `await`/`waitFor` stands between the click and
+    // this assertion.
+    expect(screen.getByLabelText("Message project-x")).toHaveValue("");
+    // Immediately — nothing has arrived from anywhere yet; the row is
+    // matrix-js-sdk's own local echo (Detached pending-event ordering),
+    // read straight off the connection, never a second copy this client
+    // wrote. The waitFor only rides out the cache's microtask flush: no
+    // arrival is coming (deliver is the only arrival path, and it hasn't
+    // run), so the row can owe to the click alone.
     const optimistic = await waitFor(() => messageRow("thanks all"));
     expect(within(optimistic).getByTestId("room-message-pending")).toBeInTheDocument();
     expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "thanks all");
 
     // The homeserver's echo — a real event id — replaces the optimistic
-    // copy; the words stand without the marker.
+    // copy; the words stand without the marker, and there is exactly one
+    // row for them (no duplicate between the local echo and the echo).
     act(() => fake.deliver(messageFor({ eventId: "$echo", senderId: SESSION.userId, senderName: "ana", body: "thanks all" })));
     await waitFor(() => expect(screen.queryByTestId("room-message-pending")).toBeNull());
-    expect(screen.getByText("thanks all")).toBeInTheDocument();
+    expect(screen.getAllByText("thanks all")).toHaveLength(1);
+  });
+
+  it("a background refetch during sending doesn't remove the pending row (#209) — it's read from the same place every time, not a second copy", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const optimistic = await waitFor(() => messageRow("thanks all"));
+    expect(within(optimistic).getByTestId("room-message-pending")).toBeInTheDocument();
+
+    // An unrelated event — someone else's message, landing while ours is
+    // still on its way — forces exactly the kind of refetch that used to
+    // race the old hand-rolled echo and wipe it.
+    act(() => fake.deliver(messageFor({ eventId: "$bose2", senderId: "@bose:workspace.example", senderName: "Bose", body: "fyi" })));
+    await waitFor(() => expect(screen.getByText("fyi")).toBeInTheDocument());
+    // Ours is still exactly where it was, still marked pending.
+    expect(within(messageRow("thanks all")).getByTestId("room-message-pending")).toBeInTheDocument();
   });
 });
 
@@ -1554,28 +1664,57 @@ describe("#65 — a mention of you marks the conversation in the list", () => {
 });
 
 describe("#64 — a refused verb says so, honestly (failed paths)", () => {
-  it("a send the workspace refuses takes the optimistic copy back, keeps the words, and says why", async () => {
+  it("a send the homeserver never got shows on its own row, failed, with Retry — the words are not lost (#209)", async () => {
     seedSession();
-    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    const state = { rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] }, failNextSend: true };
+    const fake = fakeConnection(state);
     vi.mocked(connect).mockResolvedValue(fake.connection);
-    vi.mocked(fake.connection.send).mockRejectedValueOnce(new Error("offline"));
 
     await renderApp();
     navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    // The optimistic copy is gone — a refused send must not stand in the
-    // room as if it were said. (Scoped to the timeline: the composer's
-    // textarea keeps the words, which is the point below.)
-    await waitFor(() => expect(within(screen.getByTestId("room-timeline")).queryByText("thanks all")).toBeNull());
-    expect(screen.getByTestId("room-composer-error")).toHaveTextContent("Couldn't send — try again.");
-    // The words stay with their author, not lost to the refusal.
-    expect(screen.getByLabelText("Message project-x")).toHaveValue("thanks all");
+    // The composer clears the same frame as Enter — it never held the
+    // words past that, so a later refusal has nothing of its own to lose.
+    expect(screen.getByLabelText("Message project-x")).toHaveValue("");
+    // The row stays — marked failed, not gone — and the words are right there on it.
+    const row = await waitFor(() => messageRow("thanks all"));
+    await waitFor(() => expect(within(row).getByTestId("room-message-failed")).toBeInTheDocument());
+    expect(within(row).queryByTestId("room-message-pending")).toBeNull();
+    expect(screen.getByText("thanks all")).toBeInTheDocument();
+
+    // Retry tries the same row again — this time the homeserver answers.
+    fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fake.connection.retry).toHaveBeenCalled());
+    await waitFor(() => expect(within(messageRow("thanks all")).getByTestId("room-message-pending")).toBeInTheDocument());
+    act(() => fake.deliver(messageFor({ eventId: "$echo", senderId: SESSION.userId, senderName: "ana", body: "thanks all" })));
+    await waitFor(() => expect(screen.queryByTestId("room-message-failed")).toBeNull());
+    expect(screen.getAllByText("thanks all")).toHaveLength(1);
+  });
+
+  it("Cancel takes a failed send back — no Retry left for it, nothing else in the room moves", async () => {
+    seedSession();
+    const state = { rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] }, failNextSend: true };
+    const fake = fakeConnection(state);
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "never mind" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const row = await waitFor(() => messageRow("never mind"));
+    await waitFor(() => expect(within(row).getByTestId("room-message-failed")).toBeInTheDocument());
+
+    fireEvent.click(within(row).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(fake.connection.cancel).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("never mind")).toBeNull());
+    // The rest of the room's own history is untouched.
+    expect(screen.getByText("what's our refund policy?")).toBeInTheDocument();
   });
 
   it("an edit the workspace refuses leaves the words standing and says so", async () => {
@@ -1639,26 +1778,28 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     expect(screen.queryByTestId("room-reaction")).toBeNull();
   });
 
-  it("a thread reply the workspace refuses takes the optimistic copy back and says so", async () => {
+  it("a thread reply the homeserver never got shows failed, with Retry — same behaviour as the main flow (#209)", async () => {
     seedSession();
-    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...THREADED_TIMELINE] } });
+    const state = { rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...THREADED_TIMELINE] }, failNextSend: true };
+    const fake = fakeConnection(state);
     vi.mocked(connect).mockResolvedValue(fake.connection);
-    vi.mocked(fake.connection.replyInThread).mockRejectedValueOnce(new Error("refused"));
 
     await renderApp();
     navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     await screen.findByTestId("thread-timeline");
 
     fireEvent.change(screen.getByLabelText("Reply in thread"), { target: { value: "thanks!" } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    // Scoped to the thread's rows — the composer's textarea keeps the
-    // words for the retry.
-    await waitFor(() => expect(within(screen.getByTestId("thread-timeline")).queryByText("thanks!")).toBeNull());
-    expect(screen.getByTestId("thread-composer-error")).toHaveTextContent("Couldn't send — try again.");
-    expect(screen.getByLabelText("Reply in thread")).toHaveValue("thanks!");
+    // The composer clears the same frame as Enter.
+    expect(screen.getByLabelText("Reply in thread")).toHaveValue("");
+    const row = await waitFor(() => messageRow("thanks!"));
+    await waitFor(() => expect(within(row).getByTestId("room-message-failed")).toBeInTheDocument());
+    expect(screen.getByText("thanks!")).toBeInTheDocument();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fake.connection.retry).toHaveBeenCalled());
+    await waitFor(() => expect(within(messageRow("thanks!")).getByTestId("room-message-pending")).toBeInTheDocument());
   });
 });
 
