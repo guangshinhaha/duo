@@ -6,6 +6,7 @@ import type { LiveArrival, NotificationMode, RoomInvite, RoomMessage, RoomSummar
 import { WorkspaceSignInDialog } from "../src/components/WorkspaceSignInDialog.js";
 import type { StagedShare } from "../src/workspace/sharing.js";
 import { stubDesktop } from "./desktop.js";
+import { composed, composerText, pressEnter, setComposer, typeInto } from "./composerHelpers.js";
 
 /*
  * #62: the app's front door becomes two doors — a workspace sign-in (who you
@@ -725,12 +726,12 @@ describe("#62 AC2 — pairing a duo is a separate, later step", () => {
     window.dispatchEvent(new Event("hashchange"));
     await screen.findByTestId("room-timeline");
 
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
+    setComposer(screen.getByLabelText("Message project-x"), "thanks all");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "thanks all"));
     // The composer clears on a successful send — the room is the record.
-    await waitFor(() => expect(screen.getByLabelText("Message project-x")).toHaveValue(""));
+    await waitFor(() => expect(composerText(screen.getByLabelText("Message project-x"))).toBe(""));
 
     // A live arrival (someone else's message, or ours echoed back by the
     // homeserver) renders without a manual refresh.
@@ -1382,13 +1383,13 @@ describe("#64 AC1 — messages send and arrive", () => {
     navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
+    setComposer(screen.getByLabelText("Message project-x"), "thanks all");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     // Same frame as the click — the composer never waits on the homeserver
     // to clear (#209): no `await`/`waitFor` stands between the click and
     // this assertion.
-    expect(screen.getByLabelText("Message project-x")).toHaveValue("");
+    expect(composerText(screen.getByLabelText("Message project-x"))).toBe("");
     // Immediately — nothing has arrived from anywhere yet; the row is
     // matrix-js-sdk's own local echo (Detached pending-event ordering),
     // read straight off the connection, never a second copy this client
@@ -1416,7 +1417,7 @@ describe("#64 AC1 — messages send and arrive", () => {
     navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
+    setComposer(screen.getByLabelText("Message project-x"), "thanks all");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     const optimistic = await waitFor(() => messageRow("thanks all"));
     expect(within(optimistic).getByTestId("room-message-pending")).toBeInTheDocument();
@@ -1571,7 +1572,7 @@ describe("#64 AC3 — threads and reactions work", () => {
     expect(screen.getByTestId("room-duo-message-attribution")).toHaveTextContent("carol's duo");
     expect(screen.getByText("np, 30 days")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Reply in thread"), { target: { value: "thanks!" } });
+    setComposer(screen.getByLabelText("Reply in thread"), "thanks!");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(fake.connection.replyInThread).toHaveBeenCalledWith("!project-x:workspace.example", "$1", "thanks!"));
@@ -1601,7 +1602,7 @@ describe("#215 — replying to a message with a quote, outside a thread", () => 
     expect(preview).toHaveTextContent("Bose");
     expect(preview).toHaveTextContent("what's our refund policy?");
 
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "30 days" } });
+    setComposer(screen.getByLabelText("Message project-x"), "30 days");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     // Same frame as the click (#209): the quote preview clears with the
@@ -1627,12 +1628,12 @@ describe("#215 — replying to a message with a quote, outside a thread", () => 
 
     fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "Reply" }));
     await screen.findByTestId("reply-preview");
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "still drafting" } });
+    setComposer(screen.getByLabelText("Message project-x"), "still drafting");
 
     fireEvent.click(screen.getByTestId("reply-preview-cancel"));
 
     expect(screen.queryByTestId("reply-preview")).toBeNull();
-    expect(screen.getByLabelText("Message project-x")).toHaveValue("still drafting");
+    expect(composerText(screen.getByLabelText("Message project-x"))).toBe("still drafting");
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     // No reply target survives the cancel: an ordinary send, same shape as
@@ -1644,23 +1645,24 @@ describe("#215 — replying to a message with a quote, outside a thread", () => 
     seedSession();
     const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
-    const scrollIntoView = vi.fn();
-    Object.assign(HTMLElement.prototype, { scrollIntoView });
+    // #248: the transcript is virtualized — the jump is the virtualizer scrolling its own container to the row.
+    const scrollTo = vi.spyOn(Element.prototype, "scrollTo");
 
     await renderApp();
     navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
     fireEvent.click(within(messageRow("what's our refund policy?")).getByRole("button", { name: "Reply" }));
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "30 days" } });
+    setComposer(screen.getByLabelText("Message project-x"), "30 days");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     const sent = await waitFor(() => messageRow("30 days"));
 
-    scrollIntoView.mockClear();
+    scrollTo.mockClear();
     fireEvent.click(within(sent).getByTestId("reply-quote"));
 
-    expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenCalled();
     await waitFor(() => expect(messageRow("what's our refund policy?")).toHaveAttribute("aria-current", "true"));
+    scrollTo.mockRestore();
   });
 });
 
@@ -1708,7 +1710,7 @@ describe("#65 AC1 — people and duos are both mentionable", () => {
     await screen.findByTestId("room-timeline");
 
     const composer = screen.getByLabelText("Message project-x");
-    fireEvent.change(composer, { target: { value: "@" } });
+    typeInto(composer, "@");
 
     const offer = await screen.findByTestId("mention-offer");
     const options = within(offer).getAllByTestId("mention-option");
@@ -1721,7 +1723,7 @@ describe("#65 AC1 — people and duos are both mentionable", () => {
     expect(options[1]).toHaveTextContent("carol's duo");
 
     // The typed fragment narrows the offer, the way an address bar does.
-    fireEvent.change(composer, { target: { value: "@bo" } });
+    typeInto(composer, "bo");
     await waitFor(() =>
       expect(within(screen.getByTestId("mention-offer")).getAllByTestId("mention-option")).toHaveLength(1),
     );
@@ -1739,13 +1741,14 @@ describe("#65 AC1 — people and duos are both mentionable", () => {
     await screen.findByTestId("room-timeline");
 
     const composer = screen.getByLabelText("Message project-x");
-    fireEvent.change(composer, { target: { value: "@ca" } });
+    typeInto(composer, "@ca");
     fireEvent.click((await screen.findByTestId("mention-offer")).querySelector('[data-testid="mention-option"]')!);
+    await waitFor(() => expect(composed(composer).mentions).toHaveLength(1));
 
     // The pick landed in the text — then the sender thought better of it
     // and wrote something else. What the message doesn't say, the wire
     // doesn't claim: no m.mentions for a mention no longer in the body.
-    fireEvent.change(composer, { target: { value: "never mind" } });
+    setComposer(composer, "never mind");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
     });
@@ -1765,7 +1768,7 @@ describe("#65 AC2 — mentioning a duo asks it", () => {
     await screen.findByTestId("room-timeline");
 
     const composer = screen.getByLabelText("Message project-x");
-    fireEvent.change(composer, { target: { value: "@ca" } });
+    typeInto(composer, "@ca");
     // "@ca" narrows the offer to the duo alone — the person's label doesn't
     // begin with it.
     const offerEl = await screen.findByTestId("mention-offer");
@@ -1775,9 +1778,11 @@ describe("#65 AC2 — mentioning a duo asks it", () => {
     fireEvent.click(duoOption);
     // Picking closes the offer and leaves the addressed words in the text.
     await waitFor(() => expect(screen.queryByTestId("mention-offer")).toBeNull());
-    expect(composer).toHaveValue("@carol's duo ");
+    expect(composerText(composer)).toBe("@carol's duo ");
+    // The pick is a pill in the editor — the duo's own dashed idiom.
+    expect(composer.querySelector('[data-testid="composer-mention"]')).toHaveAttribute("data-mentioned-user", "@duo-carol:workspace.example");
 
-    fireEvent.change(composer, { target: { value: "@carol's duo what's our refund policy?" } });
+    typeInto(composer, "what's our refund policy?");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
     });
@@ -1967,12 +1972,12 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "thanks all" } });
+    setComposer(screen.getByLabelText("Message project-x"), "thanks all");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     // The composer clears the same frame as Enter — it never held the
     // words past that, so a later refusal has nothing of its own to lose.
-    expect(screen.getByLabelText("Message project-x")).toHaveValue("");
+    expect(composerText(screen.getByLabelText("Message project-x"))).toBe("");
     // The row stays — marked failed, not gone — and the words are right there on it.
     const row = await waitFor(() => messageRow("thanks all"));
     await waitFor(() => expect(within(row).getByTestId("room-message-failed")).toBeInTheDocument());
@@ -1998,7 +2003,7 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "never mind" } });
+    setComposer(screen.getByLabelText("Message project-x"), "never mind");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     const row = await waitFor(() => messageRow("never mind"));
     await waitFor(() => expect(within(row).getByTestId("room-message-failed")).toBeInTheDocument());
@@ -2081,11 +2086,11 @@ describe("#64 — a refused verb says so, honestly (failed paths)", () => {
     navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     await screen.findByTestId("thread-timeline");
 
-    fireEvent.change(screen.getByLabelText("Reply in thread"), { target: { value: "thanks!" } });
+    setComposer(screen.getByLabelText("Reply in thread"), "thanks!");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     // The composer clears the same frame as Enter.
-    expect(screen.getByLabelText("Reply in thread")).toHaveValue("");
+    expect(composerText(screen.getByLabelText("Reply in thread"))).toBe("");
     const row = await waitFor(() => messageRow("thanks!"));
     await waitFor(() => expect(within(row).getByTestId("room-message-failed")).toBeInTheDocument());
     expect(screen.getByText("thanks!")).toBeInTheDocument();
@@ -2686,7 +2691,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     expect(note).toHaveTextContent("can't read images yet");
     expect(note).toHaveTextContent("never imports");
 
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "what do these say?" } });
+    setComposer(screen.getByLabelText("Message project-x"), "what do these say?");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
     });
@@ -2703,7 +2708,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     expect(fake.connection.send).toHaveBeenCalledWith(ROOM, "what do these say?");
     // Both shares and the question left the composer.
     await waitFor(() => expect(screen.queryByTestId("attachment-chip")).toBeNull());
-    expect(screen.getByLabelText("Message project-x")).toHaveValue("");
+    expect(composerText(screen.getByLabelText("Message project-x"))).toBe("");
   });
 
   it("the upload's progress is visible while it runs, and the composer rests when it ends", async () => {
@@ -2782,7 +2787,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     vi.mocked(fake.connection.uploadFile).mockRejectedValueOnce(new Error("notes.txt is over the workspace's own upload limit."));
 
     await pick([new File([new Uint8Array([1, 2, 3])], "notes.txt", { type: "text/plain" })]);
-    fireEvent.change(screen.getByLabelText("Message project-x"), { target: { value: "what does this say?" } });
+    setComposer(screen.getByLabelText("Message project-x"), "what does this say?");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
     });
@@ -2793,7 +2798,7 @@ describe("#66 — sharing files and images in a conversation", () => {
     // Nothing is lost: the file stays attached, the words stay typed, and
     // the question was not sent riding the wrong (empty) set of files.
     expect(screen.getByTestId("attachment-chip")).toHaveTextContent("notes.txt");
-    expect(screen.getByLabelText("Message project-x")).toHaveValue("what does this say?");
+    expect(composerText(screen.getByLabelText("Message project-x"))).toBe("what does this say?");
     expect(fake.connection.sendFile).not.toHaveBeenCalled();
     expect(fake.connection.send).not.toHaveBeenCalled();
   });
@@ -3516,11 +3521,11 @@ describe("#223 — naming a conversation, setting its topic, and its picture", (
 });
 
 /*
- * #244: Enter sends, Shift+Enter makes a new line — the shared
- * `handleComposerKeyDown` (composerKeyDown.test.tsx) wired into this
- * composer's textarea. These are thin smoke tests confirming the wiring;
- * the handler's own rules (IME, ⌘/Ctrl+Enter, Shift+Enter) are covered
- * once, against a bare form, in composerKeyDown.test.tsx.
+ * #244: Enter sends, Shift+Enter makes a new line — the shared editor's
+ * own key handling (#248's `ChatEditor`, ChatEditor.test.tsx) wired into
+ * each composer. These are thin smoke tests confirming the wiring; the
+ * rules themselves (IME, ⌘/Ctrl+Enter, Shift+Enter, touch) are covered
+ * once, against the bare editor, in ChatEditor.test.tsx.
  */
 describe("#244 — Enter sends in the conversation composer", () => {
   it("Enter sends the message and clears the field; Shift+Enter only adds a line", async () => {
@@ -3531,14 +3536,32 @@ describe("#244 — Enter sends in the conversation composer", () => {
     navigate("#chat/!project-x%3Aworkspace.example");
     await screen.findByTestId("room-timeline");
 
-    const field = screen.getByLabelText("Message project-x") as HTMLTextAreaElement;
-    fireEvent.change(field, { target: { value: "shall we ship it" } });
-    fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "shall we");
+    pressEnter(field, { shiftKey: true });
+    typeInto(field, "ship it");
     expect(fake.connection.send).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(field, { key: "Enter" });
-    await waitFor(() => expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "shall we ship it"));
-    expect(field).toHaveValue("");
+    pressEnter(field);
+    await waitFor(() => expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "shall we\nship it"));
+    expect(composerText(field)).toBe("");
+  });
+
+  it("#216: what the live shortcuts styled goes out as its markdown, literal characters untouched", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "**ship** it, 2 * 3 times");
+    // Styled in the editor as it was typed…
+    expect(field.querySelector("strong")).toHaveTextContent("ship");
+    pressEnter(field);
+    // …and the body is the markdown source the seam turns into formatted_body (markdown.ts).
+    await waitFor(() => expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "**ship** it, 2 * 3 times"));
   });
 });
 
@@ -3551,13 +3574,13 @@ describe("#244 — Enter sends in the thread composer", () => {
     navigate("#chat/!project-x%3Aworkspace.example/thread/%241");
     await screen.findByTestId("thread-timeline");
 
-    const field = screen.getByLabelText("Reply in thread") as HTMLTextAreaElement;
-    fireEvent.change(field, { target: { value: "thanks!" } });
-    fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
+    const field = screen.getByLabelText("Reply in thread");
+    typeInto(field, "thanks!");
+    pressEnter(field, { shiftKey: true });
     expect(fake.connection.replyInThread).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(field, { key: "Enter" });
+    pressEnter(field);
     await waitFor(() => expect(fake.connection.replyInThread).toHaveBeenCalledWith("!project-x:workspace.example", "$1", "thanks!"));
-    expect(field).toHaveValue("");
+    expect(composerText(field)).toBe("");
   });
 });

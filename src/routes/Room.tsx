@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Paperclip, X } from "lucide-react";
@@ -8,12 +8,14 @@ import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
 import { LinkPreviewCard } from "../components/LinkPreviewCard.js";
 import { MessageBodyHtml } from "../components/MessageBodyHtml.js";
 import { InfoButton } from "../shell/InfoButton.js";
-import { useStickToEnd } from "../shell/stickToEnd.js";
+import { ChatTimelineList, useChatTimeline } from "../shell/useChatTimeline.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { roomTitle } from "../shell/roomTitle.js";
-import { addressed, mentionLabelOf, mentionPillClassName, type MessageMention } from "../workspace/mentions.js";
+import { addressed, mentionLabelOf, mentionPillClassName } from "../workspace/mentions.js";
+import { ChatEditor, type ChatEditorHandle } from "../composer/ChatEditor.js";
+import { mentionCandidatesOf } from "../composer/mentionOffer.js";
 import type { RoomMemberRef, RoomMessage, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
@@ -21,7 +23,6 @@ import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../wor
 import { messagePermalink, roomHref, threadHref } from "../workspace/links.js";
 import { firstLinkOf } from "../workspace/linkPreview.js";
 import { readUrlPreviewPref } from "../urlPreviewPrefs.js";
-import { handleComposerKeyDown } from "../composerKeyDown.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
 
@@ -164,6 +165,14 @@ function UnreadLine({
   onRead: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // The callbacks are the room's fresh closures each render; the observer —
+  // and a dwell it may be timing — must outlive those renders.
+  const visibility = useRef(onVisibilityChange);
+  const read = useRef(onRead);
+  useEffect(() => {
+    visibility.current = onVisibilityChange;
+    read.current = onRead;
+  });
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") {
@@ -179,10 +188,10 @@ function UnreadLine({
     const observer = new IntersectionObserver(
       (entries) => {
         const visible = entries[0]?.isIntersecting ?? false;
-        onVisibilityChange(visible);
+        visibility.current(visible);
         clearDwell();
         if (visible) {
-          dwell = setTimeout(onRead, UNREAD_DWELL_MS);
+          dwell = setTimeout(() => read.current(), UNREAD_DWELL_MS);
         }
       },
       { root: scrollerRef.current, threshold: 0.5 },
@@ -191,8 +200,12 @@ function UnreadLine({
     return () => {
       clearDwell();
       observer.disconnect();
+      // #248: the transcript is virtualized — a line whose row scrolls far
+      // enough away unmounts, and an unmounted line is not in view: "Jump to
+      // first unread" belongs on screen.
+      visibility.current(false);
     };
-  }, [scrollerRef, onVisibilityChange, onRead]);
+  }, [scrollerRef]);
 
   return (
     <div className="flex items-center gap-2 py-1" data-testid="room-unread-line" ref={ref}>
@@ -201,6 +214,57 @@ function UnreadLine({
       <span className="h-px flex-1 bg-[var(--accent)]" />
     </div>
   );
+}
+
+/** #248: the virtualizer's first guesses, before a row is measured — a typical message, and a one-line status or note. */
+const MESSAGE_ROW_ESTIMATE_PX = 96;
+const STATUS_ROW_ESTIMATE_PX = 40;
+
+/** One row of the transcript (#248) — the beginning-of-history note, another note, or a message. */
+type RoomRow =
+  | { readonly kind: "beginning" }
+  | { readonly kind: "at-missing" }
+  | { readonly kind: "empty" }
+  | { readonly kind: "message"; readonly message: RoomMessage };
+
+/** A row's stable key — the message's event id, or the status row's own name (never a valid event id). */
+function roomRowKey(row: RoomRow): string {
+  return row.kind === "message" ? row.message.eventId : `:${row.kind}`;
+}
+
+/**
+ * The transcript's rows, top to bottom — the same pieces, in the same order
+ * and under the same conditions, as the conversation has always drawn them;
+ * now as rows the virtualizer can measure and place.
+ */
+function roomRowsOf({
+  messages,
+  at,
+  atStart,
+}: {
+  messages: readonly RoomMessage[];
+  at: string | undefined;
+  /** #211: the homeserver has said there's nothing further back (never for a search window, which has no "further back"). */
+  atStart: boolean;
+}): RoomRow[] {
+  // The main flow carries the roots; a thread's replies belong to the
+  // thread, present here only as the root's summary of them.
+  const mainFlow = messages.filter((message) => message.threadRootEventId === null);
+  const rows: RoomRow[] = [];
+  if (atStart && mainFlow.length > 0) {
+    rows.push({ kind: "beginning" });
+  }
+  if (at !== undefined && !messages.some((message) => message.eventId === at)) {
+    rows.push({ kind: "at-missing" });
+  }
+  if (mainFlow.length === 0) {
+    if (at === undefined) {
+      rows.push({ kind: "empty" });
+    }
+  } else {
+    rows.push(...mainFlow.map((message) => ({ kind: "message" as const, message })));
+  }
+  return rows;
 }
 
 export function Room({
@@ -291,8 +355,6 @@ export function Room({
   const [deleteTarget, setDeleteTarget] = useState<RoomMessage | null>(null);
   // The delete dialog stays mounted through its exit.
   const heldDelete = useHeld(deleteTarget);
-  // Opens at its end (the newest message, then any draft), unless opened at an older message.
-  const scroller = useStickToEnd<HTMLDivElement>(timeline.data?.[timeline.data.length - 1]?.eventId ?? "", at === undefined);
   // Which messages were already here when the room opened: only what arrives after that rises in (B7).
   const seen = useRef<{ roomId: string; at: string | undefined; ids: Set<string> | null }>({ roomId, at, ids: null });
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -300,29 +362,33 @@ export function Room({
   // #215: the message the composer is about to quote — the room holds this,
   // not the composer, because it's set from a row's own "Reply" action.
   const [replyTarget, setReplyTarget] = useState<RoomMessage | null>(null);
-  // #215: every row's own element, by event id — a reply's quote elsewhere
-  // in the same window scrolls to it directly; nothing here is a permalink
-  // (#225) or reaches past what this device already has on screen.
-  const rowElements = useRef(new Map<string, HTMLDivElement>());
   // #215: the row a quote was just clicked into — reuses the same outline
   // a search landing (`at`) already draws, briefly, so clicking a quote
   // reads as "there it is" rather than a silent jump.
   const [jumpedTo, setJumpedTo] = useState<string | null>(null);
-  const jumpToMessage = (eventId: string): void => {
-    rowElements.current.get(eventId)?.scrollIntoView?.({ block: "center" });
-    setJumpedTo(eventId);
-    window.setTimeout(() => setJumpedTo((current) => (current === eventId ? null : current)), 1500);
-  };
+  // #248: rows with something of the member's in progress (an open edit, a
+  // picker, a verb on its way) — kept mounted however far they scroll away.
+  const [activeRows, setActiveRows] = useState<ReadonlySet<string>>(() => new Set());
+  const setRowActive = useCallback((eventId: string, active: boolean): void => {
+    setActiveRows((current) => {
+      if (current.has(eventId) === active) {
+        return current;
+      }
+      const next = new Set(current);
+      if (active) {
+        next.add(eventId);
+      } else {
+        next.delete(eventId);
+      }
+      return next;
+    });
+  }, []);
 
   // #211: a scroll to the top extends the window backward one page at a
   // time; `atStart` is the homeserver's own word that there's nothing
   // further back, read once a page comes back saying so and held until the
   // room changes.
   const [olderState, setOlderState] = useState<{ loading: boolean; atStart: boolean }>({ loading: false, atStart: false });
-  // The scroll container's own height and offset just before a backward
-  // page lands — what a caller restores against once the new rows render,
-  // so loading older history never jumps the member's place (#211 AC1).
-  const prependAdjust = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   // #212: this member's read-marker anchor, frozen the moment this room is
   // opened (`connection.readMarker`, read once — see its own doc for why).
   const unreadAnchor = useRef<{ roomId: string; eventId: string | null } | null>(null);
@@ -333,28 +399,20 @@ export function Room({
   // Whether the line is currently in the scroll container's own view —
   // "Jump to first unread" is for when it ISN'T (#212 AC2).
   const [dividerVisible, setDividerVisible] = useState(true);
-  // The room opens at its very end (#183) by default; when there's a known
-  // unread line, this lands there instead, once, so "where I stopped
-  // reading" (#212) is what the member actually sees first.
-  const landedOnUnread = useRef<string | null>(null);
+  // #212: a jump to an unread line that a backward page has only just
+  // loaded — carried to the commit that renders its row.
+  const [pendingJump, setPendingJump] = useState<string | null>(null);
+  // Where this open has already landed (`roomId`, `at`) — the first scroll
+  // happens once per open, never again as the timeline refreshes; and only
+  // once it has does an arrival at the end pull the view along.
+  const openKey = `${roomId}\u0000${at ?? ""}`;
+  const [landed, setLanded] = useState<string | null>(null);
 
   useEffect(() => {
     setOlderState({ loading: false, atStart: false });
     setMarkedRead(false);
     setDividerVisible(true);
   }, [roomId, at]);
-
-  // The scroll position this effect restores is a DOM fact, not a React
-  // one — it has to run after the new rows are in the document but before
-  // the browser paints, which is exactly what useLayoutEffect is for.
-  useLayoutEffect(() => {
-    const adjust = prependAdjust.current;
-    const el = scroller.current;
-    if (adjust && el) {
-      el.scrollTop = el.scrollHeight - adjust.scrollHeight + adjust.scrollTop;
-      prependAdjust.current = null;
-    }
-  }, [timeline.data]);
 
   // #212: freezing the anchor the moment this room is opened — re-reading
   // `readMarker` every render would drift as this device's own receipt send
@@ -372,18 +430,77 @@ export function Room({
     connection && anchorEventId !== null ? connection.unreadBoundaryFrom(roomId, anchorEventId) : { kind: "none" };
   const unreadFoundEventId = !markedRead && boundary.kind === "found" ? boundary.eventId : null;
 
-  // The room opens at its very end by default (#183) — once there's a known
-  // unread line, this lands there instead, so "where I stopped reading"
-  // (#212) is what the member actually sees first, not whatever arrived
-  // since. Once per room-open: `landedOnUnread` holds the roomId this
-  // already ran for.
+  // #248: the transcript's rows, in order — the beginning-of-history note,
+  // either other note, then every main-flow message. Built before any early
+  // return so the virtualizer (a hook) always sees the same calls.
+  const rows = useMemo(
+    () =>
+      roomRowsOf({
+        messages: timeline.data ?? [],
+        at,
+        atStart: at === undefined && !olderState.loading && olderState.atStart,
+      }),
+    [timeline.data, at, olderState],
+  );
+  const timelineView = useChatTimeline({
+    count: rows.length,
+    getKey: useCallback((index: number) => roomRowKey(rows[index]!), [rows]),
+    estimateSize: useCallback((index: number) => (rows[index]!.kind === "message" ? MESSAGE_ROW_ESTIMATE_PX : STATUS_ROW_ESTIMATE_PX), [rows]),
+    keepMounted: useMemo(
+      () => rows.flatMap((row, index) => (row.kind === "message" && activeRows.has(row.message.eventId) ? [index] : [])),
+      [rows, activeRows],
+    ),
+    follow: landed === openKey && at === undefined,
+  });
+  const { scrollToRow, scrollToEnd } = timelineView;
+  const rowIndexOf = (eventId: string): number => rows.findIndex((row) => row.kind === "message" && row.message.eventId === eventId);
   useEffect(() => {
-    if (at !== undefined || unreadFoundEventId === null || timeline.isLoading || landedOnUnread.current === roomId) {
+    if (pendingJump !== null) {
+      scrollToRow(rowIndexOf(pendingJump));
+      setPendingJump(null);
+    }
+    // Runs when a jump is staged (and the rows it targets have rendered).
+  }, [pendingJump]);
+
+  // The first look at a conversation (once per open): a search landing
+  // (#70) centres its message; a known unread line (#212) centres that, so
+  // "where I stopped reading" is what the member sees first; otherwise the
+  // very end (#183) — the newest message and any draft after it.
+  const lastMessage = timeline.data?.at(-1);
+  useEffect(() => {
+    if (timeline.data === undefined || !timelineView.ready || landed === openKey) {
       return;
     }
-    landedOnUnread.current = roomId;
-    scroller.current?.querySelector('[data-testid="room-unread-line"]')?.scrollIntoView?.({ block: "center" });
-  }, [roomId, at, unreadFoundEventId, timeline.isLoading, scroller]);
+    // The timeline may first render from the persisted cache (last
+    // session's copy, #30) before this open's own read lands. A landing
+    // that targets a particular message waits for it — in that copy, or in
+    // the fresh read — rather than spending itself on rows that don't hold
+    // it yet; "the end" doesn't need to wait, and what the fresh read
+    // appends then follows on.
+    const target = at ?? unreadFoundEventId;
+    const targetIndex = target === null ? -1 : rowIndexOf(target);
+    if (target !== null && targetIndex < 0 && !timeline.isFetchedAfterMount) {
+      return;
+    }
+    setLanded(openKey);
+    if (targetIndex >= 0) {
+      scrollToRow(targetIndex);
+    } else if (at === undefined) {
+      scrollToEnd();
+    }
+  });
+  // The member's own send goes to the end, wherever they were reading —
+  // they've just said something, and that's where it is. (Someone else's
+  // arrival only follows when the member is already at the end:
+  // `useChatTimeline`'s followOnAppend.)
+  const ownLatest = lastMessage !== undefined && connection !== null && lastMessage.senderId === connection.userId && lastMessage.pending === true;
+  const lastKey = lastMessage?.eventId;
+  useEffect(() => {
+    if (ownLatest && at === undefined) {
+      scrollToEnd();
+    }
+    // Keyed on the newest message alone: a fresh own echo, once.
+  }, [lastKey]);
 
   if (!connection || timeline.isLoading) {
     return (
@@ -430,9 +547,6 @@ export function Room({
     );
   }
 
-  // The main flow carries the roots; a thread's replies belong to the
-  // thread, present here only as the root's summary of them.
-  const mainFlow = timeline.data.filter((message) => message.threadRootEventId === null);
   // Opening at a message and reading the whole room are different windows: what the second one adds is history, not news.
   if (seen.current.roomId !== roomId || seen.current.at !== at || seen.current.ids === null) {
     seen.current = { roomId, at, ids: new Set(timeline.data.map((message) => message.eventId)) };
@@ -443,31 +557,38 @@ export function Room({
   // page — never for a search window (#70: there's no "further back" to a
   // fixed context window) or while a page is already on its way.
   const handleScroll = (): void => {
-    if (at !== undefined || olderState.loading || olderState.atStart) {
+    // Not before the first landing: until then the view is at the top only
+    // because nothing has scrolled it yet, not because the member went there.
+    if (at !== undefined || landed !== openKey || olderState.loading || olderState.atStart) {
       return;
     }
-    const el = scroller.current;
+    const el = timelineView.scrollerRef.current;
     if (!el || el.scrollTop > SCROLLBACK_TRIGGER_PX) {
       return;
     }
-    prependAdjust.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
+    // The page lands as rows prepended above the member's place, and the
+    // virtualizer keeps that place (`anchorTo: "end"` — the row under the
+    // viewport's top keeps its offset), so nothing here touches the scroll.
     setOlderState((state) => ({ ...state, loading: true }));
     void connection
       .loadOlder(roomId)
       .then(async (result) => {
         if (result.loadedMore) {
           await timeline.refetch();
-        } else {
-          // Nothing new to render against — the adjustment staged above
-          // would otherwise wrongly apply to some LATER prepend.
-          prependAdjust.current = null;
         }
         setOlderState({ loading: false, atStart: result.atStart });
       })
       .catch(() => {
-        prependAdjust.current = null;
         setOlderState((state) => ({ ...state, loading: false }));
       });
+  };
+
+  // #215: a quote's original, brought into view and briefly outlined —
+  // wherever it is in the loaded window, rendered right now or not.
+  const jumpToMessage = (eventId: string): void => {
+    scrollToRow(rowIndexOf(eventId));
+    setJumpedTo(eventId);
+    window.setTimeout(() => setJumpedTo((current) => (current === eventId ? null : current)), 1500);
   };
 
   // #212: the dwell already confirmed the member actually saw the line
@@ -478,8 +599,11 @@ export function Room({
     void connection.advanceReadMarker(roomId, eventId).catch(() => undefined);
   };
 
+  // The line rides on its row, so bringing the row into view brings the line.
   const scrollDividerIntoView = (): void => {
-    scroller.current?.querySelector('[data-testid="room-unread-line"]')?.scrollIntoView?.({ block: "center" });
+    if (unreadFoundEventId !== null) {
+      scrollToRow(rowIndexOf(unreadFoundEventId));
+    }
   };
 
   // #212's AC3 note and #211's own dependency: when the anchor is already on
@@ -502,19 +626,22 @@ export function Room({
         if (result.loadedMore) {
           await timeline.refetch();
         }
-        const found = connection.unreadBoundaryFrom(roomId, anchorEventId).kind === "found";
-        if (found || result.atStart) {
+        const boundaryNow = connection.unreadBoundaryFrom(roomId, anchorEventId);
+        if (boundaryNow.kind === "found" || result.atStart) {
           setOlderState({ loading: false, atStart: result.atStart });
-          if (found) {
-            requestAnimationFrame(scrollDividerIntoView);
+          if (boundaryNow.kind === "found") {
+            // The rows the page added render on the next commit; the jump
+            // targets the line's row by key once they have.
+            const target = boundaryNow.eventId;
+            requestAnimationFrame(() => setPendingJump(target));
           } else {
-            scroller.current?.scrollTo({ top: 0 });
+            timelineView.scrollToTop();
           }
           return;
         }
       }
       setOlderState((state) => ({ ...state, loading: false }));
-      scroller.current?.scrollTo({ top: 0 });
+      timelineView.scrollToTop();
     })();
   };
 
@@ -527,84 +654,104 @@ export function Room({
         <h1 className="min-w-0 truncate type-heading">{roomName}</h1>
         <InfoButton />
       </header>
-      <div className="flex-1 overflow-y-auto p-6" ref={scroller} onScroll={handleScroll}>
-        <a
-          className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
-          data-testid="back-to-conversations"
-          href="#chats"
-        >
-          All conversations
-        </a>
-        {/* #211: a page on its way up top, or — the homeserver's own word —
-            nothing further back than what's already loaded. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* #211: a page on its way up top. Floats over the transcript rather
+            than sitting in its flow: a line appearing above the member's place
+            would push every row down without being one the virtualizer could
+            anchor through. */}
         {at === undefined && olderState.loading && (
-          <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-loading-older">
+          <p
+            className="pointer-events-none absolute top-2 left-1/2 z-10 -translate-x-1/2 rounded-full border border-[var(--edge)] bg-[var(--surface)] px-3 py-1 type-provenance text-[var(--muted)]"
+            data-testid="room-loading-older"
+          >
             Loading older messages…
           </p>
         )}
-        {at === undefined && !olderState.loading && olderState.atStart && mainFlow.length > 0 && (
-          <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-beginning">
-            This is the beginning of the conversation.
-          </p>
-        )}
-        <section className="mt-2 flex flex-col gap-5" data-testid="room-timeline">
-          {at !== undefined && !timeline.data.some((message) => message.eventId === at) && (
-            // The workspace's window didn't hold the message this address
-            // named (struck since, or never a row of this conversation) —
-            // said, rather than landing somewhere else quietly.
-            <p className="text-[var(--muted)]" data-testid="room-at-missing">
-              That message isn&apos;t in what the workspace returned — it may have been deleted.
-            </p>
-          )}
-          {mainFlow.length === 0 ? (
-            at === undefined && (
-              <p className="text-[var(--muted)]" data-testid="room-empty">
-                Nothing here yet — say something below.
-              </p>
-            )
-          ) : (
-            mainFlow.map((message) => (
-              <Fragment key={message.eventId}>
-                {/* #212: drawn once, right above the first row this member
-                    hasn't seen yet — gone as soon as the dwell below
-                    confirms they actually have. */}
-                {unreadFoundEventId === message.eventId && (
-                  <UnreadLine scrollerRef={scroller} onVisibilityChange={setDividerVisible} onRead={() => handleRead(message.eventId)} />
-                )}
-                <RoomEntry
-                  // #215: a search landing and a reply's own jump share one
-                  // outline — whichever brought this row into view.
-                  focused={message.eventId === at || message.eventId === jumpedTo}
-                  // Only what someone else says rises in: the owner's own words already appeared where they typed them, and their echo id changing must not play it twice.
-                  live={already !== null && !already.has(message.eventId) && message.senderId !== connection.userId}
-                  message={message}
-                  connection={connection}
-                  roomId={roomId}
-                  refresh={refresh}
-                  conversation={timeline.data}
-                  onDelete={(message) => {
-                    setDeleteError(null);
-                    setDeleteTarget(message);
-                  }}
-                  onReply={at === undefined ? setReplyTarget : undefined}
-                  onJumpToReply={jumpToMessage}
-                  registerRow={(eventId, element) => {
-                    if (element) {
-                      rowElements.current.set(eventId, element);
-                    } else {
-                      rowElements.current.delete(eventId);
-                    }
-                  }}
-                />
-              </Fragment>
-            ))
-          )}
-        </section>
-        {/* #68, #183: the owner's drafts for this conversation, at the end of
-            the owner's own view of it — unsent, visible only here, never
-            part of what its members read until Send. Only at the live
-            end: a view opened at an older message has newer ones after it. */}
-        {at === undefined && drafts}
+        <div className="relative flex-1 overflow-y-auto px-6" data-testid="room-scroller" ref={timelineView.scrollerRef} onScroll={handleScroll}>
+          <a
+            className="mt-6 inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
+            data-testid="back-to-conversations"
+            href="#chats"
+          >
+            All conversations
+          </a>
+          <ChatTimelineList
+            count={rows.length}
+            testId="room-timeline"
+            timeline={timelineView}
+            renderRow={(index) => {
+              const row = rows[index]!;
+              switch (row.kind) {
+                case "beginning":
+                  // #211: the homeserver's own word — nothing further back
+                  // than what's already loaded.
+                  return (
+                    <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-beginning">
+                      This is the beginning of the conversation.
+                    </p>
+                  );
+                case "at-missing":
+                  // The workspace's window didn't hold the message this address
+                  // named (struck since, or never a row of this conversation) —
+                  // said, rather than landing somewhere else quietly.
+                  return (
+                    <p className="text-[var(--muted)]" data-testid="room-at-missing">
+                      That message isn&apos;t in what the workspace returned — it may have been deleted.
+                    </p>
+                  );
+                case "empty":
+                  return (
+                    <p className="text-[var(--muted)]" data-testid="room-empty">
+                      Nothing here yet — say something below.
+                    </p>
+                  );
+                case "message": {
+                  const message = row.message;
+                  return (
+                    <>
+                      {/* #212: drawn once, right above the first row this member
+                          hasn't seen yet — gone as soon as the dwell below
+                          confirms they actually have. */}
+                      {unreadFoundEventId === message.eventId && (
+                        <UnreadLine
+                          scrollerRef={timelineView.scrollerRef}
+                          onVisibilityChange={setDividerVisible}
+                          onRead={() => handleRead(message.eventId)}
+                        />
+                      )}
+                      <RoomEntry
+                        // #215: a search landing and a reply's own jump share one
+                        // outline — whichever brought this row into view.
+                        focused={message.eventId === at || message.eventId === jumpedTo}
+                        // Only what someone else says rises in: the owner's own words already appeared where they typed them, and their echo id changing must not play it twice.
+                        live={already !== null && !already.has(message.eventId) && message.senderId !== connection.userId}
+                        message={message}
+                        connection={connection}
+                        roomId={roomId}
+                        refresh={refresh}
+                        conversation={timeline.data}
+                        onDelete={(message) => {
+                          setDeleteError(null);
+                          setDeleteTarget(message);
+                        }}
+                        onReply={at === undefined ? setReplyTarget : undefined}
+                        onJumpToReply={jumpToMessage}
+                        onActiveChange={setRowActive}
+                      />
+                    </>
+                  );
+                }
+              }
+            }}
+          />
+          {/* #68, #183: the owner's drafts for this conversation, at the end of
+              the owner's own view of it — unsent, visible only here, never
+              part of what its members read until Send. Only at the live
+              end: a view opened at an older message has newer ones after it. */}
+          <div className="pb-6" ref={timelineView.footerRef}>
+            {at === undefined && drafts}
+          </div>
+        </div>
       </div>
       {/* #212 AC2: the line itself is where it is; this is for when it isn't on screen. */}
       {showJumpToUnread && (
@@ -902,12 +1049,12 @@ function RoomEntry({
   onDelete,
   onReply,
   onJumpToReply,
-  registerRow,
+  onActiveChange,
 }: {
   message: RoomMessage;
   /** Arrived while the room was open: it rises in. History never animates. */
   live?: boolean;
-  /** #70: the message a search hit landed at — marked, and brought into view. */
+  /** #70/#215: the message a search hit landed at, or a quote's original just jumped to — marked (`Room` brings it into view). */
   focused?: boolean;
   connection: WorkspaceConnection;
   roomId: string;
@@ -918,8 +1065,14 @@ function RoomEntry({
   onReply?: (message: RoomMessage) => void;
   /** #215: brings a quoted original into view — passed straight through to `MessageBody`. */
   onJumpToReply?: (eventId: string) => void;
-  /** #215: this row's own element, held by `Room` so a reply's quote elsewhere can scroll to it. */
-  registerRow?: (eventId: string, element: HTMLDivElement | null) => void;
+  /**
+   * #248: whether this row holds something of the member's in progress — an
+   * open edit, an open reaction picker, a verb on its way. The transcript is
+   * virtualized, and a row scrolled out of view unmounts; a row that's busy
+   * like this asks to stay mounted so scrolling away never throws away an
+   * edit half-typed.
+   */
+  onActiveChange?: (eventId: string, active: boolean) => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -931,12 +1084,11 @@ function RoomEntry({
   // either and never competes with `busy`.
   const [linkState, setLinkState] = useState<"idle" | "copied" | "failed">("idle");
   const own = message.senderId === connection.userId;
-  const rowRef = useRef<HTMLDivElement>(null);
+  const active = editing || pickerOpen || busy;
   useEffect(() => {
-    if (focused) {
-      rowRef.current?.scrollIntoView?.({ block: "center" });
-    }
-  }, [focused]);
+    onActiveChange?.(message.eventId, active);
+    // Reported on change only; the callback is the room's own, stable for the open.
+  }, [active, message.eventId]);
 
   // Every verb ends the same way: hand it to the homeserver, then re-read
   // the server's answer — the local copy never stands in for the record.
@@ -958,10 +1110,6 @@ function RoomEntry({
       className={`flex flex-col gap-1 ${live ? "motion-rise" : ""} ${focused ? "rounded-[var(--r-md)] outline outline-2 outline-offset-4 outline-[var(--accent)]" : ""}`}
       data-focused={focused ? "true" : undefined}
       data-testid="room-message"
-      ref={(element) => {
-        rowRef.current = element;
-        registerRow?.(message.eventId, element);
-      }}
     >
       <MessageBody
         message={message}
@@ -1118,47 +1266,10 @@ function RoomEntry({
   );
 }
 
-/** One member the composer can offer as a mention — a person by their name, a duo by whose it is. */
-interface MentionCandidate {
-  readonly userId: string;
-  readonly label: string;
-  readonly kind: "person" | "duo";
-}
-
 /**
- * Who a mention can address (#65): the room's own members, the member
- * themself excepted. The label is structural the way every attribution is —
- * a duo offers as "{owner}'s duo" from the @duo- grammar, never from a
- * display name a sender chose, and the kind marker says what each offer IS
- * before the picker commits to it.
- */
-function mentionCandidatesOf(members: readonly RoomMemberRef[], selfId: string): readonly MentionCandidate[] {
-  return members
-    .filter((member) => member.userId !== selfId)
-    .map((member) => ({
-      userId: member.userId,
-      // The label comes from the one home of the rule — a duo offers as
-      // "{owner}'s duo" from the @duo- grammar, never from a display name.
-      label: mentionLabelOf(member.userId, member.name ?? localpartOf(member.userId)),
-      kind: isDuoUserId(member.userId) ? "duo" : "person",
-    }));
-}
-
-/**
- * The mention being typed, read from the text's end: the run after the last
- * whitespace, when it starts with "@". The composer works at the caret
- * people actually type at — the end — and keeps no caret state of its own.
- */
-function mentionTokenAtEnd(text: string): string | null {
-  const start = Math.max(text.lastIndexOf(" "), text.lastIndexOf("\n")) + 1;
-  const token = text.slice(start);
-  return token.startsWith("@") ? token : null;
-}
-
-/**
- * The member's half of the room: a person saying something, in the chat-app
- * idiom this client already uses for asking (#27 — Enter is a newline,
- * Cmd/Ctrl-Enter submits). #64 AC1 / #209: the composer clears and the words
+ * The member's half of the room: a person saying something, on the app's
+ * one composer editor (#248's `ChatEditor`, markdown mode — Enter sends,
+ * Shift+Enter is a new line, #244). #64 AC1 / #209: the composer clears and the words
  * render immediately as the sender's own marked copy — matrix-js-sdk's own
  * local echo (`connect()`'s Detached pending-event ordering), never a
  * second copy this client writes into a cache. A failed send keeps its row,
@@ -1166,7 +1277,7 @@ function mentionTokenAtEnd(text: string): string | null {
  * composer itself never held the words past Enter, so there is nothing for
  * it to take back. #65: an "@" the member types offers the room's members —
  * people and the duos present, clearly distinguished — and the picks ride
- * the wire as m.mentions.
+ * the wire as m.mentions (the editor's own mention nodes, read at send time).
  *
  * #66 adds the share: files attach here, refuse or stage by this app's own
  * named share limits, then ride the submit — each attachment uploads and
@@ -1196,20 +1307,20 @@ function RoomComposer({
   onCancelReply?: () => void;
 }) {
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const form = useRef<HTMLFormElement | null>(null);
+  const editor = useRef<ChatEditorHandle | null>(null);
+  // The editor's composed body, mirrored for the one thing the form itself
+  // needs to know before Send: whether there's anything to send at all.
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<StagedShare[]>([]);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The picks made from the offer; only those whose addressed words still
-  // stand in the text at send time ride the wire — what the message
-  // doesn't say, the wire doesn't claim. The pick carries its label beside
-  // its id: the seam derives each pill's anchor from the pair, a duo's
-  // from the id's grammar alone.
-  const [picks, setPicks] = useState<readonly MessageMention[]>([]);
   const trimmed = text.trim();
   const disabled = (trimmed.length === 0 && attachments.length === 0) || pending;
   const duos = members.filter((member) => isDuoUserId(member.userId));
+  // #65: who an "@" offers — the room's members, the member themself excepted.
+  const mentionCandidates = useMemo(() => mentionCandidatesOf(members, connection.userId), [members, connection.userId]);
   // #217: a drag that enters a child element fires its own dragenter/
   // dragleave — a plain boolean would flicker the indicator every time the
   // pointer crosses an inner element's edge. The counter only reaches zero
@@ -1249,25 +1360,11 @@ function RoomComposer({
     })();
   };
 
-  const token = mentionTokenAtEnd(text);
-  const offer =
-    token === null
-      ? null
-      : mentionCandidatesOf(members, connection.userId).filter((candidate) => {
-          const fragment = token.slice(1).toLowerCase();
-          return candidate.label.toLowerCase().startsWith(fragment) || localpartOf(candidate.userId).toLowerCase().startsWith(fragment);
-        });
-  const pickMention = (candidate: MentionCandidate): void => {
-    // The half-typed token goes, the chosen label lands with its trailing
-    // space — the text now says the mention in words people read.
-    setText(text.replace(/@[^@\s]*$/, `${addressed(candidate.userId, candidate.label)} `));
-    setPicks((current) => [...current.filter((pick) => pick.userId !== candidate.userId), { userId: candidate.userId, label: candidate.label }]);
-  };
-
   return (
     <form
       className="relative border-t border-[var(--edge)] p-4"
       data-testid="room-composer"
+      ref={form}
       // #217: drag-and-drop onto the composer area feeds the exact same
       // `stage` door the file picker uses — one validation path, two ways
       // in. `onDragOver` must still preventDefault even though this app
@@ -1299,9 +1396,15 @@ function RoomComposer({
         if (disabled) {
           return;
         }
-        const body = trimmed;
+        // What the editor holds right now: the markdown source (#216 — the
+        // seam turns it into `formatted_body`) and the mentions still in it.
+        // A mention the member deleted is simply no longer a node, so it
+        // can't ride the wire — what the message doesn't say, the wire
+        // doesn't claim.
+        const message = editor.current?.read() ?? { body: text, mentions: [] };
+        const body = message.body.trim();
         const toShare = attachments;
-        const livePicks = picks.filter((pick) => text.includes(addressed(pick.userId, pick.label)));
+        const livePicks = message.mentions;
         // #215: captured once, up front — `replyTarget` is `Room`'s state,
         // and `onCancelReply` below (the same call Cancel makes) asks it to
         // let go the instant the words are on their way, same as the text
@@ -1348,8 +1451,7 @@ function RoomComposer({
             // The words are already on their way — the SDK's own local echo
             // carries them in the room's timeline — so the composer clears
             // without waiting on the homeserver (#209).
-            setText("");
-            setPicks([]);
+            editor.current?.clear();
             setAttachments([]);
             onCancelReply?.();
           } catch (error) {
@@ -1447,25 +1549,19 @@ function RoomComposer({
         >
           <Paperclip aria-label="Attach files" className="size-4" />
         </button>
-        <textarea
-          aria-label={`Message ${roomName}`}
-          className="min-h-11 flex-1 resize-none rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+        <ChatEditor
+          ariaLabel={`Message ${roomName}`}
+          editorRef={editor}
+          mentionCandidates={mentionCandidates}
+          mode="markdown"
           placeholder={`Message ${roomName}`}
-          rows={Math.max(1, Math.min(8, text.split("\n").length))}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
+          // #217: a pasted screenshot is a clipboard file — the same `stage`
+          // door the picker and a drop use; pasted words go into the editor.
+          onFiles={stage}
+          onSubmit={() => form.current?.requestSubmit()}
+          onTextChange={(body) => {
+            setText(body);
             setError(null);
-          }}
-          onKeyDown={handleComposerKeyDown}
-          onPaste={(e) => {
-            // #217: a pasted screenshot arrives as a clipboard file, the
-            // same shape the picker and a drop both hand to `stage` — a
-            // paste that's just words (the ordinary case) has none, and
-            // nothing here changes.
-            if (e.clipboardData.files.length > 0) {
-              stage(e.clipboardData.files);
-            }
           }}
         />
         <button
@@ -1476,28 +1572,6 @@ function RoomComposer({
           {pending ? "Sending…" : "Send"}
         </button>
       </div>
-      {offer !== null && offer.length > 0 && (
-        <div className="mt-2 flex flex-col gap-1" data-testid="mention-offer">
-          {offer.map((candidate) => (
-            <button
-              key={candidate.userId}
-              className="inline-flex min-h-11 items-center gap-2 self-start rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface-2)] px-2 type-body"
-              data-testid="mention-option"
-              type="button"
-              onClick={() => pickMention(candidate)}
-            >
-              <span
-                aria-hidden="true"
-                className="rounded-full border border-[var(--edge)] px-2 type-provenance text-[var(--muted)]"
-                data-testid="mention-kind"
-              >
-                {candidate.kind}
-              </span>
-              {candidate.label}
-            </button>
-          ))}
-        </div>
-      )}
       {status !== null && (
         <p className="mt-2 type-provenance text-[var(--muted)]" data-testid="room-composer-status">
           {status}

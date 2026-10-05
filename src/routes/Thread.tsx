@@ -1,19 +1,29 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { InfoButton } from "../shell/InfoButton.js";
+import { ChatTimelineList, useChatTimeline } from "../shell/useChatTimeline.js";
 import { MessageBody } from "./Room.js";
 import { roomTitle } from "../shell/roomTitle.js";
 import type { RoomMessage, WorkspaceConnection } from "../workspace/matrix.js";
-import { handleComposerKeyDown } from "../composerKeyDown.js";
-
-/** #70: bring the message a search hit landed at into view — the ref runs once, when its row mounts. */
-const focusIntoView = (element: HTMLElement | null): void => {
-  element?.scrollIntoView?.({ block: "center" });
-};
+import { ChatEditor, type ChatEditorHandle } from "../composer/ChatEditor.js";
 
 /** #211: how near the scroll container's own top counts as "scrolled to the top" — same figure Room.tsx uses, so the two pages feel the same under the finger. */
 const SCROLLBACK_TRIGGER_PX = 80;
+
+/** #248: the virtualizer's first guesses, before a row is measured — same figures as Room.tsx's. */
+const MESSAGE_ROW_ESTIMATE_PX = 96;
+const STATUS_ROW_ESTIMATE_PX = 40;
+
+/** One row of a thread's transcript (#248): the beginning-of-history note, the root (or the note that it's gone), or a reply. */
+type ThreadRow =
+  | { readonly kind: "beginning" }
+  | { readonly kind: "gone" }
+  | { readonly kind: "message"; readonly message: RoomMessage };
+
+function threadRowKey(row: ThreadRow): string {
+  return row.kind === "message" ? row.message.eventId : `:${row.kind}`;
+}
 
 /**
  * #64: one thread — a root message and the replies that relate to it. The
@@ -101,25 +111,79 @@ export function ThreadView({
 
   // #211: a thread pages the SAME room timeline the main flow does (there is
   // no separate "thread timeline" door), so scrolling to the top of one
-  // extends what both read — the same `loadOlder`/scroll-position-preserving
-  // mechanics as Room.tsx, without that route's unread line (a thread has no
-  // read marker of its own; Matrix receipts at room grade).
-  const scroller = useRef<HTMLDivElement>(null);
-  const prependAdjust = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  // extends what both read — the same `loadOlder` mechanics as Room.tsx,
+  // without that route's unread line (a thread has no read marker of its
+  // own; Matrix receipts at room grade). The place-keeping on a prepend is
+  // the virtualizer's (`useChatTimeline`), same as the conversation's.
   const [olderState, setOlderState] = useState<{ loading: boolean; atStart: boolean }>({ loading: false, atStart: false });
 
   useEffect(() => {
     setOlderState({ loading: false, atStart: false });
   }, [roomId]);
 
-  useLayoutEffect(() => {
-    const adjust = prependAdjust.current;
-    const el = scroller.current;
-    if (adjust && el) {
-      el.scrollTop = el.scrollHeight - adjust.scrollHeight + adjust.scrollTop;
-      prependAdjust.current = null;
+  // The live timeline and the window around a hit, merged by event id (the
+  // live copy standing where both know a message).
+  const messages = useMemo(() => {
+    const live = timeline.data ?? [];
+    const known = new Set(live.map((message) => message.eventId));
+    const windowOnly = (around.data ?? []).filter((message) => !known.has(message.eventId));
+    return windowOnly.length === 0 ? live : [...live, ...windowOnly].sort((a, b) => a.originServerTs - b.originServerTs);
+  }, [timeline.data, around.data]);
+  const root = messages.find((message) => message.eventId === rootEventId) ?? null;
+  const rows = useMemo((): ThreadRow[] => {
+    const list: ThreadRow[] = [];
+    if (!olderState.loading && olderState.atStart) {
+      list.push({ kind: "beginning" });
     }
-  }, [timeline.data]);
+    list.push(root === null ? { kind: "gone" } : { kind: "message", message: root });
+    for (const message of messages) {
+      if (message.threadRootEventId === rootEventId) {
+        list.push({ kind: "message", message });
+      }
+    }
+    return list;
+  }, [messages, root, rootEventId, olderState]);
+  // The first look (once per open): a search landing (#70) centres its
+  // reply; otherwise the thread opens at its end, the latest reply. Only
+  // once it has does an arrival at the end pull the view along.
+  const openKey = `${roomId}\u0000${rootEventId}\u0000${at ?? ""}`;
+  const [landed, setLanded] = useState<string | null>(null);
+  const timelineView = useChatTimeline({
+    count: rows.length,
+    getKey: useCallback((index: number) => threadRowKey(rows[index]!), [rows]),
+    estimateSize: useCallback((index: number) => (rows[index]!.kind === "message" ? MESSAGE_ROW_ESTIMATE_PX : STATUS_ROW_ESTIMATE_PX), [rows]),
+    follow: landed === openKey,
+  });
+  const loaded = timeline.data !== undefined && (at === undefined || around.data !== undefined);
+  const lastKey = rows.length > 0 ? threadRowKey(rows[rows.length - 1]!) : "";
+  const ownLatest = (() => {
+    const last = rows.at(-1);
+    return last?.kind === "message" && connection !== null && last.message.senderId === connection.userId && last.message.pending === true;
+  })();
+  useEffect(() => {
+    if (!loaded || !timelineView.ready || landed === openKey) {
+      return;
+    }
+    // Same as the conversation's: a hit waits for a read that holds it (the
+    // persisted copy may not); the end never needs to.
+    const targetIndex = at === undefined ? -1 : rows.findIndex((row) => row.kind === "message" && row.message.eventId === at);
+    if (at !== undefined && targetIndex < 0 && !(timeline.isFetchedAfterMount && around.isFetchedAfterMount)) {
+      return;
+    }
+    setLanded(openKey);
+    if (targetIndex >= 0) {
+      timelineView.scrollToRow(targetIndex);
+    } else if (at === undefined) {
+      timelineView.scrollToEnd();
+    }
+  });
+  // The member's own reply goes to the end, wherever they were reading.
+  useEffect(() => {
+    if (ownLatest) {
+      timelineView.scrollToEnd();
+    }
+    // Keyed on the newest row alone: a fresh own echo, once.
+  }, [lastKey]);
 
   if (!connection || timeline.isLoading || (at !== undefined && around.isLoading)) {
     return (
@@ -144,13 +208,6 @@ export function ThreadView({
     );
   }
 
-  const known = new Set(timeline.data.map((message) => message.eventId));
-  const windowOnly = (around.data ?? []).filter((message) => !known.has(message.eventId));
-  const messages =
-    windowOnly.length === 0 ? timeline.data : [...timeline.data, ...windowOnly].sort((a, b) => a.originServerTs - b.originServerTs);
-  const root = messages.find((message) => message.eventId === rootEventId) ?? null;
-  const replies = messages.filter((message) => message.threadRootEventId === rootEventId);
-
   const refresh = (): void => {
     void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   };
@@ -173,27 +230,23 @@ export function ThreadView({
 
   // #211: same mechanics as Room.tsx's handler — see its own comment for why.
   const handleScroll = (): void => {
-    if (olderState.loading || olderState.atStart) {
+    if (landed !== openKey || olderState.loading || olderState.atStart) {
       return;
     }
-    const el = scroller.current;
+    const el = timelineView.scrollerRef.current;
     if (!el || el.scrollTop > SCROLLBACK_TRIGGER_PX) {
       return;
     }
-    prependAdjust.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
     setOlderState((state) => ({ ...state, loading: true }));
     void connection
       .loadOlder(roomId)
       .then(async (result) => {
         if (result.loadedMore) {
           await timeline.refetch();
-        } else {
-          prependAdjust.current = null;
         }
         setOlderState({ loading: false, atStart: result.atStart });
       })
       .catch(() => {
-        prependAdjust.current = null;
         setOlderState((state) => ({ ...state, loading: false }));
       });
   };
@@ -204,66 +257,70 @@ export function ThreadView({
         <h1 className="min-w-0 truncate type-heading">{roomName} — thread</h1>
         <InfoButton />
       </header>
-      <div className="flex-1 overflow-y-auto p-6" ref={scroller} onScroll={handleScroll}>
-        <a
-          className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
-          data-testid="back-to-room"
-          href={`#chat/${encodeURIComponent(roomId)}`}
-        >
-          Back to conversation
-        </a>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* #211: a page on its way — floating, same as the conversation's, so it never shifts the rows. */}
         {olderState.loading && (
-          <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-loading-older">
+          <p
+            className="pointer-events-none absolute top-2 left-1/2 z-10 -translate-x-1/2 rounded-full border border-[var(--edge)] bg-[var(--surface)] px-3 py-1 type-provenance text-[var(--muted)]"
+            data-testid="room-loading-older"
+          >
             Loading older messages…
           </p>
         )}
-        {!olderState.loading && olderState.atStart && (
-          <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-beginning">
-            This is the beginning of the conversation.
-          </p>
-        )}
-        <section className="mt-2 flex flex-col gap-5" data-testid="thread-timeline">
-          {root === null ? (
-            <p className="text-[var(--muted)]" data-testid="thread-gone">
-              {at === undefined
-                ? "This thread's first message is gone — its replies keep their places."
-                : "This thread's first message is outside what is loaded here — its replies keep their places."}
-            </p>
-          ) : (
-            // Same row testid as the conversation's rows: a message is a
-            // message wherever it's read (#64).
-            <div data-testid="room-message">
-              <MessageBody
-                conversation={messages}
-                message={root}
-                loadMedia={connection.loadMedia}
-                getUrlPreview={connection.getUrlPreview}
-                onToggleReaction={toggleReaction}
-                onRetry={retryMessage}
-                onCancel={cancelMessage}
-              />
-            </div>
-          )}
-          {replies.map((reply) => (
-            <div
-              aria-current={reply.eventId === at ? "true" : undefined}
-              data-focused={reply.eventId === at ? "true" : undefined}
-              data-testid="room-message"
-              key={reply.eventId}
-              ref={reply.eventId === at ? focusIntoView : undefined}
-            >
-              <MessageBody
-                conversation={messages}
-                message={reply}
-                loadMedia={connection.loadMedia}
-                getUrlPreview={connection.getUrlPreview}
-                onToggleReaction={toggleReaction}
-                onRetry={retryMessage}
-                onCancel={cancelMessage}
-              />
-            </div>
-          ))}
-        </section>
+        <div className="relative flex-1 overflow-y-auto px-6" data-testid="thread-scroller" ref={timelineView.scrollerRef} onScroll={handleScroll}>
+          <a
+            className="mt-6 inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] px-2 type-provenance uppercase text-[var(--muted)]"
+            data-testid="back-to-room"
+            href={`#chat/${encodeURIComponent(roomId)}`}
+          >
+            Back to conversation
+          </a>
+          <ChatTimelineList
+            count={rows.length}
+            testId="thread-timeline"
+            timeline={timelineView}
+            renderRow={(index) => {
+              const row = rows[index]!;
+              switch (row.kind) {
+                case "beginning":
+                  return (
+                    <p className="py-2 text-center type-provenance text-[var(--muted)]" data-testid="room-beginning">
+                      This is the beginning of the conversation.
+                    </p>
+                  );
+                case "gone":
+                  return (
+                    <p className="text-[var(--muted)]" data-testid="thread-gone">
+                      {at === undefined
+                        ? "This thread's first message is gone — its replies keep their places."
+                        : "This thread's first message is outside what is loaded here — its replies keep their places."}
+                    </p>
+                  );
+                case "message":
+                  // Same row testid as the conversation's rows: a message is a
+                  // message wherever it's read (#64).
+                  return (
+                    <div
+                      aria-current={row.message.eventId === at ? "true" : undefined}
+                      data-focused={row.message.eventId === at ? "true" : undefined}
+                      data-testid="room-message"
+                    >
+                      <MessageBody
+                        conversation={messages}
+                        message={row.message}
+                        loadMedia={connection.loadMedia}
+                        getUrlPreview={connection.getUrlPreview}
+                        onToggleReaction={toggleReaction}
+                        onRetry={retryMessage}
+                        onCancel={cancelMessage}
+                      />
+                    </div>
+                  );
+              }
+            }}
+          />
+          <div className="pb-6" ref={timelineView.footerRef} />
+        </div>
       </div>
       {root !== null && <ThreadComposer connection={connection} roomId={roomId} rootEventId={rootEventId} />}
     </div>
@@ -271,8 +328,8 @@ export function ThreadView({
 }
 
 /**
- * The thread's composer: same idiom and the same instant render as the
- * conversation's (#64 AC1 / #209) — matrix-js-sdk's own local echo puts the
+ * The thread's composer: same editor (#248), same keys (#244) and the same
+ * instant render as the conversation's (#64 AC1 / #209) — matrix-js-sdk's own local echo puts the
  * reply's row in the thread the moment `replyInThread` is called, and the
  * composer clears without waiting on the homeserver. A failed reply keeps
  * its row, marked failed, with Retry and Cancel (`MessageBody`, wired
@@ -287,6 +344,8 @@ function ThreadComposer({
   roomId: string;
   rootEventId: string;
 }) {
+  const form = useRef<HTMLFormElement | null>(null);
+  const editor = useRef<ChatEditorHandle | null>(null);
   const [text, setText] = useState("");
   const trimmed = text.trim();
   const disabled = trimmed.length === 0;
@@ -295,30 +354,31 @@ function ThreadComposer({
     <form
       className="border-t border-[var(--edge)] p-4"
       data-testid="thread-composer"
+      ref={form}
       onSubmit={(e) => {
         e.preventDefault();
         if (disabled) {
           return;
         }
-        const body = trimmed;
+        const body = (editor.current?.read().body ?? text).trim();
         // #209: fire-and-forget — the reply's row (related to the root, so
         // it renders in the thread at once) carries its own "Sending…" or
         // failed state from here on; the composer clears the same frame.
         connection.replyInThread(roomId, rootEventId, body).catch(() => undefined);
-        setText("");
+        editor.current?.clear();
       }}
     >
       <div className="flex items-start gap-2">
-        <textarea
-          aria-label="Reply in thread"
-          className="min-h-11 flex-1 resize-none rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+        {/* #248: plain mode — a thread reply's wire shape carries no
+            formatting (`replyInThread` sends `body` alone), so the editor
+            doesn't style what the message won't. */}
+        <ChatEditor
+          ariaLabel="Reply in thread"
+          editorRef={editor}
+          mode="plain"
           placeholder="Reply in thread"
-          rows={Math.max(1, Math.min(8, text.split("\n").length))}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-          }}
-          onKeyDown={handleComposerKeyDown}
+          onSubmit={() => form.current?.requestSubmit()}
+          onTextChange={setText}
         />
         <button
           className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"

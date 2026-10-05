@@ -313,8 +313,8 @@ describe("#70 AC1 — messages are searchable", () => {
   });
 
   it("opening a hit lands at that message in its conversation, in context — history the live timeline never carried", async () => {
-    const scrollIntoView = vi.fn();
-    Element.prototype.scrollIntoView = scrollIntoView;
+    // #248: the transcript is virtualized — landing is the virtualizer scrolling its own container to the row.
+    const scrollTo = vi.spyOn(Element.prototype, "scrollTo");
     try {
       const fake = searchConnection({
         rooms: roomsFixture(),
@@ -339,13 +339,13 @@ describe("#70 AC1 — messages are searchable", () => {
       const focused = screen.getAllByTestId("room-message").filter((row) => row.getAttribute("data-focused") === "true");
       expect(focused).toHaveLength(1);
       expect(within(focused[0]!).getByText("what's our refund policy?")).toBeInTheDocument();
-      await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+      await waitFor(() => expect(scrollTo).toHaveBeenCalled());
       // The window is not the room's latest: nothing pretends the member read up to here (#63's receipt is for reading the latest).
       expect(fake.connection.markRead).not.toHaveBeenCalled();
       // The way back to the live conversation is one link away.
       expect(screen.getByTestId("room-back-to-latest")).toHaveAttribute("href", `#chat/${encodeURIComponent(PROJECT)}`);
     } finally {
-      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      scrollTo.mockRestore();
     }
   });
 

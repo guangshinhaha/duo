@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import { useCreateDraft } from "../api/queries.js";
 import { readComposerBuffer, writeComposerBuffer } from "../composerBuffer.js";
-import { handleComposerKeyDown } from "../composerKeyDown.js";
 import { MutationError } from "./MutationError.js";
 import { useSyncStatus } from "../sync.js";
 import { Mark } from "./Mark.js";
+import { ChatEditor, type ChatEditorHandle } from "../composer/ChatEditor.js";
 
 /**
  * The thread view's ask input — the owner's way into the drafting loop
@@ -14,11 +14,11 @@ import { Mark } from "./Mark.js";
  * stays in Review: asking is a conversation act, disposing is a triage
  * act, and the draft the daemon returns is pending either way.
  *
- * The field is a textarea (#27): a real question can run past one line, so
- * Shift+Enter inserts one while Enter sends (Cmd/Ctrl-Enter still does too)
- * — the chat-app convention (#244), wired through the shared
- * `handleComposerKeyDown`. The typed question survives a failed submit
- * (`setQuestion("")` runs in `onSuccess` only), a cancelled one (abort is
+ * The field is the app's one composer editor (#248: `ChatEditor`, in plain
+ * mode — a question carries no formatting). A real question is rarely one
+ * line, so Shift+Enter is a new line, and Enter (or Cmd/Ctrl-Enter) asks —
+ * the convention every messenger uses (#244). The typed question survives
+ * a failed submit (the editor clears in `onSuccess` only), a cancelled one (abort is
  * the owner's choice, not a failure — so it resets, not errors), and a
  * route switch (kept in `composerBuffer` outside the component, because
  * a half-typed question is a thought in progress, not a record). AR-15
@@ -28,7 +28,11 @@ import { Mark } from "./Mark.js";
 export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thread: string | null; threadLabel?: string }) {
   const { mutation: createDraft, cancel } = useCreateDraft(api);
   const { reachable } = useSyncStatus();
-  const [question, setQuestion] = useState(readComposerBuffer());
+  // Read once: the editor holds the words from here on and reports each change back.
+  const [initialQuestion] = useState(readComposerBuffer);
+  const [question, setQuestion] = useState(initialQuestion);
+  const form = useRef<HTMLFormElement>(null);
+  const editor = useRef<ChatEditorHandle>(null);
   const trimmed = question.trim();
   const disabled = trimmed.length === 0 || createDraft.isPending || !reachable;
   // An aborted fetch rejects with a DOMException named "AbortError" — the
@@ -46,6 +50,7 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
     <form
       className="border-t border-[var(--edge)] p-4"
       data-testid="composer"
+      ref={form}
       onSubmit={(e) => {
         e.preventDefault();
         if (disabled) {
@@ -55,25 +60,25 @@ export function Composer({ api, thread, threadLabel }: { api: DuoApiConfig; thre
           { question: trimmed, threadContext: thread },
           {
             onSuccess: () => {
-              setQuestion("");
               writeComposerBuffer("");
+              editor.current?.clear();
             },
           },
         );
       }}
     >
       <div className="flex items-start gap-2">
-        <textarea
-          aria-label="Question for your duo"
-          className="min-h-11 flex-1 resize-none rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 py-1 text-[var(--text)]"
+        <ChatEditor
+          ariaLabel="Question for your duo"
+          editorRef={editor}
+          initialText={initialQuestion}
+          mode="plain"
           placeholder="Ask your duo…"
-          rows={Math.max(1, Math.min(8, question.split("\n").length))}
-          value={question}
-          onChange={(e) => {
-            setQuestion(e.target.value);
-            writeComposerBuffer(e.target.value);
+          onSubmit={() => form.current?.requestSubmit()}
+          onTextChange={(text) => {
+            setQuestion(text);
+            writeComposerBuffer(text);
           }}
-          onKeyDown={handleComposerKeyDown}
         />
         <div className="flex flex-col gap-2">
           <button

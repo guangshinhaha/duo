@@ -5,6 +5,7 @@ import { Duo } from "../src/routes/Duo.js";
 import { writeComposerBuffer } from "../src/composerBuffer.js";
 import type { DraftRecord } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
+import { composerText, setComposer } from "./composerHelpers.js";
 
 /*
  * Your duo, as a chat (#144): one continuous conversation — what you asked
@@ -234,7 +235,7 @@ describe("Duo — asking (issue #8)", () => {
     renderWithClient(<Duo api={api} />);
     await screen.findByTestId("thread-group");
 
-    fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "  How much leave do I get?  " } });
+    setComposer(screen.getByLabelText("Question for your duo"), "  How much leave do I get?  ");
     fireEvent.click(screen.getByTestId("composer-submit"));
 
     await waitFor(() => expect(posts).toBe(1));
@@ -245,7 +246,7 @@ describe("Duo — asking (issue #8)", () => {
     // Trimmed, and no thread context: one chat, no picker to target.
     expect(sent).toEqual({ question: "How much leave do I get?", threadContext: null });
     await waitFor(() => expect(screen.getByText("How much leave do I get?")).toBeInTheDocument());
-    expect(screen.getByLabelText("Question for your duo")).toHaveValue("");
+    expect(composerText(screen.getByLabelText("Question for your duo"))).toBe("");
   });
 
   it("keeps the typed question and shows the failure when the submit fails", async () => {
@@ -260,11 +261,11 @@ describe("Duo — asking (issue #8)", () => {
     renderWithClient(<Duo api={api} />);
     await screen.findByTestId("thread-group");
 
-    fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "a question worth keeping" } });
+    setComposer(screen.getByLabelText("Question for your duo"), "a question worth keeping");
     fireEvent.click(screen.getByTestId("composer-submit"));
 
     await waitFor(() => expect(screen.getByTestId("mutation-error")).toHaveTextContent("store locked"));
-    expect(screen.getByLabelText("Question for your duo")).toHaveValue("a question worth keeping");
+    expect(composerText(screen.getByLabelText("Question for your duo"))).toBe("a question worth keeping");
   });
 
   it("disables submission for whitespace-only questions and while a submit is in flight", async () => {
@@ -286,10 +287,10 @@ describe("Duo — asking (issue #8)", () => {
     const submit = screen.getByTestId("composer-submit") as HTMLButtonElement;
     expect(submit).toBeDisabled();
 
-    fireEvent.change(input, { target: { value: "   " } });
+    setComposer(input, "   ");
     expect(submit).toBeDisabled();
 
-    fireEvent.change(input, { target: { value: "real question" } });
+    setComposer(input, "real question");
     expect(submit).toBeEnabled();
 
     fireEvent.click(submit);
