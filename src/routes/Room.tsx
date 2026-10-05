@@ -9,6 +9,9 @@ import { LinkPreviewCard } from "../components/LinkPreviewCard.js";
 import { MessageBodyHtml } from "../components/MessageBodyHtml.js";
 import { InfoButton } from "../shell/InfoButton.js";
 import { ChatTimelineList, useChatTimeline } from "../shell/useChatTimeline.js";
+import { useTouchPrimary } from "../shell/useMediaQuery.js";
+import { useLongPress } from "../shell/useLongPress.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/primitives/DropdownMenu.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -63,6 +66,13 @@ const REACTION_CHOICES = ["👍", "❤️", "😂", "🎉", "👀", "✅"] as co
 /** The quiet per-row action idiom — present for a keyboard, unloud for an eye. */
 const rowActionClass =
   "inline-flex min-h-9 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-provenance text-[var(--muted)]";
+
+/**
+ * #252: the trigger for a phone's message-actions sheet — invisible until a
+ * keyboard reaches it (`sr-only`/`focus:not-sr-only`, the standard
+ * skip-link idiom), since the usual way there is a long press, not a tap.
+ */
+const sheetTriggerClass = `${rowActionClass} sr-only focus:not-sr-only`;
 
 /** #211: how near the scroll container's own top counts as "scrolled to the top" — close enough that the member doesn't have to hit the exact pixel. */
 const SCROLLBACK_TRIGGER_PX = 80;
@@ -1037,8 +1047,17 @@ export function MessageBody({
  * (by sender id, never by display name) carry Edit and Delete; React and
  * Reply-in-thread are everyone's; the thread preview is the root's
  * summary, attributed structurally like any sender.
+ *
+ * #252: the verbs are no longer a permanent row. On a pointer device they're
+ * a toolbar that appears on hover and on keyboard focus (and stays while
+ * something they opened — the reaction picker, an edit — is still live, so
+ * moving the mouse down into it never hides it mid-interaction). On a touch
+ * device there's no hover to reveal anything, so a long press on the
+ * message opens the same verbs as a sheet (the app's own `DropdownMenu`,
+ * `useLongPress`'s gesture) — reachable without the gesture too, by a
+ * keyboard, through a trigger that's invisible until it's focused.
  */
-function RoomEntry({
+export function RoomEntry({
   message,
   focused = false,
   live = false,
@@ -1083,12 +1102,25 @@ function RoomEntry({
   // no daemon or homeserver round-trip, so copying one never waits on
   // either and never competes with `busy`.
   const [linkState, setLinkState] = useState<"idle" | "copied" | "failed">("idle");
+  // #252: a pointer over the row, or keyboard focus somewhere inside it —
+  // either reveals the toolbar on a device that hovers. `focusWithin` tracks
+  // real DOM focus (React's bubbling `onFocus`/`onBlur`), not a guess from
+  // hover, so a keyboard user who never moves a mouse still sees what they
+  // tabbed to.
+  const [hovering, setHovering] = useState(false);
+  const [focusWithin, setFocusWithin] = useState(false);
+  // #252: the phone sheet (a controlled `DropdownMenu`) — open from a long
+  // press, or from its own focus-reachable trigger.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const touchPrimary = useTouchPrimary();
   const own = message.senderId === connection.userId;
-  const active = editing || pickerOpen || busy;
+  const active = editing || pickerOpen || busy || menuOpen;
+  const toolbarVisible = active || hovering || focusWithin;
   useEffect(() => {
     onActiveChange?.(message.eventId, active);
     // Reported on change only; the callback is the room's own, stable for the open.
   }, [active, message.eventId]);
+  const longPress = useLongPress(() => setMenuOpen(true), touchPrimary);
 
   // Every verb ends the same way: hand it to the homeserver, then re-read
   // the server's answer — the local copy never stands in for the record.
@@ -1104,57 +1136,31 @@ function RoomEntry({
       });
   };
 
-  return (
-    <div
-      aria-current={focused ? "true" : undefined}
-      className={`flex flex-col gap-1 ${live ? "motion-rise" : ""} ${focused ? "rounded-[var(--r-md)] outline outline-2 outline-offset-4 outline-[var(--accent)]" : ""}`}
-      data-focused={focused ? "true" : undefined}
-      data-testid="room-message"
-    >
-      <MessageBody
-        message={message}
-        loadMedia={connection.loadMedia}
-        getUrlPreview={connection.getUrlPreview}
-        conversation={conversation}
-        onToggleReaction={(target, key, mine) =>
-          run(mine ? connection.unreact(roomId, target.eventId, key) : connection.react(roomId, target.eventId, key))
-        }
-        onRetry={(target) => run(connection.retry(roomId, target.eventId))}
-        onCancel={(target) => {
-          connection.cancel(roomId, target.eventId);
-          refresh();
-        }}
-        onJumpToReply={onJumpToReply}
-      />
-      {message.thread !== null && message.thread.replyCount > 0 && message.thread.latestReply !== null && (
-        <p className="type-provenance text-[var(--muted)]" data-testid="room-thread-preview">
-          {threadPreviewLabel(message.thread.latestReply)}: {plainPreview(message.thread.latestReply.body)} ·{" "}
-          {message.thread.replyCount} {message.thread.replyCount === 1 ? "reply" : "replies"}{" "}
-          <a className="underline" data-testid="open-thread" href={threadHref(roomId, message.eventId)}>
-            Open thread
-          </a>
-        </p>
-      )}
-      <div className="flex flex-wrap gap-1">
-        <button
-          className={rowActionClass}
-          disabled={busy || message.redacted}
-          onClick={() => setPickerOpen((open) => !open)}
-        >
-          React
-        </button>
-        <a className={rowActionClass} href={threadHref(roomId, message.eventId)}>
-          Reply in thread
-        </a>
-        {/* #225: a pending or failed send's id is a local echo, not yet the
-            homeserver's own — there is nothing stable to point at until it
-            lands. */}
-        {!message.pending && !message.failed && (
-          <button
-            className={rowActionClass}
-            disabled={busy}
-            data-testid="room-message-copy-link"
-            onClick={() => {
+  // #252: one list of what this member may do with this message, read once
+  // and rendered two ways — a toolbar's buttons on a pointer device, a
+  // sheet's items on a touch one — so which actions apply (own-message
+  // Edit/Delete above all) is decided in exactly one place, not twice in
+  // step.
+  const actions: readonly {
+    key: string;
+    label: string;
+    href?: string;
+    onClick?: () => void;
+    disabled?: boolean;
+    testId?: string;
+  }[] = [
+    { key: "react", label: "React", onClick: () => setPickerOpen((open) => !open), disabled: busy || message.redacted },
+    { key: "reply-thread", label: "Reply in thread", href: threadHref(roomId, message.eventId) },
+    // #225: a pending or failed send's id is a local echo, not yet the
+    // homeserver's own — there is nothing stable to point at until it lands.
+    ...(!message.pending && !message.failed
+      ? [
+          {
+            key: "copy-link",
+            label: linkState === "copied" ? "Copied" : linkState === "failed" ? "Copy failed" : "Copy link",
+            disabled: busy,
+            testId: "room-message-copy-link",
+            onClick: () => {
               const link = messagePermalink(roomId, message.eventId);
               const clipboard: Clipboard | undefined = navigator.clipboard;
               if (!clipboard) {
@@ -1165,34 +1171,131 @@ function RoomEntry({
                 .writeText(link)
                 .then(() => setLinkState("copied"))
                 .catch(() => setLinkState("failed"));
-            }}
-          >
-            {linkState === "copied" ? "Copied" : linkState === "failed" ? "Copy failed" : "Copy link"}
-          </button>
-        )}
-        {onReply && !message.redacted && (
-          <button className={rowActionClass} disabled={busy} data-testid="reply-action" onClick={() => onReply(message)}>
-            Reply
-          </button>
-        )}
-        {own && !message.redacted && message.file === undefined && (
-          <button
-            className={rowActionClass}
-            disabled={busy}
-            onClick={() => {
+            },
+          },
+        ]
+      : []),
+    ...(onReply && !message.redacted
+      ? [{ key: "reply", label: "Reply", disabled: busy, testId: "reply-action", onClick: () => onReply(message) }]
+      : []),
+    ...(own && !message.redacted && message.file === undefined
+      ? [
+          {
+            key: "edit",
+            label: "Edit",
+            disabled: busy,
+            onClick: () => {
               setDraft(message.body);
               setEditing(true);
-            }}
-          >
-            Edit
-          </button>
-        )}
-        {own && !message.redacted && (
-          <button className={rowActionClass} disabled={busy} onClick={() => onDelete(message)}>
-            Delete
-          </button>
-        )}
-      </div>
+            },
+          },
+        ]
+      : []),
+    ...(own && !message.redacted ? [{ key: "delete", label: "Delete", disabled: busy, onClick: () => onDelete(message) }] : []),
+  ];
+
+  const messageBody = (
+    <MessageBody
+      message={message}
+      loadMedia={connection.loadMedia}
+      getUrlPreview={connection.getUrlPreview}
+      conversation={conversation}
+      onToggleReaction={(target, key, mine) =>
+        run(mine ? connection.unreact(roomId, target.eventId, key) : connection.react(roomId, target.eventId, key))
+      }
+      onRetry={(target) => run(connection.retry(roomId, target.eventId))}
+      onCancel={(target) => {
+        connection.cancel(roomId, target.eventId);
+        refresh();
+      }}
+      onJumpToReply={onJumpToReply}
+    />
+  );
+
+  return (
+    <div
+      aria-current={focused ? "true" : undefined}
+      className={`flex flex-col gap-1 ${live ? "motion-rise" : ""} ${focused ? "rounded-[var(--r-md)] outline outline-2 outline-offset-4 outline-[var(--accent)]" : ""}`}
+      data-focused={focused ? "true" : undefined}
+      data-testid="room-message"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setFocusWithin(false);
+        }
+      }}
+      onFocus={() => setFocusWithin(true)}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
+    >
+      {/* #252: on touch, the bubble itself is the long-press surface — a
+          hold opens the sheet below; a quick tap (the gesture's own
+          `onClickCapture`) does nothing more than it always did. */}
+      {touchPrimary ? (
+        <div data-testid="room-message-bubble" {...longPress}>
+          {messageBody}
+        </div>
+      ) : (
+        messageBody
+      )}
+      {message.thread !== null && message.thread.replyCount > 0 && message.thread.latestReply !== null && (
+        <p className="type-provenance text-[var(--muted)]" data-testid="room-thread-preview">
+          {threadPreviewLabel(message.thread.latestReply)}: {plainPreview(message.thread.latestReply.body)} ·{" "}
+          {message.thread.replyCount} {message.thread.replyCount === 1 ? "reply" : "replies"}{" "}
+          <a className="underline" data-testid="open-thread" href={threadHref(roomId, message.eventId)}>
+            Open thread
+          </a>
+        </p>
+      )}
+      {touchPrimary ? (
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <button className={sheetTriggerClass} data-testid="room-message-actions-trigger" type="button">
+              Message actions
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" data-testid="room-message-actions">
+            {actions.map((action) => (
+              <DropdownMenuItem
+                asChild={action.href !== undefined}
+                data-testid={action.testId}
+                disabled={action.disabled}
+                key={action.key}
+                onSelect={action.href === undefined ? () => action.onClick?.() : undefined}
+              >
+                {action.href !== undefined ? <a href={action.href}>{action.label}</a> : action.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        // #252: hidden until the row is hovered, focused (keyboard, Tab),
+        // or something it opened is still active — never a permanent row.
+        // `pointer-events-none` while hidden is belt-and-braces only: the
+        // visibility is already gated above, this just keeps a stray mouse
+        // from reaching an invisible button.
+        <div
+          className={`flex flex-wrap gap-1 transition-opacity motion-reduce:transition-none ${toolbarVisible ? "opacity-100" : "pointer-events-none opacity-0"}`}
+          data-testid="room-message-actions"
+        >
+          {actions.map((action) =>
+            action.href !== undefined ? (
+              <a className={rowActionClass} data-testid={action.testId} href={action.href} key={action.key}>
+                {action.label}
+              </a>
+            ) : (
+              <button
+                className={rowActionClass}
+                data-testid={action.testId}
+                disabled={action.disabled}
+                key={action.key}
+                onClick={action.onClick}
+              >
+                {action.label}
+              </button>
+            ),
+          )}
+        </div>
+      )}
       {pickerOpen && !message.redacted && (
         <div className="flex flex-wrap gap-1" data-testid="reaction-picker">
           {REACTION_CHOICES.map((key) => (

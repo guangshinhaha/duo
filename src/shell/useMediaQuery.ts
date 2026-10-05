@@ -26,3 +26,21 @@ export function useMediaQuery(query: string): boolean {
 
 /** Tailwind's `md` breakpoint: the width at which the list and the chat sit side by side. */
 export const DESKTOP_QUERY = "(min-width: 768px)";
+
+/**
+ * #252: whether this device's primary input has no hover and a coarse
+ * pointer — a phone, or a tablet with no mouse or trackpad attached. The
+ * same rule `enterSends` (composer/enterSends.ts) reads once at keypress
+ * time; this is its live, reactive form, for a surface that changes its
+ * whole interaction model on it — a hover toolbar versus a long-press sheet
+ * — rather than one behaviour read at the moment it's needed. `pointer`
+ * names the primary pointer, which can't be both coarse and fine; asking
+ * both keeps a hybrid device (a tablet that's gained a trackpad) reading as
+ * a mouse, and keeps the answer "desktop" wherever the environment can't
+ * honestly say either way (a stub that answers yes to every query).
+ */
+export function useTouchPrimary(): boolean {
+  const coarse = useMediaQuery("(hover: none) and (pointer: coarse)");
+  const fine = useMediaQuery("(pointer: fine)");
+  return coarse && !fine;
+}
