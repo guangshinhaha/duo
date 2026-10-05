@@ -39,6 +39,8 @@ vi.mock("matrix-js-sdk", () => ({
     RoomTopic: "m.room.topic",
     RoomAvatar: "m.room.avatar",
     RoomPowerLevels: "m.room.power_levels",
+    RoomJoinRules: "m.room.join_rules",
+    SpaceChild: "m.space.child",
   },
   RelationType: { Annotation: "m.annotation", Replace: "m.replace", Thread: "m.thread", Reference: "m.reference" },
   // #209: Detached pending-event ordering (startClient) and the local-echo
@@ -199,6 +201,7 @@ type FakeClient = MatrixClient & {
   setRoomReadMarkers: ReturnType<typeof vi.fn>;
   setDisplayName: ReturnType<typeof vi.fn>;
   setAvatarUrl: ReturnType<typeof vi.fn>;
+  getRoomHierarchy: ReturnType<typeof vi.fn>;
 };
 
 /**
@@ -270,6 +273,9 @@ function fakeClient(
     setRoomReadMarkers: vi.fn(async () => ({})),
     setDisplayName: vi.fn(async () => ({})),
     setAvatarUrl: vi.fn(async () => ({})),
+    // #214: the org Space's children — empty unless a test lists some.
+    getRoomHierarchy: vi.fn(async () => ({ rooms: [] })),
+    getDomain: () => "workspace.example",
   };
   return client as unknown as FakeClient;
 }
@@ -2888,6 +2894,186 @@ describe("#214 — creating a group conversation and inviting people", () => {
     await connection.leave("!group-invite:workspace.example");
 
     expect(client.leave).toHaveBeenCalledWith("!group-invite:workspace.example");
+  });
+});
+
+describe("#214 — channels: findable within your org (digital-duo#274)", () => {
+  const SPACE_ID = "!org-space:workspace.example";
+  // The real SDK's shape: the server's sentence in `data.error`, and a
+  // `message` that wraps it with the status and the URL — what the member
+  // must never be shown.
+  const refused = (errcode: string, sentence: string): MatrixError =>
+    Object.assign(new MatrixError({ errcode, error: sentence }), {
+      errcode,
+      data: { errcode, error: sentence },
+      message: `MatrixError: [403] ${sentence} (https://workspace.example/_matrix/client/v3/createRoom)`,
+    });
+  const spaceRoom = (): Room =>
+    summaryRoom({ roomId: SPACE_ID, name: "Org", joinRule: "invite", members: [], notificationCount: 0, highlightCount: 0, events: [], isSpace: true });
+  const plainRoom = (roomId: string, joinRule: string, membership: "join" | "invite" = "join"): Room =>
+    summaryRoom({
+      roomId,
+      name: roomId.slice(1, roomId.indexOf(":")),
+      joinRule,
+      members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+      membership,
+    });
+
+  it("createChannel restricts the room to the org Space and lists it there — the exact contract, never a public room", async () => {
+    const client = fakeClient({ rooms: [plainRoom("!project-x:workspace.example", "invite"), spaceRoom()] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.createChannel(" Launch ", " Planning ")).resolves.toBe("!fresh:workspace.example");
+
+    expect(client.createRoom).toHaveBeenCalledWith({
+      preset: "private_chat",
+      name: "Launch",
+      topic: "Planning",
+      initial_state: [
+        {
+          type: "m.room.join_rules",
+          state_key: "",
+          content: { join_rule: "restricted", allow: [{ type: "m.room_membership", room_id: SPACE_ID }] },
+        },
+      ],
+    });
+    const config = client.createRoom.mock.calls[0]![0] as Record<string, unknown>;
+    expect(config.visibility).toBeUndefined();
+    expect(client.sendStateEvent).toHaveBeenCalledWith(SPACE_ID, "m.space.child", { via: ["workspace.example"] }, "!fresh:workspace.example");
+    expect(client.leave).not.toHaveBeenCalled();
+  });
+
+  it("createChannel with no org Space refuses before creating anything", async () => {
+    const client = fakeClient({ rooms: [plainRoom("!project-x:workspace.example", "invite")] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.createChannel("Launch", "")).rejects.toThrow("organisation's space isn't set up");
+    expect(client.createRoom).not.toHaveBeenCalled();
+  });
+
+  it("createChannel with two joined Spaces refuses rather than guess which is the org's", async () => {
+    const other = summaryRoom({ roomId: "!other-space:workspace.example", name: "Other", joinRule: "invite", members: [], notificationCount: 0, highlightCount: 0, events: [], isSpace: true });
+    const client = fakeClient({ rooms: [spaceRoom(), other] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.createChannel("Launch", "")).rejects.toThrow("more than one space");
+    expect(client.createRoom).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "Only a room open to your own organisation, and that you are in, can be listed here.",
+    "Only the person who listed a room here can change or remove that listing.",
+  ])("the org wall's listing refusal reaches the member in its own words — and the unlisted room is left: %s", async (sentence) => {
+    const client = fakeClient({ rooms: [spaceRoom()] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    client.sendStateEvent.mockRejectedValueOnce(refused("M_FORBIDDEN", sentence));
+
+    const failure = connection.createChannel("Launch", "");
+    await expect(failure).rejects.toThrow(`The workspace said: ${sentence}`);
+    await expect(failure).rejects.not.toThrow("MatrixError");
+    expect(client.leave).toHaveBeenCalledWith("!fresh:workspace.example");
+  });
+
+  it("a Space whose listing power level the daemon hasn't lowered yet says so, not Synapse's power-level jargon", async () => {
+    const client = fakeClient({ rooms: [spaceRoom()] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    client.sendStateEvent.mockRejectedValueOnce(
+      refused("M_FORBIDDEN", "You don't have permission to post that to the room. user_level (0) < send_level (50)"),
+    );
+
+    await expect(connection.createChannel("Launch", "")).rejects.toThrow("doesn't let members list channels yet");
+    expect(client.leave).toHaveBeenCalledWith("!fresh:workspace.example");
+  });
+
+  it("a Space holding an invite to someone outside the org (the 'public rooms' refusal on a restricted rule) is explained, not shown as 'public rooms are not allowed'", async () => {
+    const client = fakeClient({ rooms: [spaceRoom()] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    client.createRoom.mockRejectedValueOnce(refused("M_FORBIDDEN", "Public rooms are not allowed on this server."));
+
+    const failure = connection.createChannel("Launch", "");
+    await expect(failure).rejects.toThrow("still has an invitation out to someone outside your organisation");
+    await expect(failure).rejects.not.toThrow("Public rooms are not allowed");
+    expect(client.sendStateEvent).not.toHaveBeenCalled();
+  });
+
+  it("channels() lists the org Space's children from its hierarchy — never the Space itself or a sub-space — every page, marking the ones already joined", async () => {
+    const client = fakeClient({ rooms: [plainRoom("!general:workspace.example", "restricted"), spaceRoom()] });
+    client.getRoom.mockImplementation((roomId: string) => (roomId === "!general:workspace.example" ? plainRoom(roomId, "restricted") : null));
+    client.getRoomHierarchy
+      .mockResolvedValueOnce({
+        rooms: [
+          { room_id: SPACE_ID, name: "Org", room_type: "m.space", num_joined_members: 4, world_readable: false, guest_can_join: false, children_state: [] },
+          { room_id: "!general:workspace.example", name: "general", topic: "Everything", num_joined_members: 4, world_readable: false, guest_can_join: false, children_state: [] },
+          { room_id: "!sub:workspace.example", name: "Sub", room_type: "m.space", num_joined_members: 2, world_readable: false, guest_can_join: false, children_state: [] },
+        ],
+        next_batch: "page2",
+      })
+      .mockResolvedValueOnce({
+        rooms: [{ room_id: "!launch:workspace.example", num_joined_members: 1, world_readable: false, guest_can_join: false, children_state: [] }],
+      });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.channels()).toEqual([
+      { roomId: "!general:workspace.example", name: "general", topic: "Everything", memberCount: 4, joined: true },
+      { roomId: "!launch:workspace.example", name: null, topic: null, memberCount: 1, joined: false },
+    ]);
+    expect(client.getRoomHierarchy).toHaveBeenNthCalledWith(1, SPACE_ID, 50, 1, false, undefined);
+    expect(client.getRoomHierarchy).toHaveBeenNthCalledWith(2, SPACE_ID, 50, 1, false, "page2");
+  });
+
+  it("channels() refuses with no org Space rather than asking some other room's hierarchy", async () => {
+    const client = fakeClient({ rooms: [plainRoom("!project-x:workspace.example", "invite")] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await expect(connection.channels()).rejects.toThrow("organisation's space isn't set up");
+    expect(client.getRoomHierarchy).not.toHaveBeenCalled();
+  });
+
+  it("joinChannel is a plain join; a refusal is the workspace's own sentence", async () => {
+    const client = fakeClient({ rooms: [spaceRoom()] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.joinChannel("!launch:workspace.example");
+    expect(client.joinRoom).toHaveBeenCalledWith("!launch:workspace.example");
+
+    client.joinRoom.mockRejectedValueOnce(refused("M_FORBIDDEN", "This room has members from another organisation."));
+    await expect(connection.joinChannel("!launch:workspace.example")).rejects.toThrow("This room has members from another organisation.");
+  });
+
+  it("a room restricted to the org Space reads as a channel; an invite-only private group still reads as a group", async () => {
+    const client = fakeClient({
+      rooms: [plainRoom("!launch:workspace.example", "restricted"), plainRoom("!project-x:workspace.example", "invite"), spaceRoom()],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const kinds = Object.fromEntries((await connection.rooms()).map((room) => [room.roomId, room.kind]));
+    expect(kinds).toEqual({ "!launch:workspace.example": "channel", "!project-x:workspace.example": "group" });
+  });
+
+  it("an invite to a restricted room reads as a channel invite; an invite-only one as a group", async () => {
+    const client = fakeClient({
+      rooms: [
+        inviteRoom({ roomId: "!launch:workspace.example", name: "launch", joinRule: "restricted", inviterId: "@bose:workspace.example", inviterName: "Bose" }),
+        inviteRoom({ roomId: "!project-x:workspace.example", name: "project-x", joinRule: "invite", inviterId: "@bose:workspace.example", inviterName: "Bose" }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect((await connection.invites()).map((invite) => invite.kind)).toEqual(["channel", "group"]);
   });
 });
 

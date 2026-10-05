@@ -784,13 +784,13 @@ export function ChatList({
           )}
           {connection && (
             <button
-              aria-label="New group"
+              aria-label="New group or channel"
               className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--muted)]"
               data-testid="conversations-new-room"
               onClick={() => setNewRoomOpen(true)}
               type="button"
             >
-              <UsersRound aria-label="New group" size={18} />
+              <UsersRound aria-label="New group or channel" size={18} />
             </button>
           )}
           {connection && (

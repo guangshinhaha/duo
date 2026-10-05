@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
 import { workspaceSessionUrl } from "../src/api/hosted.js";
-import type { LiveArrival, NotificationMode, RoomInvite, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
+import type { ChannelSummary, LiveArrival, NotificationMode, RoomInvite, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
 import { WorkspaceSignInDialog } from "../src/components/WorkspaceSignInDialog.js";
 import type { StagedShare } from "../src/workspace/sharing.js";
 import { stubDesktop } from "./desktop.js";
@@ -162,6 +162,8 @@ function fakeConnection(state: {
   people?: Array<{ userId: string; name: string }>;
   /** #214: pending invites, separate from `rooms` — an invite is not a conversation yet. */
   invites?: RoomInvite[];
+  /** #214: the org Space's channels, as `channels()` would list them from its hierarchy. */
+  channels?: ChannelSummary[];
   /** #209: the next `send`/`replyInThread` ends in the row going failed, like the homeserver refused it — consumed once. */
   failNextSend?: boolean;
 }) {
@@ -332,6 +334,48 @@ function fakeConnection(state: {
       if (at >= 0 && !state.rooms[at]!.members.some((member) => member.userId === userId)) {
         state.rooms[at] = { ...state.rooms[at]!, members: [...state.rooms[at]!.members, { userId, name: null }] };
       }
+    }),
+    // #214: a fresh channel — restricted to the org Space and listed in it,
+    // the way the real seam's `createChannel` behaves; findable by
+    // colleagues through `channels()`.
+    createChannel: vi.fn(async (name: string) => {
+      const roomId = `!channel-${name.toLowerCase().replace(/[^a-z0-9-]/gi, "-")}:workspace.example`;
+      state.rooms.push({
+        roomId,
+        kind: "channel",
+        name,
+        topic: null,
+        avatarUrl: null,
+        members: [],
+        latest: null,
+        unread: { notifications: 0, mentions: 0 },
+        muted: false,
+        notifications: "all",
+        canEdit: { name: true, topic: true, avatar: true },
+      });
+      state.channels = [...(state.channels ?? []), { roomId, name, topic: null, memberCount: 1, joined: true }];
+      return roomId;
+    }),
+    channels: vi.fn(async () => [...(state.channels ?? [])]),
+    joinChannel: vi.fn(async (roomId: string) => {
+      const channel = (state.channels ?? []).find((candidate) => candidate.roomId === roomId);
+      if (!channel || channel.joined) {
+        return;
+      }
+      state.channels = (state.channels ?? []).map((candidate) => (candidate.roomId === roomId ? { ...candidate, joined: true } : candidate));
+      state.rooms.push({
+        roomId,
+        kind: "channel",
+        name: channel.name,
+        topic: channel.topic,
+        avatarUrl: null,
+        members: [],
+        latest: null,
+        unread: { notifications: 0, mentions: 0 },
+        muted: false,
+        notifications: "all",
+        canEdit: { name: false, topic: false, avatar: false },
+      });
     }),
     invites: vi.fn(async () => [...(state.invites ?? [])]),
     joinRoom: vi.fn(async (roomId: string) => {
@@ -1190,6 +1234,120 @@ describe("#214 — creating a group conversation and inviting people", () => {
     const row = await screen.findByTestId("pending-invite");
     expect(row).toHaveTextContent("Bose");
     expect(row).toHaveTextContent("Wants to message you");
+  });
+});
+
+describe("#214 — channels: findable within your org", () => {
+  it("the dialog offers Channel beside Private group, and Channel creates a channel — not a group", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new-room"));
+    expect(await screen.findByTestId("new-room-kind-group")).toHaveTextContent("Private group");
+    fireEvent.click(within(screen.getByTestId("new-room-kind-channel")).getByRole("radio"));
+
+    fireEvent.change(await screen.findByLabelText("Channel name"), { target: { value: "Launch" } });
+    fireEvent.click(screen.getByTestId("new-room-create"));
+
+    await waitFor(() => expect(fake.connection.createChannel).toHaveBeenCalledWith("Launch", ""));
+    expect(fake.connection.createRoom).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("new-room-done"));
+    expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
+  });
+
+  it("Private group stays the default — a group is still made with createRoom", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new-room"));
+    fireEvent.change(await screen.findByLabelText("Group name"), { target: { value: "Squad" } });
+    fireEvent.click(screen.getByTestId("new-room-create"));
+
+    await waitFor(() => expect(fake.connection.createRoom).toHaveBeenCalledWith("Squad", ""));
+    expect(fake.connection.createChannel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "Only a room open to your own organisation, and that you are in, can be listed here.",
+    "Only the person who listed a room here can change or remove that listing.",
+  ])("the org wall's listing refusal is shown in its own words, and the dialog stands: %s", async (sentence) => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {}, people: PEOPLE });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    vi.mocked(fake.connection.createChannel).mockRejectedValueOnce(new Error(`The workspace said: ${sentence}`));
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new-room"));
+    fireEvent.click(within(await screen.findByTestId("new-room-kind-channel")).getByRole("radio"));
+    fireEvent.change(await screen.findByLabelText("Channel name"), { target: { value: "Launch" } });
+    fireEvent.click(screen.getByTestId("new-room-create"));
+
+    expect(await screen.findByTestId("new-room-error")).toHaveTextContent(sentence);
+    expect(screen.getByTestId("new-room-dialog")).toBeInTheDocument();
+  });
+
+  it("browsing lists the org's channels; Join joins one and lands in it, and one already joined offers Open", async () => {
+    seedSession();
+    const fake = fakeConnection({
+      rooms: roomsFixture(),
+      timelines: {},
+      people: PEOPLE,
+      channels: [
+        { roomId: "!general:workspace.example", name: "general", topic: "Everything", memberCount: 4, joined: true },
+        { roomId: "!launch:workspace.example", name: "launch", topic: null, memberCount: 1, joined: false },
+      ],
+    });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new-room"));
+    fireEvent.click(await screen.findByTestId("new-room-browse"));
+
+    const rows = await screen.findAllByTestId("channel-row");
+    expect(rows.map((row) => within(row).getByTestId("channel-row-title").textContent)).toEqual(["general", "launch"]);
+    expect(rows[0]).toHaveTextContent("Everything · 4 members");
+    expect(within(rows[0]!).getByTestId("channel-row-open")).toBeInTheDocument();
+
+    fireEvent.click(within(rows[1]!).getByTestId("channel-row-join"));
+
+    await waitFor(() => expect(fake.connection.joinChannel).toHaveBeenCalledWith("!launch:workspace.example"));
+    expect(await screen.findByTestId("room-timeline")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-room-dialog")).toBeNull();
+  });
+
+  it("a refused join shows the workspace's sentence beside that channel", async () => {
+    seedSession();
+    const fake = fakeConnection({
+      rooms: roomsFixture(),
+      timelines: {},
+      channels: [{ roomId: "!launch:workspace.example", name: "launch", topic: null, memberCount: 1, joined: false }],
+    });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    vi.mocked(fake.connection.joinChannel).mockRejectedValueOnce(new Error("The workspace said: This room has members from another organisation."));
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new-room"));
+    fireEvent.click(await screen.findByTestId("new-room-browse"));
+    fireEvent.click(await screen.findByTestId("channel-row-join"));
+
+    expect(await screen.findByTestId("channel-join-error")).toHaveTextContent("This room has members from another organisation.");
+  });
+
+  it("with no org Space, browsing says why instead of an empty list", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    vi.mocked(fake.connection.channels).mockRejectedValue(new Error("Your organisation's space isn't set up for this account yet."));
+
+    await renderApp();
+    fireEvent.click(await screen.findByTestId("conversations-new-room"));
+    fireEvent.click(await screen.findByTestId("new-room-browse"));
+
+    expect(await screen.findByTestId("channels-error")).toHaveTextContent("space isn't set up");
   });
 });
 
