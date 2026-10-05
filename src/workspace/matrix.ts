@@ -236,6 +236,25 @@ export interface RoomInvite {
 }
 
 /**
+ * One channel of the member's organisation (#214), as the org Space's
+ * `/hierarchy` lists it: a room restricted to the Space and linked as its
+ * child, which any colleague may find and join without an invite. Read
+ * from the homeserver's own hierarchy answer — Synapse shows a child only
+ * to someone who may join it, so another org's channels never reach this
+ * list. `joined` is this member's own membership, so the browse list can
+ * offer "Open" for a channel they are already in rather than a second join.
+ */
+export interface ChannelSummary {
+  readonly roomId: string;
+  /** The room's own name — null when it has none. */
+  readonly name: string | null;
+  readonly topic: string | null;
+  /** How many have joined, by the homeserver's own count. */
+  readonly memberCount: number;
+  readonly joined: boolean;
+}
+
+/**
  * #219: a link's title, description and image, as the homeserver's own
  * `/preview_url` returned them (Open Graph-ish fields; absent ones read as
  * null, never as an empty string a card would render as blank space). The
@@ -749,16 +768,37 @@ export interface WorkspaceConnection {
   /**
    * Creates a named, private group conversation (#214) and answers its room
    * id — `preset: private_chat`, invite-only, the member its sole member
-   * until they invite people (now or later, through `invite`). There is no
-   * "channel" counterpart here: a channel "findable in the org" needs an
-   * org-scoped room directory, and the only directory Matrix has is the
-   * homeserver's own room directory, which the org wall refuses every
-   * member's attempt to publish into (`M_FORBIDDEN`, unconditionally —
-   * `deploy/synapse/modules/duo_org_wall/rules.py`'s `may_publish`). Rather
-   * than guess at a join rule that might leak a room across orgs, this seam
-   * offers group rooms only until that gap is closed server-side.
+   * until they invite people (now or later, through `invite`). Its findable
+   * counterpart is `createChannel`.
    */
   createRoom(name: string, topic: string): Promise<string>;
+  /**
+   * Creates a channel (#214, on digital-duo#274's server side): a room any
+   * colleague in the member's own organisation can find and join without an
+   * invite, and answers its room id. Never a public room and never in the
+   * room directory — both stay refused by the org wall. Instead the room's
+   * join rule is `restricted` to the org's Space (only the Space's members,
+   * one org, may join), and it is listed as a child of that Space
+   * (`m.space.child`), which is how colleagues find it (`channels`). The
+   * org wall judges both halves; its refusals are surfaced as its own
+   * sentences, and the one confusing one — a Space that still holds an
+   * invite to someone outside the org, which makes any `restricted` rule
+   * naming it fail as if it were "public" — is translated into what it
+   * actually means. If the room is made but the listing is refused, the
+   * member leaves the unlisted room again, so no channel nobody can find is
+   * left behind in their list.
+   */
+  createChannel(name: string, topic: string): Promise<string>;
+  /**
+   * The organisation's channels (#214): the org Space's children, from the
+   * homeserver's own `/hierarchy` — which shows a child only to someone who
+   * may join it. Includes channels the member is already in, marked
+   * `joined`. Throws when this account has no org Space (or more than one,
+   * so which is the org's can't be told), rather than guessing.
+   */
+  channels(): Promise<readonly ChannelSummary[]>;
+  /** Joins one of the organisation's channels (#214) — a plain join; the restricted rule and the org wall decide. */
+  joinChannel(roomId: string): Promise<void>;
   /**
    * Invites a workspace user into an existing room (#214) — unlike
    * `startDirect`, this adds someone to a room that already exists, during
@@ -876,6 +916,24 @@ export async function signIn(homeserverUrl: string, username: string, password: 
 }
 
 /**
+ * The homeserver's own sentence for a refusal (#214): the `error` field of
+ * its JSON answer, which matrix-js-sdk keeps in `MatrixError.data`. The
+ * SDK's `message` is not that sentence — it wraps it as
+ * `MatrixError: [403] <sentence> (<url>)` — so it is only the fallback, for
+ * an error that carries no JSON body.
+ */
+function serverWordsOf(error: MatrixError): string {
+  const words = (error.data as { error?: unknown } | undefined)?.error;
+  return typeof words === "string" && words !== "" ? words : error.message;
+}
+
+/** "The workspace said: <its sentence>." — framed, never rewritten. */
+function saidByWorkspace(error: MatrixError): string {
+  const words = serverWordsOf(error);
+  return `The workspace said: ${words}${/[.!?]$/.test(words) ? "" : "."}`;
+}
+
+/**
  * Turns whatever the homeserver or the network did to an upload into the
  * reason the member reads (#66 AC4, reused by #224's picture upload): the
  * workspace's own upload limit is named as such (this client can't know its
@@ -890,7 +948,7 @@ function workspaceFailure(error: unknown, name: string): Error {
     if (error.errcode === "M_TOO_LARGE") {
       return new Error(`${name} is over the workspace's own upload limit.`);
     }
-    return new Error(`The workspace said: ${error.message}${/[.!?]$/.test(error.message) ? "" : "."}`);
+    return new Error(saidByWorkspace(error));
   }
   return new Error("The connection dropped — we couldn't reach the workspace.");
 }
@@ -905,9 +963,62 @@ function workspaceFailure(error: unknown, name: string): Error {
  */
 function roomFailure(error: unknown): Error {
   if (error instanceof MatrixError) {
-    return new Error(`The workspace said: ${error.message}${/[.!?]$/.test(error.message) ? "" : "."}`);
+    return new Error(saidByWorkspace(error));
   }
   return new Error("The connection dropped — we couldn't reach the workspace.");
+}
+
+/**
+ * #214: the org wall's refusal of a `restricted` rule whose allow-list room
+ * is not one org (`duo_org_wall/rules.py`'s ERR_PUBLIC, the same sentence
+ * every non-invite join rule gets). `createChannel` only ever asks for
+ * `private_chat` restricted to the org Space, so this sentence on that
+ * request can only mean the Space holds someone outside the org — in
+ * practice a pending invite left by a refused admin-API join
+ * (digital-duo `docs/deploy/hosted-workspace.md` §6.5).
+ */
+const ORG_WALL_PUBLIC_REFUSAL = "Public rooms are not allowed on this server.";
+/** #214: the org wall's two listing refusals (digital-duo#274's ERR_LINK, ERR_UNLINK), shown as they are. */
+const ORG_WALL_LISTING_REFUSALS: readonly string[] = [
+  "Only a room open to your own organisation, and that you are in, can be listed here.",
+  "Only the person who listed a room here can change or remove that listing.",
+];
+
+/**
+ * The member's organisation Space (#214): the one joined room whose create
+ * event says `type: "m.space"` — the same `isSpaceRoom()` read #246 uses to
+ * keep Spaces out of the conversation list. digital-duo#234 makes exactly
+ * one per org and joins every member to it. None, or more than one, and
+ * this refuses rather than guess which Space a channel should be open to.
+ */
+function orgSpaceIdOf(client: MatrixClient): string {
+  const spaces = client.getRooms().filter((room) => room.getMyMembership() === "join" && room.isSpaceRoom());
+  if (spaces.length === 0) {
+    throw new Error("Your organisation's space isn't set up for this account yet, so there's nowhere to list a channel. Ask your workspace operator.");
+  }
+  if (spaces.length > 1) {
+    throw new Error("This account is in more than one space, so we can't tell which is your organisation's. Channels aren't available until that's sorted out.");
+  }
+  return spaces[0]!.roomId;
+}
+
+/** This account's own server name — what a Space link's `via` names — from the SDK, else the user id's own domain. */
+function serverNameOf(client: MatrixClient, userId: string): string {
+  return client.getDomain() ?? userId.slice(userId.indexOf(":") + 1);
+}
+
+/**
+ * A room's kind as the list reads it (#214): a direct conversation by the
+ * account's own record; a channel when anyone may find and join it — a
+ * `restricted` rule (digital-duo#274: open to the org Space's members) or,
+ * on a server without the org wall, `public`; anything else (invite-only)
+ * a private group.
+ */
+function roomKindOf(direct: boolean, joinRule: string | undefined): RoomKind {
+  if (direct) {
+    return "direct";
+  }
+  return joinRule === "restricted" || joinRule === "public" ? "channel" : "group";
 }
 
 /** Resolves when the first sync completes — the room state the homeserver held (including what arrived while away) has caught up. */
@@ -1570,7 +1681,7 @@ async function projectRoom(
   const invitedMembers = await projectMemberRefs(client, room, selfId, "invite", ownerNameCache);
   return {
     roomId: room.roomId,
-    kind: direct ? "direct" : room.getJoinRule() === "public" ? "channel" : "group",
+    kind: roomKindOf(direct, room.getJoinRule()),
     // The real name only — never the SDK's auto-generated fill-in. A room
     // with no `m.room.name` reads as having none here, so the sidebar's
     // icon (driven by `kind`, not by this) and its member-names fallback
@@ -1638,6 +1749,10 @@ const PEOPLE_SEARCH_LIMIT = 10;
 
 /** How many conversations a local room search answers with (#207) — a suggestion list, not the whole sidebar again. */
 const ROOM_SEARCH_LIMIT = 8;
+
+/** #214: one `/hierarchy` page of the org Space's channels, and the most pages `channels()` will follow. */
+const CHANNEL_PAGE_SIZE = 50;
+const CHANNEL_PAGES_MAX = 20;
 
 /** A Matrix user id, shaped enough to look up directly: `@local:server`. */
 const USER_ID_SHAPE = /^@[^\s:]+:\S+$/;
@@ -2297,6 +2412,92 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         throw roomFailure(error);
       }
     },
+    createChannel: async (name, topic) => {
+      const spaceId = orgSpaceIdOf(client);
+      const trimmedTopic = topic.trim();
+      let roomId: string;
+      try {
+        // digital-duo#274's contract, exactly: `private_chat` (never
+        // `public_chat` or `visibility: public` — both still refused), with
+        // the join rule `restricted` to the org Space alone.
+        ({ room_id: roomId } = await client.createRoom({
+          preset: Preset.PrivateChat,
+          name: name.trim(),
+          ...(trimmedTopic === "" ? {} : { topic: trimmedTopic }),
+          initial_state: [
+            {
+              type: EventType.RoomJoinRules,
+              state_key: "",
+              content: { join_rule: "restricted", allow: [{ type: "m.room_membership", room_id: spaceId }] },
+            },
+          ],
+        }));
+      } catch (error) {
+        if (error instanceof MatrixError && error.errcode === "M_FORBIDDEN" && serverWordsOf(error) === ORG_WALL_PUBLIC_REFUSAL) {
+          throw new Error(
+            "Your organisation's space can't hold channels right now: it still has an invitation out to someone outside your organisation. Ask your workspace operator to clear that invitation, then try again. A private group still works.",
+          );
+        }
+        throw roomFailure(error);
+      }
+      try {
+        await client.sendStateEvent(spaceId, EventType.SpaceChild, { via: [serverNameOf(client, session.userId)] }, roomId);
+      } catch (error) {
+        // An unlisted restricted room is a channel nobody can find — leave
+        // it rather than strand it in the member's list. Best effort: the
+        // refusal is what the member needs to read either way.
+        await client.leave(roomId).catch(() => undefined);
+        if (error instanceof MatrixError && error.errcode === "M_FORBIDDEN" && !ORG_WALL_LISTING_REFUSALS.includes(serverWordsOf(error))) {
+          // Synapse's own power-level refusal: the daemon hasn't opened this
+          // Space's `m.space.child` to members yet (digital-duo#274's
+          // `allowMemberSpaceLinks`, done on its next sweep).
+          throw new Error("Your organisation's space doesn't let members list channels yet. Ask your workspace operator, or try again later. A private group still works.");
+        }
+        throw roomFailure(error);
+      }
+      return roomId;
+    },
+    channels: async () => {
+      const spaceId = orgSpaceIdOf(client);
+      const found: ChannelSummary[] = [];
+      const seen = new Set<string>();
+      let next: string | undefined;
+      // The Space's direct children only (depth 1), every page — bounded, so
+      // a misbehaving server can't keep this looping.
+      for (let page = 0; page < CHANNEL_PAGES_MAX; page += 1) {
+        let answer: Awaited<ReturnType<MatrixClient["getRoomHierarchy"]>>;
+        try {
+          answer = await client.getRoomHierarchy(spaceId, CHANNEL_PAGE_SIZE, 1, false, next);
+        } catch (error) {
+          throw roomFailure(error);
+        }
+        for (const room of answer.rooms) {
+          if (room.room_id === spaceId || room.room_type === "m.space" || seen.has(room.room_id)) {
+            continue;
+          }
+          seen.add(room.room_id);
+          found.push({
+            roomId: room.room_id,
+            name: typeof room.name === "string" && room.name !== "" ? room.name : null,
+            topic: typeof room.topic === "string" && room.topic !== "" ? room.topic : null,
+            memberCount: room.num_joined_members,
+            joined: client.getRoom(room.room_id)?.getMyMembership() === "join",
+          });
+        }
+        next = answer.next_batch;
+        if (!next) {
+          break;
+        }
+      }
+      return found;
+    },
+    joinChannel: async (roomId) => {
+      try {
+        await client.joinRoom(roomId);
+      } catch (error) {
+        throw roomFailure(error);
+      }
+    },
     invite: async (roomId, userId) => {
       try {
         await client.invite(roomId, userId);
@@ -2312,12 +2513,13 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
           // A DM invite says so structurally (the `is_direct` flag `startDirect`
           // set, read back by the SDK's own DM heuristic) — never guessed from
           // member count, the same rule `directRoomIdsOf` follows for joined
-          // rooms. Anything else is a group: this seam creates no channel yet.
+          // rooms. Otherwise the stripped state's join rule decides channel
+          // or group, the same way a joined room's does.
           const direct = room.getDMInviter() !== undefined;
           const inviterId = room.getDMInviter() ?? room.getMember(session.userId)?.events.member?.getSender() ?? null;
           return {
             roomId: room.roomId,
-            kind: direct ? "direct" : room.getJoinRule() === "public" ? "channel" : "group",
+            kind: roomKindOf(direct, room.getJoinRule()),
             name: room.name || null,
             inviterId,
             inviterName: inviterId === null ? null : room.getMember(inviterId)?.name || localpartOf(inviterId),
