@@ -6,6 +6,7 @@ import { DRAFTS_PAGE_SIZE } from "../src/api/queries.js";
 import { writeComposerBuffer } from "../src/composerBuffer.js";
 import type { DraftRecord } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
+import { setComposer } from "./composerHelpers.js";
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
 
@@ -162,7 +163,7 @@ describe("#29 — history pages as you read it", () => {
 
     // The composer: a new ask is the mutation whose onSuccess invalidates
     // ["drafts"] — exactly what Review's outcome buttons do too.
-    fireEvent.change(screen.getByLabelText("Question for your duo"), { target: { value: "brand new question" } });
+    setComposer(screen.getByLabelText("Question for your duo"), "brand new question");
     fireEvent.click(screen.getByTestId("composer-submit"));
     await waitFor(() => expect(screen.getByText("brand new question")).toBeInTheDocument());
 
