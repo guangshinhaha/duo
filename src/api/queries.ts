@@ -60,6 +60,11 @@ import type {
   PendingT4RequestForJudgement,
   RecipientRef,
   RefusalsListing,
+  AwayScope,
+  AwayState,
+  NeverAnswerInput,
+  NeverAnswerSuggestion,
+  TopicOption,
   PairedDevice,
   PasteImportSummary,
   Rule,
@@ -119,6 +124,11 @@ export const queryKeys = {
   // the listing by prefix and so refreshes any open evidence with it.
   mirrorRule: (id: string) => ["mirror", "rules", id] as const,
   mirrorRefusals: ["mirror", "refusals"] as const,
+  // #270: the away period and the topics it can add. (#269's ceiling has no
+  // query key: it is policy-set, read nowhere by this client — see
+  // profile/Ceiling.tsx.)
+  away: ["away"] as const,
+  topics: ["topics"] as const,
   trustGrid: ["trust", "grid"] as const,
   audit: ["audit"] as const,
   // #52: the staged irreversible steps awaiting the owner's confirmation.
@@ -266,6 +276,82 @@ export function useMirrorRules(api: DuoApiConfig) {
 /** `GET /mirror/refusals` — what the owner's duo must never speak for them on, and why (#53). */
 export function useMirrorRefusals(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.mirrorRefusals, queryFn: () => apiRequest<RefusalsListing>(api, "/mirror/refusals") });
+}
+
+/**
+ * #269: add, edit or remove a never-answer rule. Every write answers with the
+ * whole listing, which replaces the cached one, so the list never shows a
+ * rule the daemon didn't keep. The trust grid is refreshed too: a grant that
+ * conflicts with a new rule stops being honoured.
+ */
+export function useSaveNeverAnswer(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ input, editing }: { input: NeverAnswerInput; editing?: string }) =>
+      editing === undefined
+        ? apiRequest<RefusalsListing>(api, "/mirror/refusals", { method: "POST", body: JSON.stringify(input) })
+        : apiRequest<RefusalsListing>(api, `/mirror/refusals/${encodeURIComponent(editing)}`, { method: "PUT", body: JSON.stringify(input) }),
+    onSuccess: (listing) => {
+      queryClient.setQueryData(queryKeys.mirrorRefusals, listing);
+      queryClient.invalidateQueries({ queryKey: ["trust"] });
+    },
+  });
+}
+
+export function useRemoveNeverAnswer(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (heading: string) => apiRequest<RefusalsListing>(api, `/mirror/refusals/${encodeURIComponent(heading)}`, { method: "DELETE" }),
+    onSuccess: (listing) => {
+      queryClient.setQueryData(queryKeys.mirrorRefusals, listing);
+    },
+  });
+}
+
+/**
+ * #270: where away mode stands. Re-read every minute: a period ends on its
+ * own at its end time, and the status line and return summary should follow
+ * without the owner having to do anything.
+ */
+export function useAway(api: DuoApiConfig | null) {
+  return useQuery({
+    queryKey: queryKeys.away,
+    queryFn: () => apiRequest<AwayState>(api!, "/away"),
+    enabled: api !== null,
+    refetchInterval: 60_000,
+  });
+}
+
+/** #270: the topics an away period can add. */
+export function useTopics(api: DuoApiConfig, enabled: boolean) {
+  return useQuery({ queryKey: queryKeys.topics, queryFn: () => apiRequest<TopicOption[]>(api, "/topics"), enabled });
+}
+
+function useAwayWrite<TVars>(request: (vars: TVars) => Promise<AwayState>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: request,
+    onSuccess: (state) => {
+      queryClient.setQueryData(queryKeys.away, state);
+    },
+  });
+}
+
+/** #270: starts (or changes) an away period. */
+export function useSetAway(api: DuoApiConfig) {
+  return useAwayWrite((body: { until: string; scope: AwayScope; extraTopicIds?: string[] }) =>
+    apiRequest<AwayState>(api, "/away", { method: "PUT", body: JSON.stringify(body) }),
+  );
+}
+
+/** #270: back early — ends the period now. */
+export function useEndAway(api: DuoApiConfig) {
+  return useAwayWrite(() => apiRequest<AwayState>(api, "/away", { method: "DELETE" }));
+}
+
+/** #270: the owner has read the return summary. */
+export function useDismissAwaySummary(api: DuoApiConfig) {
+  return useAwayWrite(() => apiRequest<AwayState>(api, "/away/summary/dismiss", { method: "POST" }));
 }
 
 /**
@@ -501,25 +587,15 @@ export function useRecordOutcome(api: DuoApiConfig) {
 }
 
 /**
- * #259's one-tap follow-up to a "shouldn't answer this" dismissal: offering
- * to turn that signal into a standing never-answer rule — the trust epic's
- * #269 (guangshinhaha/duo). #269's rule store does not exist in the daemon
- * yet (checked against digital-duo's src/drafting and src/profile as of
- * #259 — no rule-creation route to call), so this stays a local no-op that
- * resolves without ever reaching the network. It is a stub for #269 to
- * replace with a real `POST` once that route exists — the call site in
- * `useDraftDecision.ts` does not change, only this function's body does.
- * Deliberately not a fetch to a route that would only ever 404: inventing
- * a request the daemon can't serve would teach nothing and risks reading,
- * to anyone watching the network tab, as a bug rather than a known gap.
+ * #259's one-tap follow-up to a "shouldn't answer this" dismissal, made real
+ * by #269: the daemon's starting words for a never-answer rule, read off the
+ * dismissed draft's question. Nothing is recorded by this call — the owner
+ * edits or approves the words, and only then does `useSaveNeverAnswer` write
+ * the rule (#269: "rules are stated in plain words the owner wrote or
+ * approved").
  */
-export function requestNeverAnswerRule(api: DuoApiConfig, draftId: string): Promise<{ created: false }> {
-  // Both parameters are kept, unused, in the real call shape #269 will
-  // need (which draft, against which duo) — so the signature this stub
-  // commits to already matches the real call it stands in for.
-  void api;
-  void draftId;
-  return Promise.resolve({ created: false });
+export function requestNeverAnswerSuggestion(api: DuoApiConfig, draftId: string): Promise<NeverAnswerSuggestion> {
+  return apiRequest<NeverAnswerSuggestion>(api, `/drafts/${encodeURIComponent(draftId)}/never-answer-suggestion`);
 }
 
 /**

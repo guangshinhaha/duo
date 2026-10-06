@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { requestNeverAnswerRule, useAnswerEscalation, useRecordOutcome, useScheduleSend } from "../api/queries.js";
+import { useAnswerEscalation, useRecordOutcome, useScheduleSend } from "../api/queries.js";
 import type { DismissReason, DraftRecord, SendLater } from "../api/types.js";
 import { useSyncStatus } from "../sync.js";
+import { openNeverAnswerOffers } from "./NeverAnswerOffer.js";
 import { readUndoSendSeconds } from "../undoSendPrefs.js";
 import { takeEditOnOpen } from "../editOnOpen.js";
 
@@ -116,7 +117,7 @@ export function useDraftDecision(api: DuoApiConfig, draft: DraftRecord) {
   // window and records both together, right away. Skipping — letting the
   // window elapse, or hitting Undo — leaves the dismissal exactly as silent
   // as it always was; a reason is never required.
-  const [neverAnswerOffer, setNeverAnswerOffer] = useState<"hidden" | "pending" | "noted">("hidden");
+  const [neverAnswerOffer, setNeverAnswerOffer] = useState<"hidden" | "pending">("hidden");
   const chooseDismissReason = (reason: DismissReason) => {
     if (ignoreTimer.current !== null) {
       clearTimeout(ignoreTimer.current);
@@ -124,17 +125,12 @@ export function useDraftDecision(api: DuoApiConfig, draft: DraftRecord) {
     }
     setIgnoring(false);
     if (reason === "shouldnt_answer") {
-      // #269 (guangshinhaha/duo, the trust epic's never-answer rule store)
-      // is not built yet — see requestNeverAnswerRule's own doc comment.
-      // This offer still appears, honestly worded, rather than being
-      // dropped silently: the owner's intent is real even though there is
-      // nowhere yet to act on it beyond the signal just recorded below.
+      // #269: offer to turn the signal into a standing never-answer rule
+      // (NeverAnswerOffer does the asking and the saving).
       setNeverAnswerOffer("pending");
+      openNeverAnswerOffers.add(draft.id);
     }
     recordOutcome.mutate({ draftId: draft.id, outcome: "discarded", dismissReason: reason });
-  };
-  const confirmNeverAnswerRule = () => {
-    requestNeverAnswerRule(api, draft.id).finally(() => setNeverAnswerOffer("noted"));
   };
   const skipNeverAnswerOffer = () => setNeverAnswerOffer("hidden");
   // #260: the undo window on a tapped Send — the same law as Dismiss's
@@ -209,7 +205,6 @@ export function useDraftDecision(api: DuoApiConfig, draft: DraftRecord) {
     undoIgnore,
     chooseDismissReason,
     neverAnswerOffer,
-    confirmNeverAnswerRule,
     skipNeverAnswerOffer,
     send,
     sendingUntil,

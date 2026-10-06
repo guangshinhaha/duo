@@ -9,6 +9,7 @@ import { AlternativeStepper, ShapeChips, standingShape, useFlipSwipe } from "./D
 import { DuoLine } from "./DuoLine.js";
 import { EditDiff } from "./EditDiff.js";
 import { MutationError } from "./MutationError.js";
+import { NeverAnswerOffer } from "./NeverAnswerOffer.js";
 import { SendLaterMenu, SendWindow, scheduledWords } from "./SendControls.js";
 import { StructuredText } from "./StructuredText.js";
 import { Timestamp } from "./Timestamp.js";
@@ -347,37 +348,10 @@ export function DraftTray({
           </div>
         </div>
       ) : d.neverAnswerOffer !== "hidden" ? (
-        // guangshinhaha/duo#259 → #269 (the trust epic's never-answer rule
-        // store, not yet built): an honest offer, not a fabricated one — see
-        // requestNeverAnswerRule's own doc comment for why tapping "Add rule"
-        // cannot yet say a rule was created.
-        <div className="flex flex-wrap items-center gap-2" data-testid="never-answer-offer">
-          {d.neverAnswerOffer === "pending" ? (
-            <>
-              <span className="type-provenance text-[var(--muted)]">Add a never-answer rule for this?</span>
-              <button
-                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
-                data-testid="never-answer-confirm"
-                onClick={d.confirmNeverAnswerRule}
-                type="button"
-              >
-                Add rule
-              </button>
-              <button
-                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
-                data-testid="never-answer-skip"
-                onClick={d.skipNeverAnswerOffer}
-                type="button"
-              >
-                No thanks
-              </button>
-            </>
-          ) : (
-            <span className="type-provenance text-[var(--faint)]" data-testid="never-answer-noted">
-              Never-answer rules aren&apos;t available yet — this is saved as a signal for when they are.
-            </span>
-          )}
-        </div>
+        // guangshinhaha/duo#259 → #269: the dismissal's "shouldn't answer
+        // this" offered as a standing never-answer rule, in words the owner
+        // approves before anything is saved.
+        <NeverAnswerOffer api={api} draftId={draft.id} onSkip={d.skipNeverAnswerOffer} />
       ) : (
         <div className="flex flex-wrap gap-2">
           {d.editing ? (

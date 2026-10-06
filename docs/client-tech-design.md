@@ -150,7 +150,19 @@ domain types.
 | `GET` | `/mirror/rules` | `RuleReviewListing` | `derivation/rule-review` |
 | `GET` | `/mirror/rules/:id` | `RuleWithEvidence` — the rule with the supporting evidence exchanges behind it | `derivation/rule-review` |
 | `POST` | `/mirror/rules/:id/:action` | `Rule` | `derivation/rule-review` |
-| `GET` | `/mirror/refusals` | `{ decided: boolean, refusals: Refusal[] }` — pure `duo/refusals.md` file state; `decided: false` is a 200 (#182). add/confirm-none stay terminal-only (AR-18) | `trust/refusals` |
+| `GET` | `/mirror/refusals` | `{ decided: boolean, refusals: Refusal[] }` — pure `duo/refusals.md` file state; `decided: false` is a 200 (#182). Since #269 these are the profile's never-answer rules, written from May do; confirm-none stays terminal-only | `trust/refusals` |
+
+The six rows below (#269's never-answer writes and suggestion, and #270's away/topics routes) are this PR's proposed contract, not yet built in `digital-duo` as of this PR — checked against `origin/main`'s `src/serve/server.ts`, which exposes `GET /mirror/refusals` only, and has no `/away`, `/topics` or any owner-facing classification-ceiling route at all. The client is written against them now so the UI and its tests are ready; each write surfaces the daemon's error (`MutationError`) rather than crashing until the daemon side lands, same shape as every other mutation here. #269's classification ceiling has no corresponding route on purpose — see `profile/Ceiling.tsx`: digital-duo#48 makes the ceiling policy-set, not owner-set, so there is nothing for this client to read or write for it.
+
+| `POST` | `/mirror/refusals` | `RefusalsListing` (201) — body `{ rule }` (the owner's sentence; the subject is read off it and the sentence kept as the reason) or `{ subject, reason? }`; adding an existing subject edits it (#269, proposed — not yet in digital-duo) | `trust/refusals` |
+| `PUT` | `/mirror/refusals/:heading` | `RefusalsListing` — the same body; renames and rewords one rule; 404 for an unknown one, 400 renaming onto another's subject (#269, proposed) | `trust/refusals` |
+| `DELETE` | `/mirror/refusals/:heading` | `RefusalsListing` — removes one; removing the last leaves `decided: true` (#269, proposed) | `trust/refusals` |
+| `GET` | `/drafts/:id/never-answer-suggestion` | `NeverAnswerSuggestion` — starting words for a rule off a draft dismissed as "shouldn't answer"; records nothing (#259 → #269, proposed) | `trust/refusals` |
+| `GET` | `/topics` | `TopicOption[]` — the duo's topics, as an away period can add them (#270, proposed) | `derivation/topics` |
+| `GET` | `/away` | `AwayState` — the running period (ended by its end time on every read), the last ended one, the `statusLine` colleagues see, and the summary (so far, or the return summary until dismissed) (#270, proposed) | `trust/away` |
+| `PUT` | `/away` | `AwayState` — body `{ until, scope: "may_do" \| "may_do_and_topics", extraTopicIds? }`; starts or replaces the period; 400 for a past or over-long end, an unknown topic or one on the never-answer list (#270, proposed) | `trust/away` |
+| `DELETE` | `/away` | `AwayState` — back early; 409 when not away (#270, proposed) | `trust/away` |
+| `POST` | `/away/summary/dismiss` | `AwayState` — the return summary is put away (#270, proposed) | `trust/away` |
 | `GET` | `/trust/grid` | `GridRow[]` | `trust/grid` |
 | `GET` | `/actions/t4/pending` | `PendingT4RequestForJudgement[]` — the staged irreversible steps (#180) | `actions/t4-guard` |
 | `POST` | `/actions/t4/:id/confirm` | `PendingT4Request` — confirming is this route and only this route; the confirming device's id rides the attempt (#180) | `actions/t4-guard` |

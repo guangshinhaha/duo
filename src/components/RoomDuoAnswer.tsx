@@ -59,16 +59,34 @@ function EscalationLine({ state, ownerLabel }: { state: "waiting" | "followed-up
   );
 }
 
-export function RoomDuoAnswer({
-  reading,
-  ownerLabel,
-  escalation,
-}: {
+interface RoomDuoAnswerProps {
   reading: DuoAnswerReading;
   ownerLabel: string;
   /** Where a passed-on question stands — only ever passed for a passed-on message. */
   escalation: "waiting" | "followed-up" | null;
-}) {
+}
+
+/**
+ * #270: a duo whose owner is away says so on every message, first — the
+ * daemon's away line, verbatim, as a status above the words. It is the same
+ * line whatever the outcome, so an answered question, a passed-on one and a
+ * boundary all tell the asker the owner is out and the duo is replying.
+ */
+export function RoomDuoAnswer(props: RoomDuoAnswerProps) {
+  if (!props.reading.away) {
+    return <ComposedAnswer {...props} />;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="type-provenance text-[var(--escalate)]" data-testid="duo-away">
+        {props.reading.away.line}
+      </p>
+      <ComposedAnswer {...props} />
+    </div>
+  );
+}
+
+function ComposedAnswer({ reading, ownerLabel, escalation }: RoomDuoAnswerProps) {
   if (reading.kind === "refused") {
     return (
       <div className="flex flex-col gap-2">

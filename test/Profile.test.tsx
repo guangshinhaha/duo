@@ -270,7 +270,9 @@ describe("Rules — your standing orders and where they came from", () => {
     expect(within(screen.getByTestId("bucket-awaitingApproval")).getByTestId("rule-card")).toHaveTextContent("Prod exceptions: say no.");
     expect(screen.getByTestId("bucket-approved").tagName).toBe("DETAILS"); // the record, not the work
     expect(within(screen.getByTestId("rules-from-edits")).getByTestId("candidate")).toHaveTextContent("leave?");
-    expect(await screen.findByTestId("refusal-heading")).toHaveTextContent("Comp");
+    // #269: never-answer rules are limits, kept in May do; Rules points there rather than listing them.
+    expect(screen.queryByTestId("refusals")).toBeNull();
+    expect(screen.getByTestId("rules-never-answer-pointer")).toHaveTextContent("May do");
     expect(view.container.textContent).not.toMatch(/superseded|inconsistent\b|Awaiting your approval/);
   });
 });

@@ -275,7 +275,7 @@ describe("#39 AC1 — the page has structure", () => {
     expect(bucketHeading?.tagName).toBe("H2");
   });
 
-  it("Rules' refusals sit at h2 with each refusal at h3 beneath it — no level skipped (#53)", async () => {
+  it("May do's never-answer rules sit at h2 with each rule at h3 beneath it — no level skipped (#53, #269)", async () => {
     vi.stubGlobal(
       "fetch",
       stubFetch({
@@ -284,7 +284,7 @@ describe("#39 AC1 — the page has structure", () => {
         "/mirror/refusals": { decided: true, refusals: [{ heading: "Pay", reason: "Never on pay." }] },
       }),
     );
-    const { container } = renderWithClient(<ProfilePane api={api} tab="rules" />);
+    const { container } = renderWithClient(<ProfilePane api={api} tab="may" />);
     await waitFor(() => expect(container.querySelector("[data-testid='refusal']")).not.toBeNull());
     expect(container.querySelector("[data-testid='refusals'] > h2")).not.toBeNull();
     expect(container.querySelector("[data-testid='refusal'] h3")).not.toBeNull();

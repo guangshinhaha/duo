@@ -568,6 +568,79 @@ export interface RefusalsListing {
   refusals: Refusal[];
 }
 
+/**
+ * #269: a never-answer rule as the profile sends it — the owner's own
+ * sentence (`rule`, whose subject the daemon reads off it), or a `subject`
+ * with an optional `reason`.
+ */
+export type NeverAnswerInput = { rule: string } | { subject: string; reason?: string };
+
+/** #259 → #269: the daemon's starting words for a rule off a dismissed draft. Only a suggestion; nothing is recorded. */
+export interface NeverAnswerSuggestion {
+  draftId: string;
+  question: string;
+  subject: string;
+}
+
+/**
+ * The Singapore GSCS tiers the daemon reads off a record's marking, lowest
+ * first (digital-duo `ingest/record.ts`). #269's ceiling is this same
+ * taxonomy — see `profile/Ceiling.tsx` for why it has no corresponding
+ * write type here: digital-duo#48 makes it policy-set, not owner-set.
+ */
+export const CLASSIFICATION_LEVELS = ["official_open", "official_closed", "restricted", "confidential", "secret"] as const;
+export type ClassificationLevel = (typeof CLASSIFICATION_LEVELS)[number];
+
+/** One of the duo's topics, as an away period can add it (`GET /topics`). */
+export interface TopicOption {
+  id: string;
+  label: string;
+}
+
+/** #270: `may_do` answers what May do already allows; `may_do_and_topics` adds topics for this period only. */
+export type AwayScope = "may_do" | "may_do_and_topics";
+
+export interface AwayPeriod {
+  id: number;
+  startedAt: string;
+  until: string;
+  scope: AwayScope;
+  extraTopics: TopicOption[];
+  endedAt: string | null;
+  endedEarly: boolean;
+  summaryDismissedAt: string | null;
+}
+
+export interface AwaySummaryItem {
+  question: string;
+  askerRef: string;
+  at: string;
+  draftId: string;
+  topicId: string | null;
+}
+
+export interface AwaySummary {
+  periodId: number;
+  /** False while the period is still running (a summary so far); true once it has ended (the return summary). */
+  ended: boolean;
+  from: string;
+  to: string;
+  answered: (AwaySummaryItem & { viaAwayTopic: boolean })[];
+  passedOn: (AwaySummaryItem & { waiting: boolean })[];
+  declined: AwaySummaryItem[];
+}
+
+/** #270: `GET /away` and every away write's reply. */
+export interface AwayState {
+  active: AwayPeriod | null;
+  last: AwayPeriod | null;
+  /** Exactly what colleagues see while the owner is away; null when they are in. */
+  statusLine: string | null;
+  summary: AwaySummary | null;
+  scopes: AwayScope[];
+  maxDays: number;
+}
+
 export type TrustTier = "T0" | "T1" | "T2" | "T3";
 export type AutonomyLevel = "ask" | "approve" | "auto";
 

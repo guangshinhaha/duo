@@ -6,7 +6,6 @@ import { RuleCard, type RuleBucket } from "../components/RuleCard.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { CandidateCard } from "./CandidateCard.js";
-import { RefusalsSection } from "./Refusals.js";
 
 /** The buckets in the order an owner meets them — what needs a decision first, the record last. */
 const BUCKETS: ReadonlyArray<{ key: RuleBucket; heading: string; empty: string; collapsed?: boolean }> = [
@@ -97,7 +96,10 @@ export function Rules({ api }: { api: DuoApiConfig }) {
         </section>
       )}
       {listing && BUCKETS.map((bucket) => <Bucket api={api} bucket={bucket} key={bucket.key} listing={listing} />)}
-      <RefusalsSection api={api} />
+      {/* #269: never-answer rules are limits, not standing orders — they live with the other limits now. */}
+      <p className="type-provenance text-[var(--faint)]" data-testid="rules-never-answer-pointer">
+        What your duo must never answer, and the classification it may draw on, are in <a className="underline" href="#duo/profile/may">May do</a>.
+      </p>
     </div>
   );
 }
