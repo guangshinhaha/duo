@@ -43,6 +43,7 @@ import type {
   ChannelPolicy,
   ChannelSummary,
   CorrectionCandidate,
+  DismissReason,
   DraftOutcome,
   DraftPipelineResult,
   DraftRecord,
@@ -407,13 +408,45 @@ export function useCreateDraft(api: DuoApiConfig) {
 export function useRecordOutcome(api: DuoApiConfig) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ draftId, outcome, sentText }: { draftId: string; outcome: SettableDraftOutcome; sentText?: string }) =>
-      apiRequest(api, `/drafts/${draftId}/outcome`, { method: "POST", body: JSON.stringify({ outcome, sentText }) }),
+    mutationFn: ({
+      draftId,
+      outcome,
+      sentText,
+      dismissReason,
+    }: {
+      draftId: string;
+      outcome: SettableDraftOutcome;
+      sentText?: string;
+      /** #259: an optional, one-tap reason for a "discarded" outcome — the daemon refuses it alongside any other outcome. */
+      dismissReason?: DismissReason;
+    }) => apiRequest(api, `/drafts/${draftId}/outcome`, { method: "POST", body: JSON.stringify({ outcome, sentText, dismissReason }) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["drafts"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.review });
     },
   });
+}
+
+/**
+ * #259's one-tap follow-up to a "shouldn't answer this" dismissal: offering
+ * to turn that signal into a standing never-answer rule — the trust epic's
+ * #269 (guangshinhaha/duo). #269's rule store does not exist in the daemon
+ * yet (checked against digital-duo's src/drafting and src/profile as of
+ * #259 — no rule-creation route to call), so this stays a local no-op that
+ * resolves without ever reaching the network. It is a stub for #269 to
+ * replace with a real `POST` once that route exists — the call site in
+ * `useDraftDecision.ts` does not change, only this function's body does.
+ * Deliberately not a fetch to a route that would only ever 404: inventing
+ * a request the daemon can't serve would teach nothing and risks reading,
+ * to anyone watching the network tab, as a bug rather than a known gap.
+ */
+export function requestNeverAnswerRule(api: DuoApiConfig, draftId: string): Promise<{ created: false }> {
+  // Both parameters are kept, unused, in the real call shape #269 will
+  // need (which draft, against which duo) — so the signature this stub
+  // commits to already matches the real call it stands in for.
+  void api;
+  void draftId;
+  return Promise.resolve({ created: false });
 }
 
 export function useAnswerEscalation(api: DuoApiConfig) {

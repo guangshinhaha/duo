@@ -31,6 +31,13 @@ export type SettableDraftOutcome = (typeof SETTABLE_DRAFT_OUTCOMES)[number];
 export const DRAFT_OUTCOMES = [...SETTABLE_DRAFT_OUTCOMES, "escalation_answered"] as const;
 export type DraftOutcome = (typeof DRAFT_OUTCOMES)[number];
 
+// Mirrors the daemon's own DISMISS_REASONS (digital-duo's
+// src/drafting/draft-log.ts, #259): the one-tap, always-optional reason a
+// "discarded" outcome may carry. Only ever meaningful alongside
+// `outcome: "discarded"` — the daemon refuses any other pairing.
+export const DISMISS_REASONS = ["wrong_facts", "wrong_tone", "shouldnt_answer", "will_handle_myself"] as const;
+export type DismissReason = (typeof DISMISS_REASONS)[number];
+
 export interface ConfidenceResult {
   score: number;
   passesThreshold: boolean;
@@ -87,6 +94,18 @@ export interface DraftRecord {
   provenance: DraftProvenance;
   /** The daemon's record of the delivery attempt (#170) — always present on the wire, `null` when nothing was ever sent anywhere. */
   delivery: DraftDelivery | null;
+  /**
+   * Why the owner dismissed this draft (#259) — null for a silent dismissal
+   * (the common case), for every other outcome, and for any draft recorded
+   * before this field existed. The daemon always sends it (same as every
+   * other field here), but it's typed optional, unlike its siblings above,
+   * so the many existing `DraftRecord` test fixtures across this package
+   * don't all need a mechanical `dismissReason: null` added just to keep
+   * compiling — a missing field reads exactly like an explicit `null`
+   * everywhere this is read (`=== "shouldnt_answer"`, never a bare
+   * dereference).
+   */
+  dismissReason?: DismissReason | null;
 }
 
 /**
