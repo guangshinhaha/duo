@@ -32,7 +32,9 @@ vi.mock("matrix-js-sdk", () => ({
   Direction: { Backward: "b", Forward: "f" },
   // #209: LocalEchoUpdated alongside Timeline — the seam's `subscribe`
   // listens for both (room news with no arrival vs. a message's arrival).
-  RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated" },
+  // #286: Receipt too — another member's read receipt arriving is room
+  // news the same way.
+  RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated", Receipt: "Room.receipt" },
   SyncState: { Prepared: "PREPARED", Error: "ERROR" },
   MsgType: { Text: "m.text", File: "m.file", Image: "m.image" },
   ReceiptType: { Read: "m.read", FullyRead: "m.fully_read", ReadPrivate: "m.read.private" },
@@ -71,6 +73,7 @@ import { ClientEvent, createClient, EventStatus, IndexedDBStore, MatrixError, Ms
 import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import { enqueuePendingMessage, outboxKeyOf, pendingMessagesInOrder } from "../src/workspace/outbox.js";
 import { workspaceCacheName } from "../src/workspace/cache.js";
+import { writePrivateReceiptsPref } from "../src/readReceiptPrefs.js";
 import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
 
 const SESSION = {
@@ -335,6 +338,8 @@ function summaryRoom(shape: {
   pendingEvents?: MatrixEvent[];
   /** #246: true for the org's own Space room — `isSpaceRoom()`'s answer. False (an ordinary room) unless a test says otherwise. */
   isSpace?: boolean;
+  /** #286: each member's current read-up-to event id (`Room.getEventReadUpTo`'s answer) — absent (no receipt at all) unless a test says otherwise. */
+  receipts?: Record<string, string>;
 }): Room {
   const lastEventTs = shape.events.length > 0 ? shape.events[shape.events.length - 1]!.getTs() : 0;
   const memberOf = (member: (typeof shape.members)[number]) => ({
@@ -407,6 +412,10 @@ function summaryRoom(shape: {
     // #207's findRooms: for a direct room, guessed from its one other
     // member, the way the real SDK's `guessDMUserId` reads a two-person room.
     guessDMUserId: () => shape.members[0]?.userId ?? "",
+    // #286: a member's read receipt, as the SDK's own method answers it —
+    // an event id, or null when they've never sent one.
+    getEventReadUpTo: (userId: string) => shape.receipts?.[userId] ?? null,
+    findEventById: (eventId: string) => shape.events.find((event) => event.getId() === eventId),
   } as unknown as Room;
 }
 
@@ -2215,6 +2224,10 @@ describe("the timeline projection the message surface reads (#64)", () => {
         threadRootEventId: null,
         replyToEventId: null,
         parts: null,
+        // #286: this device's own confirmed send — the fixture's one other
+        // member (Bose) carries no `getEventReadUpTo` here, so nobody's
+        // receipt has reached it yet: "sent", not "read".
+        readState: "sent",
       },
       {
         eventId: "$3500",
@@ -2667,6 +2680,124 @@ describe("the local-echo projection (#209)", () => {
   });
 });
 
+describe("delivery and read state (#286) — sending, sent, read", () => {
+  it("an own confirmed message is 'sent' until another member's receipt reaches it, then 'read' — and stays read once a later message moves their receipt on", async () => {
+    const events = [
+      fakeEvent({ type: "m.room.message", sender: "@ana:workspace.example", msgtype: "m.text", body: "first", ts: 1_000 }),
+      fakeEvent({ type: "m.room.message", sender: "@ana:workspace.example", msgtype: "m.text", body: "second", ts: 2_000 }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@bose:workspace.example", name: "Bose" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+          // Bose has read up to "first" only — "second" is still unread.
+          receipts: { "@bose:workspace.example": "$1000" },
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timeline("!project-x:workspace.example");
+    expect(messages.find((m) => m.eventId === "$1000")).toMatchObject({ readState: "read", readBy: [{ userId: "@bose:workspace.example", name: "Bose" }] });
+    expect(messages.find((m) => m.eventId === "$2000")).toMatchObject({ readState: "sent", readBy: undefined });
+  });
+
+  it("a duo's own receipt never counts — reading its indexing pass over a room is not a colleague reading it", async () => {
+    const events = [fakeEvent({ type: "m.room.message", sender: "@ana:workspace.example", msgtype: "m.text", body: "for carol's duo", ts: 1_000 })];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@duo-carol:workspace.example", name: "duo-carol" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+          receipts: { "@duo-carol:workspace.example": "$1000" },
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message).toMatchObject({ readState: "sent", readBy: undefined });
+  });
+
+  it("carries no delivery state at all on anyone else's message, or on a redacted one of this device's own", async () => {
+    const events = [
+      fakeEvent({ type: "m.room.message", sender: "@bose:workspace.example", msgtype: "m.text", body: "not mine", ts: 1_000 }),
+      fakeEvent({ type: "m.room.message", sender: "@ana:workspace.example", msgtype: "m.text", body: "gone", ts: 2_000, redacted: true }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [
+            { userId: "@ana:workspace.example", name: "ana" },
+            { userId: "@bose:workspace.example", name: "Bose" },
+          ],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+          receipts: { "@bose:workspace.example": "$2000" },
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timeline("!project-x:workspace.example");
+    expect(messages.find((m) => m.eventId === "$1000")?.readState).toBeUndefined();
+    expect(messages.find((m) => m.eventId === "$2000")?.readState).toBeUndefined();
+  });
+
+  it("markRead sends the ordinary, visible receipt by default, and the spec's private one once that's chosen in Settings", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.markRead("!project-x:workspace.example");
+    expect(client.sendReadReceipt).toHaveBeenLastCalledWith(expect.anything(), ReceiptType.Read, true);
+
+    writePrivateReceiptsPref(true);
+    await connection.markRead("!project-x:workspace.example");
+    expect(client.sendReadReceipt).toHaveBeenLastCalledWith(expect.anything(), ReceiptType.ReadPrivate, true);
+    writePrivateReceiptsPref(false);
+  });
+
+  it("subscribe fires on another member's read receipt arriving too — room news, no arrival", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const heard: Array<{ roomId: string; arrival: unknown }> = [];
+    connection.subscribe((roomId, arrival) => heard.push({ roomId, arrival }));
+    const receiptHandler = client.on.mock.calls.find(([event]) => event === RoomEvent.Receipt)?.[1] as (event: MatrixEvent, room: Room) => void;
+    const room = client.getRoom("!x")!;
+
+    receiptHandler?.(fakeEvent({ type: "m.receipt", sender: "@bose:workspace.example", ts: 1 }), room);
+
+    expect(heard).toEqual([{ roomId: "!project-x:workspace.example", arrival: undefined }]);
+  });
+});
+
 describe("the share wire (#66)", () => {
   const STAGED = { name: "notes.txt", mimeType: "text/plain", size: 5, bytes: new TextEncoder().encode("hello").buffer as ArrayBuffer };
 
@@ -2894,6 +3025,10 @@ describe("the share wire (#66)", () => {
         thread: null,
         threadRootEventId: null,
         replyToEventId: null,
+        // #286: this room's only member besides the sender is the sender
+        // themself (`ana` alone in `members`) — nobody else to ever read
+        // it, so this device's own confirmed share reads "sent".
+        readState: "sent",
       },
     ]);
   });
