@@ -1,12 +1,14 @@
 import type { DuoApiConfig } from "../api/client.js";
-import { useKnowledge } from "../api/queries.js";
+import { useDuoRequests, useKnowledge } from "../api/queries.js";
+import { DuoRequests } from "../components/DuoRequests.js";
+import { EscalationCard, isColleagueEscalation } from "../components/EscalationCard.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { AutonomousSends } from "../components/AutonomousSends.js";
 import { ScheduledSends } from "../components/ScheduledSends.js";
 import { corpusSentence, lastImportSentence } from "../profile/knowledgeWords.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
-import { useWaitingItems } from "./waiting.js";
+import { useHeldRooms, useWaitingItems } from "./waiting.js";
 
 /**
  * The pane beside the "Waiting on you" list (`#waiting`): what the queue is,
@@ -23,7 +25,11 @@ import { useWaitingItems } from "./waiting.js";
  */
 export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; connection?: WorkspaceConnection | null }) {
   const waiting = useWaitingItems(api, connection);
-  const knowledge = useKnowledge(api, { enabled: !waiting.isLoading && waiting.count === 0 });
+  // #315: colleagues asking to talk to your duo wait here too, decided in place.
+  const requests = useDuoRequests(api);
+  const requestCount = requests.data?.length ?? 0;
+  const rooms = useHeldRooms(connection);
+  const knowledge = useKnowledge(api, { enabled: !waiting.isLoading && waiting.count === 0 && requestCount === 0 });
 
   if (waiting.isLoading) {
     return <RouteLoading />;
@@ -31,7 +37,9 @@ export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; con
   if (waiting.error) {
     return <RouteError api={api} error={waiting.error} onRetry={waiting.refetch} />;
   }
-  if (waiting.count === 0) {
+  // #314: every colleague's question your duo passed to you, with everything — answered right here.
+  const escalations = waiting.items.flatMap((item) => item.drafts).filter(isColleagueEscalation);
+  if (waiting.count === 0 && requestCount === 0) {
     const known = knowledge.data;
     return (
       <div className="p-6" data-testid="waiting-home-empty">
@@ -56,22 +64,34 @@ export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; con
       </div>
     );
   }
-  const oldest = waiting.items[0]!;
+  const oldest = waiting.items[0];
   return (
     <div className="flex max-w-xl flex-col gap-3 p-6" data-testid="waiting-home">
       <AutonomousSends api={api} />
       <h1 className="type-heading">Waiting on you</h1>
-      <p className="type-body text-[var(--muted)]">
-        {waiting.count === 1 ? "One decision is waiting on you." : `${waiting.count} decisions are waiting on you.`} They are decided in the chat
-        they belong to, oldest first. J and K move between them.
-      </p>
-      <a
-        className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] bg-[var(--accent)] px-3 type-body text-[var(--bg)]"
-        data-testid="waiting-home-start"
-        href={oldest.href}
-      >
-        Start with the oldest
-      </a>
+      <DuoRequests api={api} />
+      {oldest !== undefined && (
+        <>
+          <p className="type-body text-[var(--muted)]">
+            {waiting.count === 1 ? "One decision is waiting on you." : `${waiting.count} decisions are waiting on you.`} They are decided in the chat
+            they belong to, oldest first. J and K move between them.
+          </p>
+          <a
+            className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] bg-[var(--accent)] px-3 type-body text-[var(--bg)]"
+            data-testid="waiting-home-start"
+            href={oldest.href}
+          >
+            Start with the oldest
+          </a>
+        </>
+      )}
+      {escalations.length > 0 && (
+        <section aria-label="Questions your duo passed to you" className="flex flex-col gap-3" data-testid="waiting-home-escalations">
+          {escalations.map((draft) => (
+            <EscalationCard api={api} connection={connection} draft={draft} key={draft.id} rooms={rooms} />
+          ))}
+        </section>
+      )}
       <ScheduledSends api={api} />
     </div>
   );

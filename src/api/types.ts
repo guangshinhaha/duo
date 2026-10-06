@@ -159,6 +159,13 @@ export interface DraftRecord {
   recipientAdaptation?: RecipientAdaptation | null;
   /** Who the draft is addressed to (digital-duo#262) — null when nobody was named. Optional for the same cache reason as the fields above. */
   recipient?: { id: string; name: string | null } | null;
+  /**
+   * #313/#314 (digital-duo): what the colleague who asked was told — null
+   * when no colleague asked. Optional for the cache-rehydration reason above.
+   */
+  publicOutcome?: "answered" | "passed_on" | "declined_refused" | null;
+  /** #314: why the question went to the owner, in the daemon's own words — set for a pass-on or a decline. */
+  passOnReason?: string | null;
 }
 
 // digital-duo #279 (issue #262): who a draft is addressed to, sent on
@@ -221,6 +228,21 @@ export interface VoiceAdaptationStatus {
   readonly features: RecipientVoiceFeatures | null;
   /** When the owner last reset this relationship's learned tone, or null if never. */
   readonly resetAt: string | null;
+}
+
+/**
+ * #315 (digital-duo #192): a colleague's request to talk to your duo — an
+ * invitation the daemon is holding until you decide. `reason` is the
+ * colleague's first message when their client carried it (the preview).
+ */
+export interface DuoRequest {
+  roomId: string;
+  inviterId: string | null;
+  name: string | null;
+  joinedMemberCount: number;
+  reason?: string | null;
+  direct?: boolean;
+  receivedAt: string;
 }
 
 /** One candidate among a hedged draft's alternatives (#257): its own text and confidence, citing the draft's one evidence pool. */

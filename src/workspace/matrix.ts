@@ -31,7 +31,7 @@ import {
 // pass folds visually-similar sequences, which is right for matching a
 // typed name and wrong for an id meant to resolve to one exact account.
 import { normalize } from "matrix-js-sdk/lib/utils";
-import { duoOwnerUserIdOf, localpartOf } from "./identity.js";
+import { duoOwnerUserIdOf, isDuoUserId, localpartOf } from "./identity.js";
 import { normalizeHomeserverUrl } from "../homeserver.js";
 import { markdownToHtml } from "./markdown.js";
 import {
@@ -180,6 +180,13 @@ export interface RoomSummary {
    * the live projection always sets it, empty when nobody's outstanding.
    */
   readonly invitedMembers?: readonly RoomMemberRef[];
+  /**
+   * #315: colleagues' duos that turned this conversation down — invited, then
+   * left by their own hand, with the reason they left on (when the owner
+   * declined, the daemon's fixed polite words; rendered verbatim). Absent
+   * when there are none, and on fixtures that predate the field.
+   */
+  readonly declinedDuos?: readonly { readonly userId: string; readonly reason: string | null }[];
   /**
    * #245: matrix-js-sdk's own generated name for this room (`room.name` —
    * heroes and the room summary, the exact thing `realRoomNameOf` below
@@ -1526,6 +1533,76 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
   return messages;
 }
 
+/** #315: the longest first message carried to a duo's owner as a preview — the request's gist, not the whole of a long one. */
+export const DUO_REQUEST_PREVIEW_MAX = 280;
+
+/**
+ * #315: "a colleague's first message to your duo waits for your OK." A duo
+ * joins only when its owner allows the invitation (digital-duo #192), so a
+ * colleague's first words land in a room the duo isn't in yet — and its
+ * owner, deciding, would see nothing of what was asked. This carries those
+ * words on the invitation itself: the colleague's own client invites the
+ * duo again, the same membership with its spec `reason` set to the message
+ * (an invite to someone already invited is allowed by the room's auth
+ * rules — only a joined or banned target is refused). The daemon reads the
+ * reason as the request's preview.
+ *
+ * Only for exactly that shape — a room whose one other party is a duo still
+ * invited, and this member's first text in it — and best-effort: the
+ * message itself already went, and a server that refuses the re-invite
+ * costs only the preview, never the conversation.
+ */
+async function carryFirstMessageToWaitingDuo(client: MatrixClient, selfId: string, roomId: string, body: string): Promise<void> {
+  const room = client.getRoom(roomId);
+  if (!room) {
+    return;
+  }
+  const others = room.getMembers().filter((member) => member.userId !== selfId && (member.membership === "join" || member.membership === "invite"));
+  const duo = others.length === 1 ? others[0]! : null;
+  if (duo === null || duo.membership !== "invite" || !isDuoUserId(duo.userId)) {
+    return;
+  }
+  const mineSoFar = room
+    .getLiveTimeline()
+    .getEvents()
+    .filter((event) => event.getType() === EventType.RoomMessage && event.getSender() === selfId && event.getContent()?.msgtype === MsgType.Text);
+  // The message just sent is (usually) already on the timeline as its echo; anything more is not a first message.
+  if (mineSoFar.length > 1) {
+    return;
+  }
+  const words = body.trim();
+  if (words.length === 0) {
+    return;
+  }
+  const preview = words.length > DUO_REQUEST_PREVIEW_MAX ? `${words.slice(0, DUO_REQUEST_PREVIEW_MAX - 1)}…` : words;
+  try {
+    await client.invite(roomId, duo.userId, preview);
+  } catch {
+    // The preview is a courtesy to the owner; the message stands without it.
+  }
+}
+
+/**
+ * #315: the duos that turned down this member's invitation — a duo-shaped
+ * member whose membership went from `invite` to `leave` by its own hand,
+ * with the reason it left on (the daemon's fixed, polite words when its
+ * owner declined). Only duos: a person declining is their own business and
+ * nothing this surface narrates.
+ */
+function declinedDuosOf(room: MatrixRoom): readonly { readonly userId: string; readonly reason: string | null }[] {
+  return room
+    .getMembers()
+    .filter((member) => member.membership === "leave" && isDuoUserId(member.userId))
+    .flatMap((member) => {
+      const event = member.events.member;
+      if (!event || event.getSender() !== member.userId || event.getPrevContent()?.membership !== "invite") {
+        return [];
+      }
+      const reason = event.getContent()?.reason;
+      return [{ userId: member.userId, reason: typeof reason === "string" && reason.trim() !== "" ? reason.trim() : null }];
+    });
+}
+
 /**
  * The room ids the account's own `m.direct` data marks direct — DM-ness is
  * the account's record of the conversation, not a guess from member counts
@@ -1814,6 +1891,7 @@ async function projectRoom(
   const avatarContent = room.currentState?.getStateEvents(EventType.RoomAvatar, "")?.getContent() as { url?: unknown } | undefined;
   const members = await projectMemberRefs(client, room, selfId, "join", ownerNameCache, askServer);
   const invitedMembers = await projectMemberRefs(client, room, selfId, "invite", ownerNameCache, askServer);
+  const declinedDuos = declinedDuosOf(room);
   return {
     roomId: room.roomId,
     kind: roomKindOf(direct, room.getJoinRule()),
@@ -1826,6 +1904,7 @@ async function projectRoom(
     avatarUrl: typeof avatarContent?.url === "string" && avatarContent.url !== "" ? avatarContent.url : null,
     members,
     invitedMembers,
+    ...(declinedDuos.length > 0 ? { declinedDuos } : {}),
     generatedName: generatedNameOf(room),
     latest: latestText
       ? { at: latestText.getTs(), body: String(latestText.getContent()?.body ?? ""), senderId: latestText.getSender() ?? undefined }
@@ -2435,6 +2514,9 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         replyToEventId: replyToEventId ?? null,
       });
       await sendTrackedMessage(client, session, roomId, body, mentions, replyToEventId ?? null, txnId);
+      // #315: a first message to a colleague's duo that hasn't been let in
+      // yet travels with the request itself, so its owner sees what is asked.
+      await carryFirstMessageToWaitingDuo(client, session.userId, roomId, body);
     },
     // The share path (#66): upload bytes, then send the message that
     // references them. Both are homeserver operations on the member's own

@@ -101,6 +101,10 @@ describe("App — the query cache never leaks across a reconnect to a different 
       if (url.includes("/drafts?limit=")) {
         return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
       }
+      // #315: the shell also polls colleagues' requests to talk to the duo — answered on its own too.
+      if (url.includes("/workspace/invites")) {
+        return Promise.resolve(new Response(JSON.stringify({ invites: [] }), { status: 200 }));
+      }
       if (url.includes("daemon-a")) {
         return Promise.resolve(new Response(JSON.stringify([draftFor("A")]), { status: 200 }));
       }

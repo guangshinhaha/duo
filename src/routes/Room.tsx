@@ -26,6 +26,8 @@ import { readFactCheckPref } from "../factCheckPrefs.js";
 import type { RoomMemberRef, RoomMessage, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
+import { duoConversationOf, questionOutcomes, questionOutcomeWords, type QuestionOutcome } from "../workspace/duoConversation.js";
+import { DuoConversationBanner } from "../components/DuoConversationBanner.js";
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
 import { messagePermalink, roomHref, threadHref } from "../workspace/links.js";
 import { firstLinkOf } from "../workspace/linkPreview.js";
@@ -345,6 +347,13 @@ export function Room({
 
   const room = rooms.data?.find((candidate) => candidate.roomId === roomId);
   const roomName = room ? roomTitle(room) : roomId;
+  // #313: a conversation with a colleague's duo says so, persistently, and
+  // each question in it says what became of it.
+  const duoConversation = room ? duoConversationOf(room, connection?.userId ?? null) : null;
+  const outcomes = useMemo(
+    () => (duoConversation === null ? null : questionOutcomes(timeline.data ?? [], duoConversation.duoUserId)),
+    [duoConversation?.duoUserId, timeline.data],
+  );
 
   // Reading is an account-level fact: receipt the room's latest event once
   // the timeline is in hand, then let the list re-read the server's
@@ -681,6 +690,7 @@ export function Room({
         <h1 className="min-w-0 truncate type-heading">{roomName}</h1>
         <InfoButton />
       </header>
+      {duoConversation !== null && <DuoConversationBanner conversation={duoConversation} />}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {/* #211: a page on its way up top. Floats over the transcript rather
             than sitting in its flow: a line appearing above the member's place
@@ -757,6 +767,9 @@ export function Room({
                         roomId={roomId}
                         refresh={refresh}
                         conversation={timeline.data}
+                        questionOutcome={
+                          duoConversation === null ? null : questionOutcomeLine(outcomes?.get(message.eventId), duoConversation.ownerLabel)
+                        }
                         onDelete={(message) => {
                           setDeleteError(null);
                           setDeleteTarget(message);
@@ -898,12 +911,15 @@ export function MessageBody({
   loadMedia,
   getUrlPreview,
   conversation = [],
+  questionOutcome = null,
   onToggleReaction,
   onRetry,
   onCancel,
   onJumpToReply,
 }: {
   message: RoomMessage;
+  /** #313: what became of this question to a colleague's duo — answered, passed on, declined. */
+  questionOutcome?: QuestionOutcomeLine | null;
   /** The member's own authenticated fetch of a shared file's bytes — the connection's, passed down so this stays a pure render. */
   loadMedia: (url: string) => Promise<Blob | null>;
   /** #219: the connection's own link-preview fetch — passed down for the same reason `loadMedia` is: this stays a pure render, never its own door to the SDK. */
@@ -1003,6 +1019,11 @@ export function MessageBody({
       )}
       <p className="type-provenance text-[var(--faint)]">
         <Timestamp iso={new Date(message.originServerTs).toISOString()} />
+        {questionOutcome !== null && (
+          <span className="ml-1" data-outcome={questionOutcome.outcome} data-testid="room-question-outcome">
+            · {questionOutcome.words}
+          </span>
+        )}
         {message.edited && (
           <span className="ml-1" data-testid="room-message-edited">
             (edited)
@@ -1076,6 +1097,16 @@ export function MessageBody({
  * `useLongPress`'s gesture) — reachable without the gesture too, by a
  * keyboard, through a trigger that's invisible until it's focused.
  */
+/** #313: one question's outcome, as the row shows it — null for a message that isn't a question to the duo. */
+export interface QuestionOutcomeLine {
+  readonly outcome: QuestionOutcome;
+  readonly words: string;
+}
+
+function questionOutcomeLine(outcome: QuestionOutcome | undefined, ownerLabel: string): QuestionOutcomeLine | null {
+  return outcome === undefined ? null : { outcome, words: questionOutcomeWords(outcome, ownerLabel) };
+}
+
 export function RoomEntry({
   message,
   focused = false,
@@ -1084,6 +1115,7 @@ export function RoomEntry({
   roomId,
   refresh,
   conversation,
+  questionOutcome = null,
   onDelete,
   onReply,
   onJumpToReply,
@@ -1098,6 +1130,8 @@ export function RoomEntry({
   roomId: string;
   refresh: () => void;
   conversation: readonly RoomMessage[];
+  /** #313: in a conversation with a colleague's duo, what became of this question. */
+  questionOutcome?: QuestionOutcomeLine | null;
   onDelete: (message: RoomMessage) => void;
   /** #215: starts a reply to this message — the composer takes it from here. */
   onReply?: (message: RoomMessage) => void;
@@ -1219,6 +1253,7 @@ export function RoomEntry({
       loadMedia={connection.loadMedia}
       getUrlPreview={connection.getUrlPreview}
       conversation={conversation}
+      questionOutcome={questionOutcome}
       onToggleReaction={(target, key, mine) =>
         run(mine ? connection.unreact(roomId, target.eventId, key) : connection.react(roomId, target.eventId, key))
       }

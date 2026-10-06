@@ -50,6 +50,22 @@ export async function notifyConfirmationWaiting(): Promise<void> {
 }
 
 /**
+ * #315: a colleague asked to talk to your duo, and it waits for your OK.
+ * Says who, never what they asked — the words belong on the request itself,
+ * where Allow and Decline are. The click opens Waiting on you, where the
+ * request is listed; do-not-disturb holds it like any of the duo's acts.
+ */
+export async function notifyDuoRequest(asker: string | null): Promise<void> {
+  const body = asker === null ? "A colleague wants to ask your duo something. It waits for your OK." : `${asker} wants to ask your duo something. It waits for your OK.`;
+  const hash = "#waiting";
+  if (isDndActive(readDndPrefs(), new Date())) {
+    recordMissed({ at: Date.now(), body, hash });
+    return;
+  }
+  await postNotification(body, hash);
+}
+
+/**
  * #69 AC3: the duo's own acts carry their own words. An escalation and a
  * refusal each say what happened, in a category no message or draft copy
  * occupies; a plain draft is none of the duo's own acts — null, so the

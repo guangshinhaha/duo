@@ -3584,6 +3584,98 @@ describe("the seam stays the SDK's only door", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("#315: a first message to a duo still waiting on its owner's OK rides the invitation as its preview", async () => {
+    const duoRoom = summaryRoom({
+      roomId: "!ask:workspace.example",
+      name: null,
+      joinRule: "invite",
+      members: [{ userId: "@duo-carol:workspace.example", name: null, membership: "invite" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [fakeEvent({ type: "m.room.message", sender: SESSION.userId, msgtype: "m.text", body: "What's our refund policy?", ts: 1 })],
+    });
+    const client = fakeClient({ rooms: [duoRoom] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.send("!ask:workspace.example", "What's our refund policy?");
+    expect(client.invite).toHaveBeenCalledWith("!ask:workspace.example", "@duo-carol:workspace.example", "What's our refund policy?");
+  });
+
+  it("#315: no preview once the duo is in, for a person, or after the first message", async () => {
+    const joined = summaryRoom({
+      roomId: "!ask:workspace.example",
+      name: null,
+      joinRule: "invite",
+      members: [{ userId: "@duo-carol:workspace.example", name: null }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+    });
+    const person = summaryRoom({
+      roomId: "!dm:workspace.example",
+      name: null,
+      joinRule: "invite",
+      members: [{ userId: "@carol:workspace.example", name: "Carol", membership: "invite" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+    });
+    const second = summaryRoom({
+      roomId: "!again:workspace.example",
+      name: null,
+      joinRule: "invite",
+      members: [{ userId: "@duo-carol:workspace.example", name: null, membership: "invite" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [
+        fakeEvent({ type: "m.room.message", sender: SESSION.userId, msgtype: "m.text", body: "first", ts: 1 }),
+        fakeEvent({ type: "m.room.message", sender: SESSION.userId, msgtype: "m.text", body: "second", ts: 2 }),
+      ],
+    });
+    for (const room of [joined, person, second]) {
+      const client = fakeClient({ rooms: [room] });
+      vi.mocked(createClient).mockReturnValue(client);
+      const connection = await connectPrepared(client);
+      await connection.send(room.roomId, "hello");
+      expect(client.invite).not.toHaveBeenCalled();
+    }
+  });
+
+  it("#315: a duo that turned the invitation down is projected with the words it left on", async () => {
+    const base = summaryRoom({
+      roomId: "!ask:workspace.example",
+      name: null,
+      joinRule: "invite",
+      members: [],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+    });
+    const declined = {
+      userId: "@duo-carol:workspace.example",
+      name: null,
+      rawDisplayName: null,
+      membership: "leave",
+      powerLevel: 0,
+      events: {
+        member: {
+          getSender: () => "@duo-carol:workspace.example",
+          getPrevContent: () => ({ membership: "invite" }),
+          getContent: () => ({ membership: "leave", reason: "Thanks for reaching out. carol's duo won't be answering in this conversation." }),
+        },
+      },
+    };
+    const room = { ...base, getMembers: () => [declined] } as unknown as Room;
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const [summary] = await connection.rooms();
+    expect(summary?.declinedDuos).toEqual([
+      { userId: "@duo-carol:workspace.example", reason: "Thanks for reaching out. carol's duo won't be answering in this conversation." },
+    ]);
+  });
+
   it("no module in the share path imports the daemon's api — sharing is not importing, structurally (#66)", () => {
     // The modules a share touches, from the pick to the wire: the policy,
     // the seam, the card, and the two routes that render or compose one.

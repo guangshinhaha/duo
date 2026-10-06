@@ -201,6 +201,20 @@ message — including its permissions outcomes (passed on, declined), which
 render in the daemon's own words, verbatim, never paraphrased into
 something friendlier.
 
+### request
+
+A colleague's first message to your duo, waiting for your OK (#315): a duo
+joins a conversation only when its owner allows it (digital-duo #192), so
+the request lists who asked and, when their client carried it, what they
+asked. The verbs are **Allow**, **Allow and always allow {name}** (one-to-one
+conversations only — a group is always a fresh decision) and **Decline**,
+which tells the colleague in the daemon's own fixed, polite words. On the
+asker's side the conversation says "Waiting for {owner}'s OK" until then.
+A conversation with a colleague's duo always carries "{owner}'s duo —
+answers within limits {owner} set." (#313), and each question in it reads
+its outcome: answered, passed to {owner} (waiting on them, then replied), or
+declined.
+
 ### channel
 
 An outside system bridged into the duo — the daemon's word, and the core's
