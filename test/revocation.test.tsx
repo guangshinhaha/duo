@@ -59,6 +59,8 @@ function goHash(hash: string): void {
 describe("#41 — a revoked token returns to Setup; an unreachable daemon is not a 401", () => {
   beforeEach(() => {
     localStorage.clear();
+    // #260: Send posts at once here; the undo window is UndoSend.test.tsx's.
+    localStorage.setItem("duo.undo-send", "0");
     window.location.hash = "";
   });
   afterEach(() => {

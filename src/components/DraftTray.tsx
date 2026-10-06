@@ -9,10 +9,12 @@ import { AlternativeStepper, ShapeChips, standingShape, useFlipSwipe } from "./D
 import { DuoLine } from "./DuoLine.js";
 import { EditDiff } from "./EditDiff.js";
 import { MutationError } from "./MutationError.js";
+import { SendLaterMenu, SendWindow, scheduledWords } from "./SendControls.js";
 import { StructuredText } from "./StructuredText.js";
 import { Timestamp } from "./Timestamp.js";
 import { useDraftDecision } from "./useDraftDecision.js";
 import { WhyButton } from "./WhyButton.js";
+import { useLongPress } from "../shell/useLongPress.js";
 
 /** What the attribution line says the draft is doing, in the vocabulary's words. */
 function stateWords(state: HairlineState): string {
@@ -106,8 +108,14 @@ export function DraftTray({
   const busy = shape.isPending || undoShape.isPending;
   // Which alternative was on screen is what Send records (#257); a single
   // draft names none, so its outcome body is exactly what it always was.
+  // #260: through the undo window — nothing is posted until it ends.
   const decide = (outcome: SettableDraftOutcome, sentText?: string) =>
-    d.recordOutcome.mutate({ draftId: draft.id, outcome, ...(sentText !== undefined ? { sentText } : {}), ...(multiple ? { alternative: index } : {}) });
+    d.send({ draftId: draft.id, outcome, ...(sentText !== undefined ? { sentText } : {}), ...(multiple ? { alternative: index } : {}) });
+  // #261: the Send-later menu — opened from its ▸, by ⌘⇧⏎, or by a long press on Send (phone). Not offered for a
+  // draft with alternatives yet: a held send carries no alternative, so the daemon could only send the first.
+  const [laterOpen, setLaterOpen] = useState(false);
+  const canSendLater = !d.selfAsked && !passedOn && !draft.refused && !multiple;
+  const longPress = useLongPress(() => setLaterOpen(true), canSendLater && d.reachable);
   const flip = (direction: 1 | -1) => {
     if (!multiple || d.editing || busy) {
       return;
@@ -121,7 +129,13 @@ export function DraftTray({
       return;
     }
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || d.editing || d.ignoring) {
+      // #261: ⌘⇧⏎ (Ctrl+Shift+Enter) opens Send later.
+      if (e.key === "Enter" && e.shiftKey && (e.metaKey || e.ctrlKey) && canSendLater && d.reachable && d.sendingUntil === null) {
+        e.preventDefault();
+        setLaterOpen(true);
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey || d.editing || d.ignoring || d.sendingUntil !== null) {
         return;
       }
       if (e.key === "Enter" && !passedOn) {
@@ -154,7 +168,7 @@ export function DraftTray({
       : null;
   const unsent = !d.selfAsked && !draft.refused && !passedOn;
   // #258: shaping is for a draft still waiting on the owner, with words on it.
-  const shapeable = !draft.refused && !passedOn && draft.outcome === null && !d.editing && !d.ignoring;
+  const shapeable = !draft.refused && !passedOn && draft.outcome === null && !d.editing && !d.ignoring && d.sendingUntil === null;
   const undoable = standingShape(draft.shapes, index);
 
   return (
@@ -223,6 +237,7 @@ export function DraftTray({
                   d.setEditing(false);
                 }
               }}
+              readOnly={d.sendingUntil !== null}
               rows={4}
               value={d.editedText}
             />
@@ -292,6 +307,12 @@ export function DraftTray({
           </p>
           </>
         )
+      ) : d.sendingUntil !== null ? (
+        <SendWindow onUndo={d.undoSend} until={d.sendingUntil} />
+      ) : d.scheduleSend.isSuccess ? (
+        <p className="type-provenance text-[var(--muted)]" data-testid="scheduled-confirmation">
+          {scheduledWords(d.scheduleSend.data.sendAt)} Your duo sends it then, even if this app is closed.
+        </p>
       ) : d.ignoring ? (
         // #24: the undo window. The dismissal has NOT been recorded — the tray says so, because held vs. sent is the whole point of the window.
         // guangshinhaha/duo#259: the same window also carries an optional,
@@ -366,9 +387,19 @@ export function DraftTray({
                 disabled={!d.editedText.trim() || d.recordOutcome.isPending || !d.reachable}
                 onClick={() => (d.editChanged ? decide("edited", d.editedText.trim()) : decide("sent"))}
                 type="button"
+                {...longPress}
               >
                 {d.editChanged ? (d.selfAsked ? "Keep edited" : "Send edited") : d.selfAsked ? "Keep" : "Send"}
               </button>
+              {canSendLater && (
+                <SendLaterMenu
+                  api={api}
+                  disabled={!d.editedText.trim() || d.recordOutcome.isPending || d.scheduleSend.isPending || !d.reachable}
+                  onOpenChange={setLaterOpen}
+                  onPick={d.sendLater}
+                  open={laterOpen}
+                />
+              )}
               <button
                 className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
                 onClick={() => {
@@ -387,10 +418,20 @@ export function DraftTray({
                 disabled={d.recordOutcome.isPending || !d.reachable || busy}
                 onClick={() => decide("sent")}
                 type="button"
+                {...longPress}
               >
                 {d.selfAsked ? "Keep" : "Send"}
                 {keyboard && <kbd aria-hidden="true" className="hidden type-identifier opacity-70 md:inline">⏎</kbd>}
               </button>
+              {canSendLater && (
+                <SendLaterMenu
+                  api={api}
+                  disabled={d.recordOutcome.isPending || d.scheduleSend.isPending || !d.reachable || busy}
+                  onOpenChange={setLaterOpen}
+                  onPick={d.sendLater}
+                  open={laterOpen}
+                />
+              )}
               <button
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
                 onClick={() => d.setEditing(true)}
@@ -415,6 +456,7 @@ export function DraftTray({
       )}
       <MutationError error={d.recordOutcome.error} />
       <MutationError error={d.answerEscalation.error} />
+      <MutationError error={d.scheduleSend.error} />
       <MutationError error={shape.error} />
       <MutationError error={undoShape.error} />
     </section>

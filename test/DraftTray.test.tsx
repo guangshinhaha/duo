@@ -300,3 +300,9 @@ describe("#142 — the keyboard decides it, only when asked and only when nothin
     expect(posted()).toEqual([]);
   });
 });
+
+// #260: these tests predate the undo-send window and decide a draft the moment Send is tapped — the
+// window itself (on by default) is covered in UndoSend.test.tsx. Registered last, after any localStorage.clear().
+beforeEach(() => {
+  localStorage.setItem("duo.undo-send", "0");
+});

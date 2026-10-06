@@ -67,6 +67,8 @@ function mountApp(draft: DraftRecord | undefined, hash: string): { fetchMock: Re
 describe("#25 — open a single draft", () => {
   beforeEach(() => {
     localStorage.clear();
+    // #260: deciding here is immediate in these tests; the undo window is UndoSend.test.tsx's.
+    localStorage.setItem("duo.undo-send", "0");
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -131,3 +133,4 @@ describe("#25 — open a single draft", () => {
     await waitFor(() => expect(screen.getByText("Nothing waiting on you.")).toBeInTheDocument());
   });
 });
+

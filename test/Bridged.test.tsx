@@ -230,3 +230,9 @@ describe("#150 — a bridged question in the chat list and in its own chat", () 
     expect(await screen.findByTestId("bridged-not-found")).toHaveTextContent("isn’t in your duo’s recent questions");
   });
 });
+
+// #260: these tests predate the undo-send window and decide a draft the moment Send is tapped — the
+// window itself (on by default) is covered in UndoSend.test.tsx. Registered last, after any localStorage.clear().
+beforeEach(() => {
+  localStorage.setItem("duo.undo-send", "0");
+});

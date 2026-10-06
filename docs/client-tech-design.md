@@ -120,6 +120,11 @@ domain types.
 | `POST` | `/drafts/:id/answer` | `{ candidateId: string }` | `drafting/standing-order-candidates` |
 | `POST` | `/drafts/:id/shape` | `DraftRecord` — `{ instruction: "shorter" \| "warmer" \| "more_formal" \| "more_direct", alternative? }` regenerates that candidate over its own sources, logged as a shape (#258); no `draft-ready` push | `drafting/shape` |
 | `POST` | `/drafts/:id/shape/undo` | `DraftRecord` — `{ alternative? }` puts back the text the latest standing shape replaced; 409 when there is none (#258) | `drafting/draft-log` |
+| `POST` | `/drafts/:id/schedule` | `ScheduledSend` (201) — body `{ outcome?, sentText?, sendAt }` or `{ at: "working-hours" }`; the daemon holds it and fires it through the outcome seam at its time (#261) | `drafting/scheduled-sends` |
+| `DELETE` | `/drafts/:id/schedule` | 204 — the hold is cancelled and the draft is waiting again (#261) | `drafting/scheduled-sends` |
+| `GET` | `/scheduled-sends` | `ScheduledSend[]` with each `draft` — held drafts are left out of `GET /drafts?outcome=pending` (#261) | `drafting/scheduled-sends` |
+| `GET` | `/settings/working-hours` | `WorkingHours` plus `nextStart` (#261) | `drafting/scheduled-sends` |
+| `PUT` | `/settings/working-hours` | `WorkingHours` plus `nextStart` (#261) | `drafting/scheduled-sends` |
 | `GET` | `/review?status=` | the merged queue's rows — draft edits *and* standing-order candidates, each tagged `source` (#166) | `corrections/review` |
 | `POST` | `/review/:id/approve` | `{ candidate, result }` (#173) | `corrections/review` |
 | `POST` | `/review/:id/reject` | `{ candidate }` (#173) | `corrections/review` |

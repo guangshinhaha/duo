@@ -612,8 +612,10 @@ describe("#68 AC4 — dispositioning from the conversation, with Waiting on you 
     const drafts = await screen.findByTestId("room-drafts");
 
     // Plain words first; the daemon's own reasoning is one tap away, behind Why? (#185).
-    expect(await within(drafts).findByTestId("draft-tray-words")).toHaveTextContent("passing it to you");
-    fireEvent.click(within(drafts).getByTestId("tray-why"));
+    const words = await within(drafts).findByTestId("draft-tray-words");
+    expect(words).toHaveTextContent("passing it to you");
+    // Scoped to the escalation's own tray: a previous test's persisted cache can land a second draft in this room.
+    fireEvent.click(within(words.closest("[data-testid='draft-tray']") as HTMLElement).getByTestId("tray-why"));
     expect(await screen.findByTestId("escalation-reason")).toHaveTextContent("No rule covers refunds over 90 days.");
   });
 });
@@ -726,4 +728,10 @@ describe("#186 review — the draft is where the owner will see it", () => {
     await screen.findByTestId("room-timeline");
     expect(screen.queryByTestId("draft-tray")).toBeNull();
   });
+});
+
+// #260: these tests predate the undo-send window and decide a draft the moment Send is tapped — the
+// window itself (on by default) is covered in UndoSend.test.tsx. Registered last, after any localStorage.clear().
+beforeEach(() => {
+  localStorage.setItem("duo.undo-send", "0");
 });
