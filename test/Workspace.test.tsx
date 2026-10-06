@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, signIn } from "../src/workspace/matrix.js";
 import { workspaceSessionUrl } from "../src/api/hosted.js";
+import { workspaceCacheName } from "../src/workspace/cache.js";
+import { IDBFactory } from "fake-indexeddb";
 import type { ChannelSummary, LiveArrival, NotificationMode, RoomInvite, RoomMessage, RoomSummary, SharedFile, WorkspaceConnection, WorkspaceSession } from "../src/workspace/matrix.js";
 import { WorkspaceSignInDialog } from "../src/components/WorkspaceSignInDialog.js";
 import type { StagedShare } from "../src/workspace/sharing.js";
@@ -903,6 +905,60 @@ describe("#62 AC4 — signing out leaves nothing behind", () => {
       expect(localStorage.getItem("duo.workspace-session")).toBeNull();
     });
     expect(JSON.parse(localStorage.getItem("duo.api-config") ?? "null")).toEqual({ baseUrl: "http://100.64.1.5:7717", token: "tok" });
+  });
+});
+
+describe("#288 — the local cache goes with the account", () => {
+  /** Opens (creating) one IndexedDB database by name and closes it again. */
+  function createDatabase(factory: IDBFactory, name: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const request = factory.open(name);
+      request.onsuccess = () => {
+        request.result.close();
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  it("signing out deletes this account's cached rooms and messages from the device", async () => {
+    const factory = new IDBFactory();
+    vi.stubGlobal("indexedDB", factory);
+    try {
+      const mine = `matrix-js-sdk:${workspaceCacheName(SESSION)}`;
+      await createDatabase(factory, mine);
+      // Something else on this origin that is not a workspace cache is not ours to delete.
+      await createDatabase(factory, "unrelated-db");
+      seedSession();
+      seedPairing();
+      stubDaemonFetch();
+      vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+
+      await renderApp();
+      await screen.findByTestId("conversations-list");
+      expect((await factory.databases()).map((db) => db.name)).toContain(mine);
+      window.location.hash = "#settings/advanced";
+      window.dispatchEvent(new Event("hashchange"));
+      fireEvent.click(await screen.findByTestId("settings-sign-out"));
+
+      await waitFor(async () => expect((await factory.databases()).map((db) => db.name)).toEqual(["unrelated-db"]));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a stored sign-in the workspace refuses after a cached open says so, with the way out", async () => {
+    seedSession();
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ rooms: roomsFixture(), timelines: {} }).connection);
+
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    const options = vi.mocked(connect).mock.calls[0]![1]!;
+    act(() => options.onSessionRejected!());
+
+    expect(await screen.findByTestId("workspace-error")).toHaveTextContent("The workspace no longer accepts this sign-in.");
+    fireEvent.click(screen.getByTestId("workspace-error-sign-out"));
+    await waitFor(() => expect(localStorage.getItem("duo.workspace-session")).toBeNull());
   });
 });
 
@@ -3619,8 +3675,10 @@ describe("#127 — a hosted device connects by itself", () => {
     await renderApp();
 
     expect(await screen.findByTestId("conversations-list")).toBeInTheDocument();
-    // Exactly the stored session and nothing more — no hosted options ride along.
-    expect(vi.mocked(connect)).toHaveBeenCalledWith(SESSION);
+    // Exactly the stored session — no hosted options ride along; the one
+    // option is hearing a refused credential (#288: with a local cache the
+    // connection is up before the workspace has judged it).
+    expect(vi.mocked(connect)).toHaveBeenCalledWith(SESSION, { onSessionRejected: expect.any(Function) });
     expect(net.sessionCalls()).toEqual([]);
     expect(net.logoutCalls()).toEqual([]);
   });

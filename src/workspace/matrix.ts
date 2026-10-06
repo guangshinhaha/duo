@@ -4,6 +4,7 @@ import {
   Direction,
   EventStatus,
   EventType,
+  IndexedDBStore,
   MatrixError,
   Method,
   MsgType,
@@ -43,6 +44,7 @@ import {
   type MessagePart,
 } from "./mentions.js";
 import { isImageType, type StagedShare } from "./sharing.js";
+import { sweepWorkspaceCaches, workspaceCacheName, workspaceIndexedDB } from "./cache.js";
 
 /**
  * #62: the workspace seam — the one module this app has that speaks
@@ -58,11 +60,14 @@ import { isImageType, type StagedShare } from "./sharing.js";
  * its own user (`@duo-<owner>`, identity.ts) whose credentials are created
  * daemon-side and never leave the daemon.
  *
- * Nothing persists at the SDK layer, deliberately: every client this module
- * builds carries no store, no session store, and no web storage, so a
- * workspace session exists in exactly one place — this app's own credential
- * store (`session.ts`) — and signing out (#62 AC4) has no warm SDK state to
- * leave behind.
+ * No credential persists at the SDK layer: no client this module builds
+ * carries a session store or web storage, so a workspace session exists in
+ * exactly one place — this app's own credential store (`session.ts`, or
+ * memory for a hosted session). What does persist (#288) is the connected
+ * client's data cache — the SDK's `IndexedDBStore`, one database per account
+ * (`cache.ts`), holding rooms and recent messages but never a token — so a
+ * cold open draws the last-known conversations at once; signing out (#62
+ * AC4) deletes that database, so it still leaves nothing behind.
  */
 
 /** This device's workspace sign-in: who the member is, over which homeserver. */
@@ -1021,14 +1026,20 @@ function roomKindOf(direct: boolean, joinRule: string | undefined): RoomKind {
   return joinRule === "restricted" || joinRule === "public" ? "channel" : "group";
 }
 
-/** Resolves when the first sync completes — the room state the homeserver held (including what arrived while away) has caught up. */
-function firstPreparedSync(client: MatrixClient): Promise<void> {
+/**
+ * Resolves at the first PREPARED sync state. With no local cache that is the
+ * homeserver's first answer — the room state it held, including what arrived
+ * while away. With a local cache (#288) it is usually the cache itself, read
+ * back before the homeserver has answered: `fromCache` says which, and the
+ * caller knows a live sync is still to come.
+ */
+function firstPreparedSync(client: MatrixClient): Promise<{ fromCache: boolean }> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
       reject(new Error("The workspace didn't answer in time — check the address and try again."));
     }, FIRST_SYNC_TIMEOUT_MS);
-    const onSync = (state: SyncState, _previous: SyncState | null, data?: { error?: unknown }): void => {
+    const onSync = (state: SyncState, _previous: SyncState | null, data?: { error?: unknown; fromCache?: boolean }): void => {
       if (state === SyncState.Error && isTokenRejection(data?.error)) {
         // The sync stops itself on this answer and would never reach Prepared:
         // say so now instead of after the timeout.
@@ -1040,7 +1051,7 @@ function firstPreparedSync(client: MatrixClient): Promise<void> {
         return;
       }
       cleanup();
-      resolve();
+      resolve({ fromCache: data?.fromCache === true });
     };
     const cleanup = (): void => {
       clearTimeout(timer);
@@ -1529,7 +1540,7 @@ function directPartnerIdOf(room: MatrixRoom, selfId: string): string | null {
  * outstanding invite reads as a direct conversation just as readily as an
  * accepted one.
  */
-async function backfillMissingDirectRecords(client: MatrixClient, rooms: readonly MatrixRoom[]): Promise<Set<string>> {
+async function backfillMissingDirectRecords(client: MatrixClient, rooms: readonly MatrixRoom[], write = true): Promise<Set<string>> {
   const directIds = directRoomIdsOf(client);
   for (const room of rooms) {
     if (directIds.has(room.roomId) || room.getMyMembership() !== "join") {
@@ -1539,25 +1550,53 @@ async function backfillMissingDirectRecords(client: MatrixClient, rooms: readonl
     if (!partnerId) {
       continue;
     }
-    await writeDirectRoom(client, partnerId, room.roomId);
+    // #288: while the list is still the local cache, the room reads as
+    // direct but the record is not written — that waits for the live sync,
+    // so a cold open never waits on the network to draw the list.
+    if (write) {
+      await writeDirectRoom(client, partnerId, room.roomId);
+    }
     directIds.add(room.roomId);
   }
   return directIds;
 }
 
 /**
+ * #288: how long a read served from the local cache waits on a homeserver
+ * lookup (a room's membership, an owner's profile) before drawing with what
+ * it already has. Membership the cache holds comes back from IndexedDB well
+ * inside this; anything that has to cross the network waits for the live
+ * sync's refresh instead of holding up the cold open.
+ */
+const CACHED_LOOKUP_BUDGET_MS = 250;
+
+/**
  * Asks the SDK to load this room's membership if `lazyLoadMembers` (this
  * seam's `connect()`) left it unfetched — best-effort: a room whose
  * membership can't be loaded (offline, an older server) still renders with
- * whatever names are already known, never a blocked list.
+ * whatever names are already known, never a blocked list. With a `budgetMs`
+ * (#288: the list is still the local cache) it stops waiting after that long;
+ * the load itself carries on and the live sync's refresh reads its result.
  */
-async function ensureMembersLoaded(room: MatrixRoom): Promise<void> {
+async function ensureMembersLoaded(room: MatrixRoom, budgetMs?: number): Promise<void> {
+  // Best-effort: the names this call would have improved just stay
+  // whatever they already were.
+  let load: Promise<void>;
   try {
-    await room.loadMembersIfNeeded();
+    load = Promise.resolve(room.loadMembersIfNeeded()).then(
+      () => undefined,
+      () => undefined,
+    );
   } catch {
-    // Best-effort: the names this call would have improved just stay
-    // whatever they already were.
+    return;
   }
+  if (budgetMs === undefined) {
+    await load;
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([load, new Promise<void>((resolve) => (timer = setTimeout(resolve, budgetMs)))]);
+  clearTimeout(timer);
 }
 
 /**
@@ -1593,6 +1632,7 @@ async function ownerDisplayNameOf(
   room: MatrixRoom,
   ownerId: string,
   cache: Map<string, string | null>,
+  askServer = true,
 ): Promise<string | null> {
   const cached = cache.get(ownerId);
   if (cached !== undefined) {
@@ -1603,6 +1643,11 @@ async function ownerDisplayNameOf(
   if (fromRoom !== null) {
     cache.set(ownerId, fromRoom);
     return fromRoom;
+  }
+  if (!askServer) {
+    // #288: drawn from the local cache — the id grammar's label stands in
+    // until the live sync's refresh asks the workspace.
+    return null;
   }
   let name: string | null = null;
   try {
@@ -1628,6 +1673,7 @@ async function projectMemberRefs(
   selfId: string,
   membership: string,
   ownerNameCache: Map<string, string | null>,
+  askServer = true,
 ): Promise<readonly RoomMemberRef[]> {
   return Promise.all(
     room
@@ -1636,7 +1682,7 @@ async function projectMemberRefs(
       .map(async (member): Promise<RoomMemberRef> => {
         const name = nonIdName(member.rawDisplayName ?? member.name, member.userId) ?? localpartOf(member.userId);
         const ownerId = duoOwnerUserIdOf(member.userId);
-        const ownerName = ownerId === null ? null : await ownerDisplayNameOf(client, room, ownerId, ownerNameCache);
+        const ownerName = ownerId === null ? null : await ownerDisplayNameOf(client, room, ownerId, ownerNameCache, askServer);
         return ownerName === null ? { userId: member.userId, name } : { userId: member.userId, name, ownerName };
       }),
   );
@@ -1671,14 +1717,15 @@ async function projectRoom(
   direct: boolean,
   mode: NotificationMode,
   ownerNameCache: Map<string, string | null>,
+  askServer = true,
 ): Promise<RoomSummary> {
   const latestText = [...room.getLiveTimeline().getEvents()]
     .reverse()
     .find((event) => event.getType() === "m.room.message" && event.getContent()?.msgtype === MsgType.Text);
   const topicContent = room.currentState?.getStateEvents(EventType.RoomTopic, "")?.getContent() as { topic?: unknown } | undefined;
   const avatarContent = room.currentState?.getStateEvents(EventType.RoomAvatar, "")?.getContent() as { url?: unknown } | undefined;
-  const members = await projectMemberRefs(client, room, selfId, "join", ownerNameCache);
-  const invitedMembers = await projectMemberRefs(client, room, selfId, "invite", ownerNameCache);
+  const members = await projectMemberRefs(client, room, selfId, "join", ownerNameCache, askServer);
+  const invitedMembers = await projectMemberRefs(client, room, selfId, "invite", ownerNameCache, askServer);
   return {
     roomId: room.roomId,
     kind: roomKindOf(direct, room.getJoinRule()),
@@ -1836,41 +1883,148 @@ const ROOM_INFO_EVENT_TYPES = new Set<string>([EventType.RoomName, EventType.Roo
  * conversations are muted. A failed read answers "none known", the same
  * fallback `rooms()` always took, rather than a list that won't render.
  */
-async function mutedRoomIdsOf(client: MatrixClient): Promise<Set<string>> {
-  const pushRules = await client.getPushRules().catch(() => undefined);
+async function mutedRoomIdsOf(client: MatrixClient, cachedOnly = false): Promise<Set<string>> {
+  // #288: while the list is still the local cache, the rules are the copy
+  // the cached account data carried (`m.push_rules`), not a fresh ask — a
+  // live read is what keeps a just-changed mode honest once connected.
+  const pushRules = cachedOnly ? client.pushRules : await client.getPushRules().catch(() => undefined);
   return new Set(
     (pushRules?.global.room ?? []).filter((rule) => rule.enabled && rule.actions.length === 0).map((rule) => rule.rule_id),
   );
 }
 
-/** Hold the workspace connection for a stored session — resolves at the first completed sync, then serves rooms and timelines from it. */
+/**
+ * #288: a client over matrix-js-sdk's own `IndexedDBStore` — the room list,
+ * room state, membership and the recent timeline of every joined room,
+ * persisted per account (`workspaceCacheName`) so the next cold open reads it
+ * back before the homeserver answers, then catches up from the saved sync
+ * token. What it holds is bounded by the SDK, not by us: each room keeps its
+ * current state and at most its last 50 timeline events (the sync
+ * accumulator's `maxTimelineEntries`), a room this member leaves drops out
+ * entirely, and the store writes at most once every five minutes. A store
+ * that fails later (quota, a broken database) deletes itself and carries on
+ * in memory, which is the SDK's own "it's only a cache" rule.
+ *
+ * Deliberately no `localStorage`: given one, the SDK would also persist the
+ * filter id and this device's unsent messages under keys that name neither
+ * the account nor the device (`mx_pending_events_<room>`), so they would
+ * outlive a sign-out's wipe and be shared between accounts. Without it, an
+ * in-flight send (#209's local echo, `PendingEventOrdering.Detached`) lives
+ * in memory only — it never rests in the cache as if the server had it.
+ *
+ * Should the database not open at all, the client is rebuilt with no store:
+ * a missing cache is a slower open, never a broken one.
+ */
+async function cachedClient(
+  factory: IDBFactory,
+  session: WorkspaceSession,
+  clientOptions: { baseUrl: string; accessToken: string; userId: string },
+): Promise<{ client: MatrixClient; store: IndexedDBStore | null }> {
+  const store = new IndexedDBStore({ indexedDB: factory, dbName: workspaceCacheName(session) });
+  // The SDK's own order: the store is handed to the client, then started.
+  const client = createClient({ ...clientOptions, store });
+  try {
+    await store.startup();
+    return { client, store };
+  } catch {
+    void store.destroy().catch(() => undefined);
+    return { client: createClient(clientOptions), store: null };
+  }
+}
+
+/**
+ * Hold the workspace connection for a stored session — resolves at the first
+ * PREPARED sync, then serves rooms and timelines from it. With a local cache
+ * (#288) that is the cache, read back before the homeserver answers: the
+ * rooms and timelines are the last-known ones until the live sync catches
+ * up, at which point every subscriber hears every room once and re-reads.
+ */
 export async function connect(session: WorkspaceSession, options: ConnectOptions = {}): Promise<WorkspaceConnection> {
   // No `deviceId` on purpose, for a stored and a hosted session alike: the SDK
   // only needs one to start end-to-end encryption, which this client never
-  // does (no crypto, no store — see the header), and its sync and REST calls
+  // does (no crypto — see the header), and its sync and REST calls
   // are authorised by the access token alone.
-  const client = createClient({
+  const clientOptions = {
     baseUrl: session.homeserverUrl,
     accessToken: session.accessToken,
     userId: session.userId,
-  });
+  };
+  // #288: the local cache, where this environment has IndexedDB. Built before
+  // anything else awaits, and only then — with no IndexedDB the client is
+  // made and started in the same tick, exactly as before.
+  const factory = workspaceIndexedDB();
+  const { client, store } = factory ? await cachedClient(factory, session, clientOptions) : { client: createClient(clientOptions), store: null };
+  // Listening for a refused credential starts with the client, not after the
+  // first PREPARED: with a cache, that PREPARED can come before the
+  // homeserver has said anything, and its refusal must not slip between the
+  // two. Before the connection is handed over, a refusal only rejects the
+  // connect (below); after, it is the caller's to hear.
+  let handedOver = false;
+  let refusedEarly = false;
+  const onRejected = options.onSessionRejected;
+  const onRefusal = (state: SyncState, _previous: SyncState | null, data?: { error?: unknown }): void => {
+    if (state !== SyncState.Error || !isTokenRejection(data?.error)) {
+      return;
+    }
+    if (!handedOver) {
+      refusedEarly = true;
+      return;
+    }
+    client.off(ClientEvent.Sync, onRefusal);
+    onRejected?.();
+  };
+  if (onRejected) {
+    client.on(ClientEvent.Sync, onRefusal);
+  }
+  let fromCache: boolean;
   try {
-    await firstPreparedSync(client);
+    ({ fromCache } = await firstPreparedSync(client));
   } catch (error) {
     // A connect that fails leaves no half-started client polling behind it.
     client.stopClient();
+    void store?.destroy();
     throw error;
   }
-  if (options.onSessionRejected) {
-    const onRejected = options.onSessionRejected;
-    const onSync = (state: SyncState, _previous: SyncState | null, data?: { error?: unknown }): void => {
-      if (state === SyncState.Error && isTokenRejection(data?.error)) {
-        client.off(ClientEvent.Sync, onSync);
-        onRejected();
+  // #288: whether the live sync has caught up with what the cache showed.
+  // Until it has, reads draw only from what this device already holds (no
+  // lookup waits on the network), and nothing the catch-up delivers is a
+  // live arrival: a message that came in while the app was closed is news
+  // for the list, never a notification — the same as before there was a
+  // cache, when it arrived inside the first sync, before anyone listened.
+  let caughtUp = !fromCache;
+  const handlers = new Set<(roomId: string, arrival?: LiveArrival) => void>();
+  if (!caughtUp) {
+    const onLiveSync = (state: SyncState, _previous: SyncState | null, data?: { fromCache?: boolean }): void => {
+      if ((state !== SyncState.Prepared && state !== SyncState.Syncing) || data?.fromCache === true) {
+        return;
+      }
+      client.off(ClientEvent.Sync, onLiveSync);
+      caughtUp = true;
+      // Everything may have moved while the app was closed — unread counts
+      // read elsewhere, a mode changed on another device, a room left —
+      // and not all of it arrives as a timeline event. Every room is room
+      // news once, so every reader re-reads the live projection.
+      const roomIds = client
+        .getRooms()
+        .filter((room) => room.getMyMembership() === "join")
+        .map((room) => room.roomId);
+      for (const handler of handlers) {
+        roomIds.forEach((roomId) => handler(roomId));
       }
     };
-    client.on(ClientEvent.Sync, onSync);
+    client.on(ClientEvent.Sync, onLiveSync);
   }
+  handedOver = true;
+  if (refusedEarly && onRejected) {
+    client.off(ClientEvent.Sync, onRefusal);
+    queueMicrotask(onRejected);
+  }
+  // Any other account's cache on this device belongs to a session that has
+  // ended (only one is ever active): it goes, whether or not its own
+  // sign-out got to wipe it.
+  void sweepWorkspaceCaches(session);
+  /** Read from the local cache, not the homeserver: true until the live sync catches up. */
+  const servingCache = (): boolean => !caughtUp;
   return {
     renewToken: (accessToken) => {
       client.setAccessToken(accessToken);
@@ -1916,7 +2070,8 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       // one read for the whole list. The mode's audible half lives in each
       // room's own account data, which the sync already delivered with the
       // room.
-      const mutedIds = await mutedRoomIdsOf(client);
+      const cached = servingCache();
+      const mutedIds = await mutedRoomIdsOf(client, cached);
       const rooms = client
         .getRooms()
         // #214: a room this member has been invited to but not joined is not
@@ -1932,18 +2087,20 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       // so a real name — can still be unfetched the first time the list
       // reads a room. Asking for it here, before the names and avatars are
       // read off it, is what keeps a raw id from ever reaching the screen.
-      await Promise.all(rooms.map((room) => ensureMembersLoaded(room)));
-      const directIds = await backfillMissingDirectRecords(client, rooms);
+      await Promise.all(rooms.map((room) => ensureMembersLoaded(room, cached ? CACHED_LOOKUP_BUDGET_MS : undefined)));
+      const directIds = await backfillMissingDirectRecords(client, rooms, !cached);
       const ownerNameCache = new Map<string, string | null>();
       const projected = await Promise.all(
-        rooms.map((room) => projectRoom(client, room, session.userId, directIds.has(room.roomId), notificationModeOf(room, mutedIds.has(room.roomId)), ownerNameCache)),
+        rooms.map((room) =>
+          projectRoom(client, room, session.userId, directIds.has(room.roomId), notificationModeOf(room, mutedIds.has(room.roomId)), ownerNameCache, !cached),
+        ),
       );
       return projected.sort((a, b) => (b.lastActiveAt ?? b.latest?.at ?? Number.MIN_SAFE_INTEGER) - (a.lastActiveAt ?? a.latest?.at ?? Number.MIN_SAFE_INTEGER));
     },
     timeline: async (roomId) => {
       const room = client.getRoom(roomId);
       if (room) {
-        await ensureMembersLoaded(room);
+        await ensureMembersLoaded(room, servingCache() ? CACHED_LOOKUP_BUDGET_MS : undefined);
       }
       return timelineOf(client, roomId);
     },
@@ -1961,9 +2118,10 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
      */
     findRooms: async (query) => {
       const needle = normalize(query.trim());
-      const mutedIds = await mutedRoomIdsOf(client);
+      const cached = servingCache();
+      const mutedIds = await mutedRoomIdsOf(client, cached);
       const joined = client.getVisibleRooms().filter((room) => room.getMyMembership() === "join" && !room.isSpaceRoom());
-      const directIds = await backfillMissingDirectRecords(client, joined);
+      const directIds = await backfillMissingDirectRecords(client, joined, !cached);
       const matches = joined.filter((room) => {
         if (matchesQuery(room.normalizedName || room.name || "", needle)) {
           return true;
@@ -1977,10 +2135,12 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       });
       matches.sort((a, b) => b.getLastActiveTimestamp() - a.getLastActiveTimestamp());
       const top = matches.slice(0, ROOM_SEARCH_LIMIT);
-      await Promise.all(top.map((room) => ensureMembersLoaded(room)));
+      await Promise.all(top.map((room) => ensureMembersLoaded(room, cached ? CACHED_LOOKUP_BUDGET_MS : undefined)));
       const ownerNameCache = new Map<string, string | null>();
       return Promise.all(
-        top.map((room) => projectRoom(client, room, session.userId, directIds.has(room.roomId), notificationModeOf(room, mutedIds.has(room.roomId)), ownerNameCache)),
+        top.map((room) =>
+          projectRoom(client, room, session.userId, directIds.has(room.roomId), notificationModeOf(room, mutedIds.has(room.roomId)), ownerNameCache, !cached),
+        ),
       );
     },
     timelineAt: async (roomId, eventId) => {
@@ -2640,6 +2800,12 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         // Sender naming goes through membership the same door the timeline
         // projection's does, so the two can never disagree.
         let arrival: LiveArrival | undefined;
+        if (!caughtUp) {
+          // #288: the catch-up after a cold open from the cache — room news
+          // only (see `caughtUp` above), never a notification.
+          handler(room.roomId);
+          return;
+        }
         const content = event.getContent() as {
           msgtype?: string;
           body?: string;
@@ -2672,13 +2838,18 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       };
       client.on(RoomEvent.Timeline, listener);
       client.on(RoomEvent.LocalEchoUpdated, localEchoListener);
+      handlers.add(handler);
       return () => {
         client.off(RoomEvent.Timeline, listener);
         client.off(RoomEvent.LocalEchoUpdated, localEchoListener);
+        handlers.delete(handler);
       };
     },
     stop: async () => {
       await client.stopClient();
+      // #288: let go of the cache's database too, so a sign-out's wipe
+      // (`forgetWorkspaceCache`) is never left waiting on this connection.
+      await store?.destroy();
     },
   };
 }
