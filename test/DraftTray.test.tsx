@@ -162,6 +162,69 @@ describe("#142 — Send, Edit and Dismiss decide it, exactly as they did in Revi
     expect(posted()[0]?.body).toEqual({ outcome: "discarded" });
   });
 
+  // guangshinhaha/duo#259: an optional, skippable, one-tap reason.
+  it("the undo window also offers optional, skippable dismiss reasons — letting it lapse dismisses with no reason, same as before #259", async () => {
+    vi.useFakeTimers();
+    mount(<DraftTray api={api} draft={draft} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.getByTestId("dismiss-reason-row")).toBeInTheDocument();
+    expect(screen.getByTestId("dismiss-reason-wrong_facts")).toHaveTextContent("Wrong facts");
+    expect(screen.getByTestId("dismiss-reason-wrong_tone")).toHaveTextContent("Wrong tone");
+    expect(screen.getByTestId("dismiss-reason-shouldnt_answer")).toHaveTextContent("Shouldn't answer this");
+    expect(screen.getByTestId("dismiss-reason-will_handle_myself")).toHaveTextContent("I'll handle it myself");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IGNORE_UNDO_WINDOW_MS + 100);
+    });
+    expect(posted()[0]?.body).toEqual({ outcome: "discarded" });
+  });
+
+  it("picking a dismiss reason sends it immediately, in the same call, and ends the undo window", async () => {
+    mount(<DraftTray api={api} draft={draft} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    fireEvent.click(screen.getByTestId("dismiss-reason-wrong_tone"));
+    await waitFor(() => expect(posted()[0]?.body).toEqual({ outcome: "discarded", dismissReason: "wrong_tone" }));
+    expect(screen.queryByTestId("ignore-window")).toBeNull();
+  });
+
+  it("Undo during the window records nothing, reason included — the dismissal never happened", async () => {
+    vi.useFakeTimers();
+    mount(<DraftTray api={api} draft={draft} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.queryByTestId("dismiss-reason-row")).toBeNull();
+    act(() => void vi.advanceTimersByTime(IGNORE_UNDO_WINDOW_MS + 100));
+    expect(posted()).toEqual([]);
+  });
+
+  it("picking \"Shouldn't answer this\" offers a never-answer rule, honestly worded since #269 doesn't exist yet", async () => {
+    mount(<DraftTray api={api} draft={draft} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    fireEvent.click(screen.getByTestId("dismiss-reason-shouldnt_answer"));
+    await waitFor(() => expect(posted()[0]?.body).toEqual({ outcome: "discarded", dismissReason: "shouldnt_answer" }));
+    expect(screen.getByTestId("never-answer-offer")).toHaveTextContent("Add a never-answer rule for this?");
+
+    fireEvent.click(screen.getByTestId("never-answer-confirm"));
+    await waitFor(() => expect(screen.getByTestId("never-answer-noted")).toHaveTextContent("aren't available yet"));
+  });
+
+  it("\"No thanks\" on the never-answer offer just clears it — no call, nothing claimed", async () => {
+    mount(<DraftTray api={api} draft={draft} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    fireEvent.click(screen.getByTestId("dismiss-reason-shouldnt_answer"));
+    await waitFor(() => expect(screen.getByTestId("never-answer-offer")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("never-answer-skip"));
+    expect(screen.queryByTestId("never-answer-offer")).toBeNull();
+  });
+
+  it("a reason other than \"shouldn't answer this\" never offers a never-answer rule", async () => {
+    mount(<DraftTray api={api} draft={draft} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    fireEvent.click(screen.getByTestId("dismiss-reason-will_handle_myself"));
+    await waitFor(() => expect(posted()[0]?.body).toEqual({ outcome: "discarded", dismissReason: "will_handle_myself" }));
+    expect(screen.queryByTestId("never-answer-offer")).toBeNull();
+  });
+
   it("answering a passed-on question queues a standing-order candidate", async () => {
     mount(<DraftTray api={api} draft={passedOn} />);
     fireEvent.change(screen.getByRole("textbox", { name: /answer it yourself/i }), { target: { value: "No — use the change calendar." } });

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import type { DraftRecord } from "../api/types.js";
+import { DISMISS_REASONS, type DismissReason, type DraftRecord } from "../api/types.js";
 import { useArrival } from "../arrivals.js";
 import { toDraftPipelineResult } from "./DraftCard.js";
 import { hairlineState, type HairlineState } from "./ConfidenceHairline.js";
@@ -25,6 +25,14 @@ function stateWords(state: HairlineState): string {
       return "refused";
   }
 }
+
+/** guangshinhaha/duo#259: what each dismiss reason chip says, in the owner's own words — the daemon's wire value is a slug, not copy. */
+const DISMISS_REASON_WORDS: Record<DismissReason, string> = {
+  wrong_facts: "Wrong facts",
+  wrong_tone: "Wrong tone",
+  shouldnt_answer: "Shouldn't answer this",
+  will_handle_myself: "I'll handle it myself",
+};
 
 function isInteractive(target: EventTarget | null): boolean {
   const el = target as Partial<HTMLElement> | null;
@@ -207,15 +215,68 @@ export function DraftTray({
         )
       ) : d.ignoring ? (
         // #24: the undo window. The dismissal has NOT been recorded — the tray says so, because held vs. sent is the whole point of the window.
-        <div className="flex items-center gap-2" data-testid="ignore-window">
-          <span className="type-provenance text-[var(--muted)]">{d.selfAsked ? "Dismissing — not final yet." : "Dismissing — not sent yet."}</span>
-          <button
-            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
-            onClick={d.undoIgnore}
-            type="button"
-          >
-            Undo
-          </button>
+        // guangshinhaha/duo#259: the same window also carries an optional,
+        // skippable "why" — picking one records it in the same call that
+        // settles the dismissal (see useDraftDecision's chooseDismissReason),
+        // and ends the window immediately rather than waiting out the rest
+        // of it.
+        <div className="flex flex-col gap-2" data-testid="ignore-window">
+          <div className="flex items-center gap-2">
+            <span className="type-provenance text-[var(--muted)]">{d.selfAsked ? "Dismissing — not final yet." : "Dismissing — not sent yet."}</span>
+            <button
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
+              onClick={d.undoIgnore}
+              type="button"
+            >
+              Undo
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2" data-testid="dismiss-reason-row">
+            <span className="type-provenance text-[var(--faint)]">Why? (optional)</span>
+            {DISMISS_REASONS.map((reason) => (
+              <button
+                className="inline-flex min-h-8 items-center justify-center rounded-full border border-[var(--edge)] px-3 type-provenance text-[var(--muted)]"
+                data-testid={`dismiss-reason-${reason}`}
+                key={reason}
+                onClick={() => d.chooseDismissReason(reason)}
+                type="button"
+              >
+                {DISMISS_REASON_WORDS[reason]}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : d.neverAnswerOffer !== "hidden" ? (
+        // guangshinhaha/duo#259 → #269 (the trust epic's never-answer rule
+        // store, not yet built): an honest offer, not a fabricated one — see
+        // requestNeverAnswerRule's own doc comment for why tapping "Add rule"
+        // cannot yet say a rule was created.
+        <div className="flex flex-wrap items-center gap-2" data-testid="never-answer-offer">
+          {d.neverAnswerOffer === "pending" ? (
+            <>
+              <span className="type-provenance text-[var(--muted)]">Add a never-answer rule for this?</span>
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
+                data-testid="never-answer-confirm"
+                onClick={d.confirmNeverAnswerRule}
+                type="button"
+              >
+                Add rule
+              </button>
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)]"
+                data-testid="never-answer-skip"
+                onClick={d.skipNeverAnswerOffer}
+                type="button"
+              >
+                No thanks
+              </button>
+            </>
+          ) : (
+            <span className="type-provenance text-[var(--faint)]" data-testid="never-answer-noted">
+              Never-answer rules aren&apos;t available yet — this is saved as a signal for when they are.
+            </span>
+          )}
         </div>
       ) : (
         <div className="flex flex-wrap gap-2">

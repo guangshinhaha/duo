@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { useAnswerEscalation, useRecordOutcome } from "../api/queries.js";
-import type { DraftRecord } from "../api/types.js";
+import { requestNeverAnswerRule, useAnswerEscalation, useRecordOutcome } from "../api/queries.js";
+import type { DismissReason, DraftRecord } from "../api/types.js";
 import { useSyncStatus } from "../sync.js";
 
 /**
@@ -94,6 +94,36 @@ export function useDraftDecision(api: DuoApiConfig, draft: DraftRecord) {
     }
     setIgnoring(false);
   };
+  // guangshinhaha/duo#259: an optional, one-tap reason for why a draft was
+  // dismissed, offered during the same undo window as above — not a new
+  // delay of its own. The daemon only ever accepts a dismissReason in the
+  // exact same call that records "discarded" (digital-duo's #262 already
+  // refuses a second outcome on a settled draft, so there is no later call
+  // this could ride on), so picking a reason here skips the rest of the
+  // window and records both together, right away. Skipping — letting the
+  // window elapse, or hitting Undo — leaves the dismissal exactly as silent
+  // as it always was; a reason is never required.
+  const [neverAnswerOffer, setNeverAnswerOffer] = useState<"hidden" | "pending" | "noted">("hidden");
+  const chooseDismissReason = (reason: DismissReason) => {
+    if (ignoreTimer.current !== null) {
+      clearTimeout(ignoreTimer.current);
+      ignoreTimer.current = null;
+    }
+    setIgnoring(false);
+    if (reason === "shouldnt_answer") {
+      // #269 (guangshinhaha/duo, the trust epic's never-answer rule store)
+      // is not built yet — see requestNeverAnswerRule's own doc comment.
+      // This offer still appears, honestly worded, rather than being
+      // dropped silently: the owner's intent is real even though there is
+      // nowhere yet to act on it beyond the signal just recorded below.
+      setNeverAnswerOffer("pending");
+    }
+    recordOutcome.mutate({ draftId: draft.id, outcome: "discarded", dismissReason: reason });
+  };
+  const confirmNeverAnswerRule = () => {
+    requestNeverAnswerRule(api, draft.id).finally(() => setNeverAnswerOffer("noted"));
+  };
+  const skipNeverAnswerOffer = () => setNeverAnswerOffer("hidden");
   // #26: copy is the one route to reuse a draft's text, and it is entirely
   // local — no daemon round-trip, so it stays available no matter the
   // daemon's health. The control confirms which of the two outcomes
@@ -125,6 +155,10 @@ export function useDraftDecision(api: DuoApiConfig, draft: DraftRecord) {
     ignoring,
     ignoreWithWindow,
     undoIgnore,
+    chooseDismissReason,
+    neverAnswerOffer,
+    confirmNeverAnswerRule,
+    skipNeverAnswerOffer,
     copyState,
     copyDraft,
   };
