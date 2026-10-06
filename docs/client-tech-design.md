@@ -116,8 +116,10 @@ domain types.
 | `POST` | `/compose/rewrite` | `RewriteResult` — `{ text, instruction }` in (`instruction` one of `rewrite \| shorter \| warmer \| proofread`), polishes the OWNER'S OWN typed composer text, never a duo-generated draft; 400 `bad_request` for empty text or an unknown instruction, 503 `rewrite_unavailable` with no inference provider configured (#263) | `drafting/rewrite` |
 | `POST` | `/compose/fact-check` | `FactCheckResult` — `{ text, threadContext? }` in, `{ flag: FactCheckFlag \| null }` out; at most one high-confidence flag, citing one of `DraftSource`'s own kinds — `null` is the common case by design (no provider configured, no topical corpus match, or below the daemon's confidence threshold all read the same way) (#264) | `drafting/fact-check` |
 | `POST` | `/ask` | the public-answer envelope — `kind` + asker-visible `text`; a device principal also gets `draftId`/`confidence`/`ownerNotice` (R8's projection, #159). `duo: "shared"` routes to `answerSharedDuo` (KTD4) | `permissions/public-answer` |
-| `POST` | `/drafts/:id/outcome` | `ClassifyAndQueueResult \| {}` — delivery through the draft's origin channel rides the same seam (#170) | `drafting/delivery` |
+| `POST` | `/drafts/:id/outcome` | `ClassifyAndQueueResult \| {}` — delivery through the draft's origin channel rides the same seam (#170); an optional `alternative` index names which of a hedged draft's candidates was sent (#257) | `drafting/delivery` |
 | `POST` | `/drafts/:id/answer` | `{ candidateId: string }` | `drafting/standing-order-candidates` |
+| `POST` | `/drafts/:id/shape` | `DraftRecord` — `{ instruction: "shorter" \| "warmer" \| "more_formal" \| "more_direct", alternative? }` regenerates that candidate over its own sources, logged as a shape (#258); no `draft-ready` push | `drafting/shape` |
+| `POST` | `/drafts/:id/shape/undo` | `DraftRecord` — `{ alternative? }` puts back the text the latest standing shape replaced; 409 when there is none (#258) | `drafting/draft-log` |
 | `GET` | `/review?status=` | the merged queue's rows — draft edits *and* standing-order candidates, each tagged `source` (#166) | `corrections/review` |
 | `POST` | `/review/:id/approve` | `{ candidate, result }` (#173) | `corrections/review` |
 | `POST` | `/review/:id/reject` | `{ candidate }` (#173) | `corrections/review` |

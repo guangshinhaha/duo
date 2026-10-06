@@ -1,9 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { DISMISS_REASONS, type DismissReason, type DraftRecord } from "../api/types.js";
+import { useShapeDraft, useUndoShape } from "../api/queries.js";
+import { DISMISS_REASONS, type DismissReason, type DraftRecord, type SettableDraftOutcome } from "../api/types.js";
 import { useArrival } from "../arrivals.js";
 import { toDraftPipelineResult } from "./DraftCard.js";
 import { hairlineState, type HairlineState } from "./ConfidenceHairline.js";
+import { AlternativeStepper, ShapeChips, standingShape, useFlipSwipe } from "./DraftVersions.js";
 import { DuoLine } from "./DuoLine.js";
 import { EditDiff } from "./EditDiff.js";
 import { MutationError } from "./MutationError.js";
@@ -34,6 +36,12 @@ const DISMISS_REASON_WORDS: Record<DismissReason, string> = {
   will_handle_myself: "I'll handle it myself",
 };
 
+/** A field where ←/→ move a caret, so the arrows are not ours to take. */
+function isTextEntry(target: EventTarget | null): boolean {
+  const el = target as Partial<HTMLElement> | null;
+  return !!el && typeof el.closest === "function" && !!el.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']");
+}
+
 function isInteractive(target: EventTarget | null): boolean {
   const el = target as Partial<HTMLElement> | null;
   return !!el && typeof el.closest === "function" && !!el.closest("input, textarea, select, button, a, [contenteditable=''], [contenteditable='true'], [role='dialog']");
@@ -58,6 +66,12 @@ function isInteractive(target: EventTarget | null): boolean {
  *
  * `keyboard` makes it answer to ⏎ (send), E (edit) and X (dismiss) when
  * nothing editable has focus — only ever the oldest draft in a chat.
+ *
+ * A hedged draft can come with alternatives (#257): "1 of 3", paged by ‹ ›,
+ * by ←/→ while the tray has focus, and by a sideways swipe inside the card;
+ * Send records which one was on screen. Under every pending draft, the shape
+ * chips (#258) ask the daemon to rewrite the version on screen — Undo puts
+ * the previous words back.
  */
 export function DraftTray({
   api,
@@ -68,12 +82,39 @@ export function DraftTray({
   draft: DraftRecord;
   keyboard?: boolean;
 }) {
-  const d = useDraftDecision(api, draft);
+  // #257: a hedged draft can come with alternatives, paged "1 of 3". Every
+  // version-aware read below goes through `shown` — the candidate on screen
+  // as a draft record of its own (its text, its confidence, its sources) —
+  // so the decision logic, Why? and the sources line all speak about the
+  // words the owner is actually looking at.
+  const alternatives = draft.alternatives ?? [];
+  const multiple = alternatives.length > 1;
+  const [picked, setPicked] = useState(0);
+  const index = multiple ? Math.min(picked, alternatives.length - 1) : 0;
+  const candidate = multiple ? alternatives[index] : undefined;
+  const shown: DraftRecord = candidate
+    ? { ...draft, draftText: candidate.text, confidenceScore: candidate.confidenceScore, sources: candidate.sources }
+    : draft;
+  const d = useDraftDecision(api, shown);
+  const shape = useShapeDraft(api);
+  const undoShape = useUndoShape(api);
   const arrived = useArrival(draft.id);
-  const state = hairlineState(toDraftPipelineResult(draft));
+  const state = hairlineState(toDraftPipelineResult(shown));
   const passedOn = draft.escalated && !draft.refused;
-  const rules = draft.sources.filter((source) => source.kind === "rule");
-  const others = draft.sources.length - rules.length;
+  const rules = shown.sources.filter((source) => source.kind === "rule");
+  const others = shown.sources.length - rules.length;
+  const busy = shape.isPending || undoShape.isPending;
+  // Which alternative was on screen is what Send records (#257); a single
+  // draft names none, so its outcome body is exactly what it always was.
+  const decide = (outcome: SettableDraftOutcome, sentText?: string) =>
+    d.recordOutcome.mutate({ draftId: draft.id, outcome, ...(sentText !== undefined ? { sentText } : {}), ...(multiple ? { alternative: index } : {}) });
+  const flip = (direction: 1 | -1) => {
+    if (!multiple || d.editing || busy) {
+      return;
+    }
+    setPicked(Math.max(0, Math.min(alternatives.length - 1, index + direction)));
+  };
+  const swipe = useFlipSwipe(multiple && !d.editing && !busy, flip);
 
   useEffect(() => {
     if (!keyboard || draft.refused) {
@@ -84,11 +125,11 @@ export function DraftTray({
         return;
       }
       if (e.key === "Enter" && !passedOn) {
-        if (isInteractive(e.target) || !d.reachable || d.recordOutcome.isPending) {
+        if (isInteractive(e.target) || !d.reachable || d.recordOutcome.isPending || busy) {
           return;
         }
         e.preventDefault();
-        d.recordOutcome.mutate({ draftId: draft.id, outcome: "sent" });
+        decide("sent");
         return;
       }
       if (isInteractive(e.target)) {
@@ -112,6 +153,9 @@ export function DraftTray({
       ? "I don't have enough on this to answer it well, so I'm passing it to you."
       : null;
   const unsent = !d.selfAsked && !draft.refused && !passedOn;
+  // #258: shaping is for a draft still waiting on the owner, with words on it.
+  const shapeable = !draft.refused && !passedOn && draft.outcome === null && !d.editing && !d.ignoring;
+  const undoable = standingShape(draft.shapes, index);
 
   return (
     <section
@@ -119,8 +163,31 @@ export function DraftTray({
       className={`flex w-full max-w-[90%] flex-col gap-2 ${d.selfAsked ? "self-start" : "self-end"}`}
       data-testid="draft-tray"
       data-unsent={unsent ? "true" : undefined}
+      // #257: ←/→ page the alternatives while the draft has focus — the
+      // tray itself or anything in it but a text field, where the arrows
+      // move the caret. Focusable only when there is something to page.
+      onKeyDown={
+        multiple
+          ? (e) => {
+              if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey || e.ctrlKey || e.altKey || isTextEntry(e.target)) {
+                return;
+              }
+              e.preventDefault();
+              flip(e.key === "ArrowRight" ? 1 : -1);
+            }
+          : undefined
+      }
+      tabIndex={multiple ? 0 : undefined}
     >
-      <div className={unsent ? "rounded-[var(--r-md)] border border-dashed border-[var(--edge)] p-1" : ""}>
+      {multiple && (
+        <AlternativeStepper count={alternatives.length} disabled={d.editing || busy} flip={flip} index={index} instruction={candidate?.instruction ?? null} />
+      )}
+      <div
+        aria-busy={busy ? true : undefined}
+        className={`${unsent ? "rounded-[var(--r-md)] border border-dashed border-[var(--edge)] p-1" : ""} ${busy ? "opacity-60" : ""} ${multiple ? "touch-pan-y" : ""}`}
+        data-testid="draft-tray-body"
+        {...swipe}
+      >
       <DuoLine
         arrived={arrived}
         aside={unsent ? "only you can see this · not sent" : "only you can see this"}
@@ -141,7 +208,7 @@ export function DraftTray({
         ) : d.editing ? (
           <div className="flex w-full flex-col gap-2">
             {/* #23: the change itself, live — the duo's original with the owner's removals struck and additions marked. */}
-            <EditDiff original={draft.draftText ?? ""} edited={d.editedText} />
+            <EditDiff original={shown.draftText ?? ""} edited={d.editedText} />
             <textarea
               aria-label="Edit your duo's draft"
               className="min-h-11 w-full rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] p-2 text-[var(--text)]"
@@ -152,7 +219,7 @@ export function DraftTray({
                 // #36: Escape is Cancel, with focus handed back to the Edit that opened it.
                 if (e.key === "Escape") {
                   d.focusEditOnClose.current = true;
-                  d.setEditedText(draft.draftText ?? "");
+                  d.setEditedText(shown.draftText ?? "");
                   d.setEditing(false);
                 }
               }}
@@ -161,7 +228,7 @@ export function DraftTray({
             />
           </div>
         ) : (
-          <StructuredText text={draft.draftText ?? ""} />
+          <StructuredText text={shown.draftText ?? ""} />
         )}
       </DuoLine>
       </div>
@@ -174,8 +241,20 @@ export function DraftTray({
             {others > 0 && <>Drew on {others} source{others === 1 ? "" : "s"}</>}
           </span>
         )}
-        <WhyButton draft={draft} />
+        <WhyButton draft={shown} />
       </div>
+
+      {shapeable && (
+        <ShapeChips
+          disabled={!d.reachable || d.recordOutcome.isPending}
+          onShape={(instruction) => shape.mutate({ draftId: draft.id, instruction, alternative: index })}
+          onUndo={() => undoShape.mutate({ draftId: draft.id, alternative: index })}
+          pendingInstruction={shape.isPending ? shape.variables?.instruction : undefined}
+          shaping={shape.isPending}
+          undoable={undoable}
+          undoing={undoShape.isPending}
+        />
+      )}
 
       {!draft.refused && !d.reachable && (
         <p className="type-provenance text-[var(--escalate)]" data-testid="draft-tray-offline" role="status">
@@ -285,11 +364,7 @@ export function DraftTray({
               <button
                 className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
                 disabled={!d.editedText.trim() || d.recordOutcome.isPending || !d.reachable}
-                onClick={() =>
-                  d.editChanged
-                    ? d.recordOutcome.mutate({ draftId: draft.id, outcome: "edited", sentText: d.editedText.trim() })
-                    : d.recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })
-                }
+                onClick={() => (d.editChanged ? decide("edited", d.editedText.trim()) : decide("sent"))}
                 type="button"
               >
                 {d.editChanged ? (d.selfAsked ? "Keep edited" : "Send edited") : d.selfAsked ? "Keep" : "Send"}
@@ -297,7 +372,7 @@ export function DraftTray({
               <button
                 className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
                 onClick={() => {
-                  d.setEditedText(draft.draftText ?? "");
+                  d.setEditedText(shown.draftText ?? "");
                   d.setEditing(false);
                 }}
                 type="button"
@@ -309,8 +384,8 @@ export function DraftTray({
             <>
               <button
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
-                disabled={d.recordOutcome.isPending || !d.reachable}
-                onClick={() => d.recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })}
+                disabled={d.recordOutcome.isPending || !d.reachable || busy}
+                onClick={() => decide("sent")}
                 type="button"
               >
                 {d.selfAsked ? "Keep" : "Send"}
@@ -340,6 +415,8 @@ export function DraftTray({
       )}
       <MutationError error={d.recordOutcome.error} />
       <MutationError error={d.answerEscalation.error} />
+      <MutationError error={shape.error} />
+      <MutationError error={undoShape.error} />
     </section>
   );
 }

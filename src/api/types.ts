@@ -135,6 +135,42 @@ export interface DraftRecord {
    * dereference).
    */
   dismissReason?: DismissReason | null;
+  /*
+   * #257/#258 (digital-duo drafting): optional here, though the daemon
+   * always sends them, for the same reason `provenance` is read with `?.`
+   * (useDraftDecision): a record rehydrated from the persisted cache can
+   * predate the fields, and renders before the refetch that heals it.
+   */
+  /** The candidates a hedged draft offered (#257) — empty for a single draft. Index 0 is the draft itself while pending. */
+  alternatives?: DraftAlternative[];
+  /** Which candidate was sent or kept — null while pending, for a dismissal, and for a single draft. */
+  chosenAlternative?: number | null;
+  /** Every shape applied to this draft, oldest first (#258). */
+  shapes?: DraftShape[];
+}
+
+/** One candidate among a hedged draft's alternatives (#257): its own text and confidence, citing the draft's one evidence pool. */
+export interface DraftAlternative {
+  text: string;
+  /** null for the duo's default draft; otherwise what it was asked for — "shorter", "cautious". */
+  instruction: string | null;
+  confidenceScore: number;
+  sources: DraftSource[];
+  /** "chosen" for the one sent or kept, "not_chosen" for the rest once decided, null while pending. */
+  outcome: "chosen" | "not_chosen" | null;
+}
+
+/** The shapes a draft can be given with one tap (#258) — the daemon's closed set. */
+export const SHAPE_INSTRUCTIONS = ["shorter", "warmer", "more_formal", "more_direct"] as const;
+export type ShapeInstruction = (typeof SHAPE_INSTRUCTIONS)[number];
+
+/** One shape applied to a pending draft (#258): which candidate, how, and whether it was taken back. */
+export interface DraftShape {
+  id: string;
+  alternative: number;
+  instruction: ShapeInstruction;
+  createdAt: string;
+  undoneAt: string | null;
 }
 
 /**

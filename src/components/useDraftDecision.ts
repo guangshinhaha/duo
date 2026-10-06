@@ -55,6 +55,16 @@ export function useDraftDecision(api: DuoApiConfig, draft: DraftRecord) {
   // it. The flag is consumed by the effect below, which runs after the
   // action row has rendered back — the ref is null until then, so the
   // focus can't happen in the handler itself.
+  // #257/#258: the text being decided can change under a closed editor — a
+  // flip to another alternative, a shape, an undo — so the edit buffer
+  // follows it while nobody is editing. An open editor is the owner's
+  // buffer and is never overwritten.
+  const shownText = draft.draftText ?? "";
+  useEffect(() => {
+    if (!editing) {
+      setEditedText(shownText);
+    }
+  }, [shownText, editing]);
   const editButtonRef = useRef<HTMLButtonElement | null>(null);
   const focusEditOnClose = useRef(false);
   useEffect(() => {
