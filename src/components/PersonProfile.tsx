@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import type { DuoApiConfig } from "../api/client.js";
+import { useResetVoiceAdaptation, useVoiceAdaptation } from "../api/queries.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./primitives/Dialog.js";
 import { Mark } from "./Mark.js";
 import { directoryEntryLabel, duoUserIdFor, isDuoUserId, serverNameOf } from "../workspace/identity.js";
@@ -32,12 +34,15 @@ function initialsOf(name: string): string {
  * it lands" the rest of the surface follows for a name.
  */
 export function PersonProfile({
+  api = null,
   connection,
   person,
   open,
   onOpenChange,
   onMessage,
 }: {
+  /** #262: lets this panel read and reset the person's learned-tone adaptation. Null (no duo paired) hides that section entirely rather than erroring. */
+  api?: DuoApiConfig | null;
   connection: WorkspaceConnection;
   /** Who to show — the directory entry that led here. Null while nothing is selected; the dialog then renders nothing. */
   person: { readonly userId: string; readonly name: string } | null;
@@ -48,16 +53,93 @@ export function PersonProfile({
 }) {
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent data-testid="person-profile">{person && <PersonProfileBody connection={connection} onMessage={onMessage} person={person} />}</DialogContent>
+      <DialogContent data-testid="person-profile">
+        {person && <PersonProfileBody api={api} connection={connection} onMessage={onMessage} person={person} />}
+      </DialogContent>
     </Dialog>
   );
 }
 
+/**
+ * #262: "Reset learned tone" — the daemon has been quietly deriving how the
+ * owner writes to THIS person from their own approved sends and edits
+ * (digital-duo #279); this clears that derived adaptation on request,
+ * never the messages it was learned from. Renders nothing while loading or
+ * once the daemon says there is nothing learned yet (`null`) — a reset
+ * control with nothing to reset would only invite a confusing no-op click.
+ * The confirm step is a single inline question, not a T4-style dialog: this
+ * undoes accumulated learning, never anything already sent.
+ */
+function VoiceAdaptationControl({ api, personId, personName }: { api: DuoApiConfig; personId: string; personName: string }) {
+  const status = useVoiceAdaptation(api, personId);
+  const reset = useResetVoiceAdaptation(api);
+  const [confirming, setConfirming] = useState(false);
+  const [done, setDone] = useState(false);
+
+  if (!status.data) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-[var(--edge)] pt-3" data-testid="person-profile-voice-adaptation">
+      <p className="type-provenance text-[var(--muted)]">
+        Your duo has learned a {status.data.register} tone for writing to {personName}.
+      </p>
+      {done ? (
+        <p className="type-body text-[var(--muted)]" data-testid="person-profile-reset-tone-done">
+          Reset. Your duo will learn again from what you send next.
+        </p>
+      ) : confirming ? (
+        <div className="flex flex-col gap-2" data-testid="person-profile-reset-tone-confirm">
+          <p className="type-body text-[var(--muted)]">
+            This clears what your duo has learned about how you write to {personName} — it won&apos;t touch anything you&apos;ve already sent.
+          </p>
+          <div className="flex gap-2">
+            <button
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)] disabled:opacity-40"
+              data-testid="person-profile-reset-tone-confirm-yes"
+              disabled={reset.isPending}
+              onClick={() => reset.mutate(personId, { onSuccess: () => setDone(true) })}
+              type="button"
+            >
+              {reset.isPending ? "Resetting…" : "Reset"}
+            </button>
+            <button
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] px-3 type-body text-[var(--muted)]"
+              data-testid="person-profile-reset-tone-cancel"
+              onClick={() => setConfirming(false)}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+          {reset.isError && (
+            <p className="type-body text-[var(--refused)]" data-testid="person-profile-reset-tone-error">
+              Couldn&apos;t reset that — try again.
+            </p>
+          )}
+        </div>
+      ) : (
+        <button
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)]"
+          data-testid="person-profile-reset-tone"
+          onClick={() => setConfirming(true)}
+          type="button"
+        >
+          Reset learned tone
+        </button>
+      )}
+    </div>
+  );
+}
+
 function PersonProfileBody({
+  api,
   connection,
   person,
   onMessage,
 }: {
+  api: DuoApiConfig | null;
   connection: WorkspaceConnection;
   person: { readonly userId: string; readonly name: string };
   onMessage: (roomId: string) => void;
@@ -155,6 +237,8 @@ function PersonProfileBody({
           </button>
         )}
       </div>
+      {/* #262: a person's own learned-tone adaptation — never a duo's (there's no "writing to" a duo in this sense), and nothing to read without a paired duo to ask. */}
+      {!duo && api && <VoiceAdaptationControl api={api} personId={person.userId} personName={label} />}
       <DialogClose asChild>
         <button className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body">
           Close

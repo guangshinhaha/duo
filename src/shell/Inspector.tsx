@@ -97,6 +97,15 @@ export function WhyPanel({ draft }: { draft: DraftRecord }) {
             </>
           )}
         </Field>
+        {/* digital-duo #279 (issue #262): only when the daemon actually
+            tuned this draft's wording for its one recipient — never shown
+            from `recipientAdaptation` alone, in case a future draft ever
+            carries one without the flag. */}
+        {draft.adaptedForRecipient && draft.recipientAdaptation && (
+          <Field label="Tuned for" testId="why-recipient-adaptation">
+            Tuned for how you write to {draft.recipientAdaptation.recipientName}.
+          </Field>
+        )}
         <Field label="Who's asking" testId="why-asker">
           {draft.provenance?.origin === "channel" ? (
             <ProvenanceLine provenance={draft.provenance} />

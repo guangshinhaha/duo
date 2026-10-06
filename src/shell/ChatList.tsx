@@ -728,6 +728,7 @@ export function ChatList({
 
     return (
       <CommandSearch
+        api={api}
         connection={connection}
         onStartedConversation={(roomId) => {
           refresh();

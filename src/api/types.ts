@@ -147,6 +147,53 @@ export interface DraftRecord {
   chosenAlternative?: number | null;
   /** Every shape applied to this draft, oldest first (#258). */
   shapes?: DraftShape[];
+  /**
+   * digital-duo #279 (issue #262): true only when this draft's wording was
+   * actually tuned for its recipient's own register — optional for the same
+   * cache-rehydration reason as `alternatives` above (a row persisted before
+   * this field existed reads as `undefined`, which Why treats exactly like
+   * `false`: nothing to say).
+   */
+  adaptedForRecipient?: boolean;
+  /** The adaptation itself when `adaptedForRecipient` is true; `null` otherwise (never both missing and `true`). */
+  recipientAdaptation?: RecipientAdaptation | null;
+}
+
+// digital-duo #279 (issue #262): who a draft is addressed to, sent on
+// `POST /drafts` only when this client actually knows one — a question the
+// owner asks their own duo for themselves has nobody to name. `name` is
+// optional even when `id` is known: the client sends whatever the
+// directory/room already gave it, never a second lookup just to fill this in.
+export interface RecipientRef {
+  readonly id: string;
+  readonly name?: string;
+}
+
+/**
+ * Whether, and how, a draft's wording was tuned for the one person it's
+ * addressed to (digital-duo #279, issue #262) — derived from at least
+ * `sampleSize` of the owner's own approved sends/edits to that person
+ * (the daemon's threshold; below it nothing is flagged, so a `DraftRecord`
+ * reads `adaptedForRecipient: false` and this is `null`). `register` is the
+ * daemon's own word for the tone it found (e.g. "formal", "casual") —
+ * rendered verbatim, never translated.
+ */
+export interface RecipientAdaptation {
+  readonly recipientId: string;
+  readonly recipientName: string;
+  readonly sampleSize: number;
+  readonly register: string;
+}
+
+/**
+ * `GET`/`DELETE /people/:id/voice-adaptation` (digital-duo #279): the same
+ * shape a draft's own `recipientAdaptation` carries, minus the id/name this
+ * route already addresses by path. `null` is the honest "nothing learned
+ * yet" — below the daemon's sample threshold, or never reset-and-relearned.
+ */
+export interface VoiceAdaptationStatus {
+  readonly sampleSize: number;
+  readonly register: string;
 }
 
 /** One candidate among a hedged draft's alternatives (#257): its own text and confidence, citing the draft's one evidence pool. */

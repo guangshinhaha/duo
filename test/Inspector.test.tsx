@@ -109,6 +109,28 @@ describe("WhyPanel — the reasons, in the daemon's own words", () => {
     mount(<WhyPanel draft={draft({ provenance: { origin: "owner" } })} />);
     expect(screen.getByTestId("why-asker")).toHaveTextContent("You asked this yourself.");
   });
+
+  it("#262: names who this draft was tuned for, only when the daemon actually adapted it", () => {
+    mount(
+      <WhyPanel
+        draft={draft({
+          adaptedForRecipient: true,
+          recipientAdaptation: { recipientId: "@wei:w", recipientName: "Wei", sampleSize: 8, register: "formal" },
+        })}
+      />,
+    );
+    expect(screen.getByTestId("why-recipient-adaptation")).toHaveTextContent("Tuned for how you write to Wei.");
+
+    cleanup();
+    // Below the daemon's sample threshold: the flag is false and there's nothing to name.
+    mount(<WhyPanel draft={draft({ adaptedForRecipient: false, recipientAdaptation: null })} />);
+    expect(screen.queryByTestId("why-recipient-adaptation")).toBeNull();
+
+    cleanup();
+    // A row persisted before this field existed reads as `undefined` — the same "nothing to say" as `false`, never an error.
+    mount(<WhyPanel draft={draft()} />);
+    expect(screen.queryByTestId("why-recipient-adaptation")).toBeNull();
+  });
 });
 
 describe("RoomInfo and DuoInfo — when nothing is waiting", () => {
