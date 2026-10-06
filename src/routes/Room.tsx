@@ -35,6 +35,8 @@ import { readUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { PinAnswerDialog } from "../components/PinAnswerDialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
+import { EmojiPicker } from "../components/EmojiPicker.js";
+import { readReactionRecents, recordReactionRecent } from "../reactionRecents.js";
 
 /**
  * #62 + #63 + #64: one conversation — the timeline, the message verbs, and
@@ -1165,6 +1167,10 @@ export function RoomEntry({
   onPinAnswer?: (pattern: string, answerText: string) => Promise<unknown>;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  // #291: the full picker behind the quick six's "+" — its own flag so the
+  // quick six's row (and its "stays open while busy" rule) is unchanged;
+  // this just adds a dialog above it with every emoji, not six.
+  const [fullPickerOpen, setFullPickerOpen] = useState(false);
   const [pinDialogOpen, setPinDialogOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.body);
@@ -1186,7 +1192,7 @@ export function RoomEntry({
   const [menuOpen, setMenuOpen] = useState(false);
   const touchPrimary = useTouchPrimary();
   const own = message.senderId === connection.userId;
-  const active = editing || pickerOpen || busy || menuOpen || pinDialogOpen;
+  const active = editing || pickerOpen || fullPickerOpen || busy || menuOpen || pinDialogOpen;
   const toolbarVisible = active || hovering || focusWithin;
   useEffect(() => {
     onActiveChange?.(message.eventId, active);
@@ -1385,14 +1391,43 @@ export function RoomEntry({
               disabled={busy}
               onClick={() => {
                 setPickerOpen(false);
+                recordReactionRecent(key);
                 run(connection.react(roomId, message.eventId, key));
               }}
             >
               {key}
             </button>
           ))}
+          {/* #291: the quick six stays the fast path; this opens every other
+              emoji in a searchable picker, a popover on a pointer device and
+              a bottom sheet on touch (same `sheet` rule the rest of the app
+              uses for a phone dialog). */}
+          <button
+            aria-label="More emoji"
+            className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-2 type-body text-[var(--muted)]"
+            data-testid="reaction-picker-more"
+            disabled={busy}
+            onClick={() => setFullPickerOpen(true)}
+          >
+            +
+          </button>
         </div>
       )}
+      <Dialog open={fullPickerOpen} onOpenChange={setFullPickerOpen}>
+        <DialogContent data-testid="emoji-picker-dialog" sheet={touchPrimary}>
+          <DialogTitle>React with an emoji</DialogTitle>
+          <DialogDescription>Search any emoji, or pick one you've used recently.</DialogDescription>
+          <EmojiPicker
+            recents={fullPickerOpen ? readReactionRecents() : []}
+            onPick={(emoji) => {
+              setFullPickerOpen(false);
+              setPickerOpen(false);
+              recordReactionRecent(emoji);
+              run(connection.react(roomId, message.eventId, emoji));
+            }}
+          />
+        </DialogContent>
+      </Dialog>
       {editing && (
         <form
           className="flex flex-col gap-2"
