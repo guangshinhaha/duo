@@ -128,4 +128,28 @@ export default tseslint.config(
       "no-restricted-syntax": ["error", ...duoNeverPosesAsAPerson, ...noExternalChannelNamesInAccountLayer],
     },
   },
+  /*
+   * #320: features reach the host only through `getPlatform()`
+   * (src/platform/), so each is written once and works in the browser, the
+   * Mac app and the phone app alike. The two exceptions are the Mac shell's
+   * own window plumbing — tray, menu, cross-window events — which has no
+   * meaning on any other platform.
+   */
+  {
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: ["src/platform/**", "src/shell/native.ts", "src/tray.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@tauri-apps/*"],
+              message: "Use getPlatform() from src/platform/ — a feature never talks to Tauri directly (#320).",
+            },
+          ],
+        },
+      ],
+    },
+  },
 );

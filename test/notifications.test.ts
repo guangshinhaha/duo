@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { inTauriShell, leaveTauriShell } from "./platformFakes.js";
 
 type SentNotification = { id?: number; title: string; body: string };
 // The handler only reads the echoed id — the payload the shell sends back
@@ -13,6 +14,13 @@ const plugin = {
 };
 
 vi.mock("@tauri-apps/plugin-notification", () => plugin);
+
+/*
+ * #320: these cases are the Mac app — mark the test DOM as a Tauri webview so
+ * getPlatform() picks the Tauri adapter over the module mocks above.
+ */
+beforeEach(() => inTauriShell());
+afterEach(() => leaveTauriShell());
 
 describe("notifications — native draft-ready (C5), degrading to a no-op outside the Tauri shell", () => {
   beforeEach(async () => {

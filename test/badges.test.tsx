@@ -4,6 +4,7 @@ import { App } from "../src/App.js";
 import { setDockBadgeCount } from "../src/dockBadge.js";
 import type { DraftRecord } from "../src/api/types.js";
 import { stubDesktop } from "./desktop.js";
+import { inTauriShell, leaveTauriShell } from "./platformFakes.js";
 
 /*
  * #22: the pending-draft count in two places — the chat list's "Waiting on
@@ -19,6 +20,13 @@ const dock = vi.hoisted(() => ({ setBadgeCount: vi.fn(async () => {}) }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ setBadgeCount: dock.setBadgeCount }),
 }));
+
+/*
+ * #320: these cases are the Mac app — mark the test DOM as a Tauri webview so
+ * getPlatform() picks the Tauri adapter over the module mocks above.
+ */
+beforeEach(() => inTauriShell());
+afterEach(() => leaveTauriShell());
 
 const baseDraft: DraftRecord = {
   id: "d1",

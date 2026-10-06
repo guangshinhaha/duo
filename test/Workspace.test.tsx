@@ -6,6 +6,7 @@ import type { ChannelSummary, LiveArrival, NotificationMode, RoomInvite, RoomMes
 import { WorkspaceSignInDialog } from "../src/components/WorkspaceSignInDialog.js";
 import type { StagedShare } from "../src/workspace/sharing.js";
 import { stubDesktop } from "./desktop.js";
+import { inTauriShell, leaveTauriShell } from "./platformFakes.js";
 import { composed, composerText, pressEnter, setComposer, typeInto } from "./composerHelpers.js";
 
 /*
@@ -679,6 +680,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  leaveTauriShell();
   vi.unstubAllGlobals();
   localStorage.clear();
   window.location.hash = "";
@@ -2276,6 +2278,7 @@ describe("#69 AC1 — an arrival interrupts by the conversation's setting", () =
     rooms[2] = { ...rooms[2]!, muted: true, notifications: "nothing" };
     const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
+    inTauriShell(); // #320: the Mac app, so getPlatform() picks the Tauri adapter
     notificationPlugin.isPermissionGranted.mockResolvedValue(true);
 
     await renderApp();
@@ -2320,6 +2323,7 @@ describe("#69 AC1 — an arrival interrupts by the conversation's setting", () =
     seedSession();
     const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
+    inTauriShell(); // #320: the Mac app, so getPlatform() picks the Tauri adapter
     notificationPlugin.isPermissionGranted.mockResolvedValue(true);
 
     await renderApp();
@@ -2349,6 +2353,7 @@ describe("#69 AC2 — do not disturb holds everything back, visibly", () => {
     localStorage.setItem("duo.dnd", JSON.stringify({ manual: true, from: null, to: null }));
     const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
+    inTauriShell(); // #320: the Mac app, so getPlatform() picks the Tauri adapter
     notificationPlugin.isPermissionGranted.mockResolvedValue(true);
 
     await renderApp();
@@ -2435,6 +2440,7 @@ describe("#69 AC3 — the owner's duo acting on their behalf is its own category
     };
     const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
+    inTauriShell(); // #320: the Mac app, so getPlatform() picks the Tauri adapter
     notificationPlugin.isPermissionGranted.mockResolvedValue(true);
 
     await renderApp();
@@ -2480,6 +2486,7 @@ describe("#69 AC3 — the owner's duo acting on their behalf is its own category
     );
     const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
+    inTauriShell(); // #320: the Mac app, so getPlatform() picks the Tauri adapter
     notificationPlugin.isPermissionGranted.mockResolvedValue(true);
 
     const FakeSocket = stubDraftPushSocket();
@@ -2526,6 +2533,7 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     seedSession();
     const fake = fakeConnection({ rooms: roomsWithOwnDuoIn(mode), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
+    inTauriShell(); // #320: the Mac app, so getPlatform() picks the Tauri adapter
     notificationPlugin.isPermissionGranted.mockResolvedValue(true);
 
     await renderApp();
@@ -2552,6 +2560,7 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     localStorage.setItem("duo.dnd", JSON.stringify({ manual: true, from: null, to: null }));
     const fake = fakeConnection({ rooms: roomsWithOwnDuoIn("nothing"), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
+    inTauriShell(); // #320: the Mac app, so getPlatform() picks the Tauri adapter
     notificationPlugin.isPermissionGranted.mockResolvedValue(true);
 
     await renderApp();
@@ -2582,6 +2591,7 @@ describe("#69 AC3 — the duo's own acts can never be fully turned off", () => {
     );
     const fake = fakeConnection({ rooms: roomsFixture(), timelines: {} });
     vi.mocked(connect).mockResolvedValue(fake.connection);
+    inTauriShell(); // #320: the Mac app, so getPlatform() picks the Tauri adapter
     notificationPlugin.isPermissionGranted.mockResolvedValue(true);
     const FakeSocket = stubDraftPushSocket();
 
