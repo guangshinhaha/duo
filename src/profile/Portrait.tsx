@@ -4,6 +4,7 @@ import type { InterruptionPortrait } from "../api/types.js";
 import { MeterBar } from "../components/MeterBar.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { VoiceTrendSection } from "./VoiceTrend.js";
 import { useState } from "react";
 
 const times = (n: number): string => (n === 1 ? "once" : `${n} times`);
@@ -143,6 +144,7 @@ export function Portrait({ api }: { api: DuoApiConfig }) {
           </details>
         </>
       )}
+      <VoiceTrendSection api={api} />
       {waiting > 0 && (
         <p className="type-body" data-testid="portrait-rules-link">
           {waiting} {waiting === 1 ? "rule is" : "rules are"} waiting for you.{" "}
