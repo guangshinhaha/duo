@@ -51,6 +51,8 @@ import {
   outboxKeyOf,
   pendingMessagesInOrder,
   rekeyPendingMessage,
+  sweepPendingMessages,
+  type OutboxAccount,
 } from "./outbox.js";
 
 /**
@@ -1140,10 +1142,12 @@ function txnIdOf(event: MatrixEvent): string | undefined {
  * is only what lets the NEXT launch try again without the member lifting a
  * finger). Shared by `send()`'s first attempt and `replayPendingOutbox`'s
  * resend, so the exact same #216/#65 wire shape reaches the room whether
- * this is the first try or a resend after a reload.
+ * this is the first try or a resend after a reload. `account` addresses
+ * the one queue this send belongs to — #289's own, never the SDK's.
  */
 async function sendTrackedMessage(
   client: MatrixClient,
+  account: OutboxAccount,
   roomId: string,
   body: string,
   mentions: readonly MessageMention[],
@@ -1162,7 +1166,7 @@ async function sendTrackedMessage(
     },
     txnId,
   );
-  dequeuePendingMessage(outboxKeyOf(txnId));
+  await dequeuePendingMessage(account, outboxKeyOf(txnId));
 }
 
 /**
@@ -1175,13 +1179,15 @@ async function sendTrackedMessage(
  * or never actually joined) has nothing to resend INTO — the entry is
  * dropped rather than retried forever. Fire-and-forget from `connect()`'s
  * side: a member's first screen shouldn't wait on every queued resend
- * before it can render.
+ * before it can render. Reads and writes only THIS account's queue — a
+ * launch never touches, let alone replays, anything another account left
+ * behind.
  */
-async function replayPendingOutbox(client: MatrixClient): Promise<void> {
-  for (const entry of pendingMessagesInOrder()) {
+async function replayPendingOutbox(client: MatrixClient, account: OutboxAccount): Promise<void> {
+  for (const entry of await pendingMessagesInOrder(account)) {
     const room = client.getRoom(entry.roomId);
     if (!room || room.getMyMembership() !== "join") {
-      dequeuePendingMessage(entry.localId);
+      await dequeuePendingMessage(account, entry.localId);
       continue;
     }
     const txnId = client.makeTxnId();
@@ -1189,9 +1195,9 @@ async function replayPendingOutbox(client: MatrixClient): Promise<void> {
     // pending/failed row this resend creates is addressed by this event's
     // own id (`event.getTxnId()` resolves to this txnId), so a Retry or
     // Cancel on it must already be able to reach this very record.
-    rekeyPendingMessage(entry.localId, outboxKeyOf(txnId));
+    await rekeyPendingMessage(account, entry.localId, outboxKeyOf(txnId));
     try {
-      await sendTrackedMessage(client, entry.roomId, entry.body, entry.mentions, entry.replyToEventId, txnId);
+      await sendTrackedMessage(client, account, entry.roomId, entry.body, entry.mentions, entry.replyToEventId, txnId);
     } catch {
       // Still unsent — stays queued under the new key, same as any other
       // failed send (#209/#252 render it; nothing here retries blindly).
@@ -2105,6 +2111,10 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
   // ended (only one is ever active): it goes, whether or not its own
   // sign-out got to wipe it.
   void sweepWorkspaceCaches(session);
+  // #289: the same backstop for the outbox's own, separately-namespaced
+  // queues — a crash or a tab that closed before sign-out ran leaves no
+  // other account's unsent drafts behind on this device either.
+  void sweepPendingMessages(session);
   /** Read from the local cache, not the homeserver: true until the live sync catches up. */
   const servingCache = (): boolean => !caughtUp;
   // #289: whatever this device queued and never got confirmed before its
@@ -2114,7 +2124,7 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
   // pending/failed row (#209/#252). #288's cache never holds this (its own
   // header explains why), so this is still the only place an unsent
   // message survives between launches.
-  void replayPendingOutbox(client);
+  void replayPendingOutbox(client, session);
   return {
     renewToken: (accessToken) => {
       client.setAccessToken(accessToken);
@@ -2402,15 +2412,18 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       // every client, formatting-aware or not, reads regardless (#216 AC2).
       //
       // #289: queued (`enqueuePendingMessage`) BEFORE the homeserver is
-      // even asked — a reload a heartbeat from now still has this. The
-      // txnId is this seam's own (`client.makeTxnId()`, the same call the
-      // SDK would make internally if none were given) so the record is
-      // addressable by the pending event it becomes: `event.getTxnId()`
-      // resolves to it for exactly as long as that local echo is alive,
-      // which is what lets `retry`/`cancel` below reach the same record by
-      // the id they already have, with no lookup table kept here.
+      // even asked, and AWAITED before the send is even attempted — a
+      // reload a heartbeat from now still has this, for real rather than
+      // as a race. The txnId is this seam's own (`client.makeTxnId()`, the
+      // same call the SDK would make internally if none were given) so
+      // the record is addressable by the pending event it becomes:
+      // `event.getTxnId()` resolves to it for exactly as long as that
+      // local echo is alive, which is what lets `retry`/`cancel` below
+      // reach the same record by the id they already have, with no lookup
+      // table kept here. Queued under THIS account's own outbox
+      // (`session`) — never a key any other account could ever read.
       const txnId = client.makeTxnId();
-      enqueuePendingMessage({
+      await enqueuePendingMessage(session, {
         localId: outboxKeyOf(txnId),
         roomId,
         body,
@@ -2421,7 +2434,7 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         // isn't a reply, never sent as some empty/null placeholder.
         replyToEventId: replyToEventId ?? null,
       });
-      await sendTrackedMessage(client, roomId, body, mentions, replyToEventId ?? null, txnId);
+      await sendTrackedMessage(client, session, roomId, body, mentions, replyToEventId ?? null, txnId);
     },
     // The share path (#66): upload bytes, then send the message that
     // references them. Both are homeserver operations on the member's own
@@ -2572,7 +2585,7 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       // something that already landed.
       const txnId = txnIdOf(event);
       if (txnId !== undefined) {
-        dequeuePendingMessage(outboxKeyOf(txnId));
+        await dequeuePendingMessage(session, outboxKeyOf(txnId));
       }
     },
     cancel: (roomId, eventId) => {
@@ -2582,9 +2595,12 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         client.cancelPendingEvent(event);
         // #289: the member just said "forget it" — the outbox must agree,
         // or a later launch would send words they explicitly took back.
+        // Fire-and-forget: `cancel` stays synchronous (its own contract
+        // above — cancelling a local echo never reaches the homeserver,
+        // so there is nothing for a caller to await here either).
         const txnId = txnIdOf(event);
         if (txnId !== undefined) {
-          dequeuePendingMessage(outboxKeyOf(txnId));
+          void dequeuePendingMessage(session, outboxKeyOf(txnId));
         }
       }
     },

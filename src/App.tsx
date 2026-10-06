@@ -575,9 +575,11 @@ function AppShell() {
     if (next === null) {
       // The workspace session goes first: ended at the workspace with its own
       // credential (the daemon cannot revoke it), then forgotten — and its
-      // local cache of rooms and messages with it (#288).
+      // local cache of rooms and messages with it (#288), and (#289)
+      // anything of its own it still had queued to send.
       if (hosted.session) {
         void forgetWorkspaceCache(hosted.session);
+        void clearPendingMessages(hosted.session);
       }
       hosted.signOut();
       writeHostedAccount(null);
@@ -587,6 +589,7 @@ function AppShell() {
         // out leaves no live workspace token behind in this browser.
         if (session) {
           void forgetWorkspaceCache(session);
+          void clearPendingMessages(session);
         }
         setSessionRaw(null);
       }
@@ -607,11 +610,14 @@ function AppShell() {
     void persister.removeClient();
     // #288: the account that is leaving takes its local cache (rooms, state,
     // recent messages) with it — signing out, or another account signing
-    // in, leaves none of it for whoever uses this machine next.
+    // in, leaves none of it for whoever uses this machine next. #289: its
+    // own outbox goes at the exact same moment, by the exact same test —
+    // same account staying signed in (a token renewal, say) keeps its
+    // queue; anyone else leaves none of it behind.
     if (session && (next === null || workspaceCacheName(next) !== workspaceCacheName(session))) {
       void forgetWorkspaceCache(session);
+      void clearPendingMessages(session);
     }
-    clearPendingMessages();
     setSessionRaw(next);
   }
   function signOutWorkspace(): void {

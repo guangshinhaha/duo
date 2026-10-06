@@ -1,3 +1,5 @@
+import { getPlatform } from "../platform/index.js";
+import { workspaceCacheName } from "./cache.js";
 import type { MessageMention } from "./mentions.js";
 
 /**
@@ -17,11 +19,25 @@ import type { MessageMention } from "./mentions.js";
  * before the homeserver is even asked and erased the moment it answers.
  * It carries no SDK types and knows nothing about matrix-js-sdk — matrix.ts
  * is still the one module that imports the SDK (the Tauri-seam pattern,
- * pinned by `WorkspaceMatrixSeam.test.ts`'s scan) — so this stays a plain
- * read/write surface over `localStorage`, the same footing as
- * `session.ts`'s own credential record, and just as easy to move onto
- * #320's platform storage interface later without touching matrix.ts's
- * logic at all.
+ * pinned by `WorkspaceMatrixSeam.test.ts`'s scan).
+ *
+ * Two choices this module makes on purpose, both learned from #288's own
+ * cache (`cache.ts`), which this module deliberately mirrors rather than
+ * reinventing:
+ *
+ * - **#320's platform storage, not `localStorage` directly.** #289's own
+ *   acceptance criteria are web, Mac AND phone; `getPlatform().storage` is
+ *   the one seam that already has a real adapter for all three (a Tauri
+ *   host gets its own backend later without this module changing at all).
+ * - **One queue per account, named exactly like #288 names its cache**
+ *   (`workspaceCacheName` — homeserver, user id, device). Nothing here
+ *   re-enables matrix-js-sdk's own generic `mx_pending_events_<roomId>`
+ *   persistence, which #288's header explains was deliberately left off
+ *   because those keys name neither the account nor the device: two
+ *   accounts on one machine would read each other's queued drafts, and the
+ *   keys would outlive #288's own account-scoped cache wipe. A queue keyed
+ *   by account identity, wiped from the exact call sites that already wipe
+ *   that account's cache, is the fix rather than a second copy of that bug.
  */
 export interface PendingOutgoingMessage {
   /**
@@ -43,7 +59,16 @@ export interface PendingOutgoingMessage {
   readonly composedAt: number;
 }
 
-const STORAGE_KEY = "duo.workspace-outbox";
+/** The same per-account identity #288's cache is keyed by — one outbox per account, on the same footing as `workspaceCacheName`'s own parameter. */
+export type OutboxAccount = Parameters<typeof workspaceCacheName>[0];
+
+/** Our part of every storage key, so a sweep can tell our queues from anything else a platform's storage holds. */
+const STORAGE_PREFIX = "duo.workspace-outbox|";
+
+/** This account's own key — reuses #288's exact naming convention, so the same account always lands on the same queue and no two accounts ever land on the same one. */
+function storageKeyFor(account: OutboxAccount): string {
+  return STORAGE_PREFIX + workspaceCacheName(account);
+}
 
 function isPendingMessage(value: unknown): value is PendingOutgoingMessage {
   if (typeof value !== "object" || value === null) {
@@ -61,9 +86,9 @@ function isPendingMessage(value: unknown): value is PendingOutgoingMessage {
   );
 }
 
-function readAll(): PendingOutgoingMessage[] {
+async function readAll(account: OutboxAccount): Promise<PendingOutgoingMessage[]> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = await getPlatform().storage.get(storageKeyFor(account));
     if (raw === null) {
       return [];
     }
@@ -77,12 +102,13 @@ function readAll(): PendingOutgoingMessage[] {
   }
 }
 
-function writeAll(messages: readonly PendingOutgoingMessage[]): void {
+async function writeAll(account: OutboxAccount, messages: readonly PendingOutgoingMessage[]): Promise<void> {
+  const storage = getPlatform().storage;
   try {
     if (messages.length === 0) {
-      localStorage.removeItem(STORAGE_KEY);
+      await storage.remove(storageKeyFor(account));
     } else {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+      await storage.set(storageKeyFor(account), JSON.stringify(messages));
     }
   } catch {
     // Private window, full storage, etc. — the send this call was about
@@ -95,17 +121,18 @@ export function outboxKeyOf(txnId: string): string {
   return `outbox:${txnId}`;
 }
 
-/** Queued the instant a send is attempted — before the homeserver has answered at all, so even a reload that lands mid-request still has this. */
-export function enqueuePendingMessage(entry: Omit<PendingOutgoingMessage, "composedAt">): void {
-  writeAll([...readAll(), { ...entry, composedAt: Date.now() }]);
+/** Queued the instant a send is attempted — before the homeserver has answered at all, so even a reload that lands mid-request still has this. Awaiting this (matrix.ts does, before the send it describes) is what makes that guarantee real rather than a race. */
+export async function enqueuePendingMessage(account: OutboxAccount, entry: Omit<PendingOutgoingMessage, "composedAt">): Promise<void> {
+  const all = await readAll(account);
+  await writeAll(account, [...all, { ...entry, composedAt: Date.now() }]);
 }
 
 /** Confirmed sent, or given up on (cancelled) — removed by the same key it was queued under. Costs nothing to call for a key that's already gone. */
-export function dequeuePendingMessage(localId: string): void {
-  const all = readAll();
+export async function dequeuePendingMessage(account: OutboxAccount, localId: string): Promise<void> {
+  const all = await readAll(account);
   const next = all.filter((message) => message.localId !== localId);
   if (next.length !== all.length) {
-    writeAll(next);
+    await writeAll(account, next);
   }
 }
 
@@ -116,18 +143,51 @@ export function dequeuePendingMessage(localId: string): void {
  * launch's own `retry`/`cancel` must reach has to carry THIS launch's key,
  * not the one from the session that queued it.
  */
-export function rekeyPendingMessage(localId: string, nextLocalId: string): void {
-  const all = readAll();
+export async function rekeyPendingMessage(account: OutboxAccount, localId: string, nextLocalId: string): Promise<void> {
+  const all = await readAll(account);
   const next = all.map((message) => (message.localId === localId ? { ...message, localId: nextLocalId } : message));
-  writeAll(next);
+  await writeAll(account, next);
 }
 
 /** Everything still unsent from a previous session, oldest first — the order it was originally composed in (#289 AC2), regardless of how many times a key has been re-addressed since. */
-export function pendingMessagesInOrder(): readonly PendingOutgoingMessage[] {
-  return [...readAll()].sort((a, b) => a.composedAt - b.composedAt);
+export async function pendingMessagesInOrder(account: OutboxAccount): Promise<readonly PendingOutgoingMessage[]> {
+  const all = await readAll(account);
+  return [...all].sort((a, b) => a.composedAt - b.composedAt);
 }
 
-/** A sign-out (or signing in as someone else on this device) leaves nothing queued behind — the same stance `session.ts`'s own record and the cached conversations (`App.tsx`'s `persister.removeClient()`) already take. */
-export function clearPendingMessages(): void {
-  writeAll([]);
+/**
+ * A sign-out (or signing in as someone else on this device) leaves nothing
+ * queued behind for THAT account — the same stance `session.ts`'s own
+ * record and #288's cache (`forgetWorkspaceCache`) already take. Called
+ * from the exact spots `forgetWorkspaceCache` is (App.tsx's `setSession`
+ * and `setApi`), never a second, parallel sign-out path.
+ */
+export async function clearPendingMessages(account: OutboxAccount): Promise<void> {
+  await writeAll(account, []);
+}
+
+/**
+ * The belt to `clearPendingMessages`'s braces, mirroring #288's own
+ * `sweepWorkspaceCaches`: deletes every OTHER account's leftover queue on
+ * this device, keeping only `keep`'s (or none at all, when `keep` is
+ * null). Catches a queue whose sign-out never got to run — the tab closed
+ * first, a crash, a hosted session whose credential was already gone.
+ * Only one workspace session is ever active on a device, so any other
+ * account's queue is stale by definition. Called from `connect()`,
+ * alongside `sweepWorkspaceCaches`.
+ */
+export async function sweepPendingMessages(keep: OutboxAccount | null): Promise<void> {
+  const storage = getPlatform().storage;
+  let keys: string[];
+  try {
+    keys = await storage.keys(STORAGE_PREFIX);
+  } catch {
+    return;
+  }
+  const kept = keep ? storageKeyFor(keep) : null;
+  await Promise.all(
+    keys
+      .filter((key) => key !== kept)
+      .map((key) => storage.remove(key).catch(() => undefined)),
+  );
 }

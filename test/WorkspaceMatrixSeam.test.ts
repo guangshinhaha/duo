@@ -70,6 +70,7 @@ vi.mock("matrix-js-sdk", () => ({
 import { ClientEvent, createClient, EventStatus, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent } from "matrix-js-sdk";
 import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import { enqueuePendingMessage, outboxKeyOf, pendingMessagesInOrder } from "../src/workspace/outbox.js";
+import { workspaceCacheName } from "../src/workspace/cache.js";
 import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
 
 const SESSION = {
@@ -443,10 +444,11 @@ async function connectPrepared(client: FakeClient) {
 
 beforeEach(() => {
   vi.mocked(createClient).mockReset();
-  // #289: `send()` now writes to `localStorage` (the outbox) before every
-  // call to `client.sendMessage` — cleared per test so a queued-but-not-
-  // yet-dequeued entry from one test's fixture can never leak into the
-  // next test's reading of it.
+  // #289: `send()` now writes to the outbox (#320's platform storage,
+  // which this file never fakes — the default web adapter's `localStorage`
+  // backs it, same as before) before every call to `client.sendMessage` —
+  // cleared per test so a queued-but-not-yet-dequeued entry from one
+  // test's fixture can never leak into the next test's reading of it.
   localStorage.clear();
 });
 
@@ -2610,11 +2612,11 @@ describe("the local-echo projection (#209)", () => {
     const connection = await connectPrepared(client);
     // Queued as though an earlier `send()` attempt put it here — the same
     // key a pending event's `getTxnId()` of "txn9" resolves to.
-    enqueuePendingMessage({ localId: outboxKeyOf("txn9"), roomId: "!project-x:workspace.example", body: "offline", mentions: [], replyToEventId: null });
+    await enqueuePendingMessage(SESSION, { localId: outboxKeyOf("txn9"), roomId: "!project-x:workspace.example", body: "offline", mentions: [], replyToEventId: null });
 
     await connection.retry("!project-x:workspace.example", "~!project-x:workspace.example:txn9");
 
-    expect(pendingMessagesInOrder()).toEqual([]);
+    expect(await pendingMessagesInOrder(SESSION)).toEqual([]);
   });
 
   it("cancel dequeues the outbox record too — a member's own 'forget it' must not resend on the next launch", async () => {
@@ -2638,11 +2640,13 @@ describe("the local-echo projection (#209)", () => {
     const client = fakeClient({ rooms: [room] });
     vi.mocked(createClient).mockReturnValue(client);
     const connection = await connectPrepared(client);
-    enqueuePendingMessage({ localId: outboxKeyOf("txn10"), roomId: "!project-x:workspace.example", body: "offline", mentions: [], replyToEventId: null });
+    await enqueuePendingMessage(SESSION, { localId: outboxKeyOf("txn10"), roomId: "!project-x:workspace.example", body: "offline", mentions: [], replyToEventId: null });
 
+    // `cancel` stays synchronous (its own contract) and fire-and-forgets
+    // the dequeue, so the write lands a tick or two after this call returns.
     connection.cancel("!project-x:workspace.example", "~!project-x:workspace.example:txn10");
 
-    expect(pendingMessagesInOrder()).toEqual([]);
+    await vi.waitFor(async () => expect(await pendingMessagesInOrder(SESSION)).toEqual([]));
   });
 
   it("subscribe fires on this device's own local-echo status changes too — room news, no arrival", async () => {
@@ -3478,16 +3482,20 @@ describe("#289 — a queued send survives a reload", () => {
 
     const sent = connection.send("!project-x:workspace.example", "hold on");
     // Still in flight: the record is already there, exactly what a reload
-    // landing right now would need to resend it.
-    expect(pendingMessagesInOrder()).toEqual([
-      expect.objectContaining({ roomId: "!project-x:workspace.example", body: "hold on", replyToEventId: null }),
-    ]);
+    // landing right now would need to resend it. `send()` awaits the
+    // enqueue before it ever calls `client.sendMessage`, so this settles
+    // within a tick or two of being called — well before `resolveSend`.
+    await vi.waitFor(async () =>
+      expect(await pendingMessagesInOrder(SESSION)).toEqual([
+        expect.objectContaining({ roomId: "!project-x:workspace.example", body: "hold on", replyToEventId: null }),
+      ]),
+    );
 
     resolveSend();
     await sent;
 
     // Confirmed: nothing left to resend, and nothing to duplicate on the next launch.
-    expect(pendingMessagesInOrder()).toEqual([]);
+    expect(await pendingMessagesInOrder(SESSION)).toEqual([]);
   });
 
   it("a send that fails (offline) stays queued — ready for the next launch, not just a failed row for this one", async () => {
@@ -3498,16 +3506,18 @@ describe("#289 — a queued send survives a reload", () => {
 
     await expect(connection.send("!project-x:workspace.example", "offline words")).rejects.toThrow("NetworkError");
 
-    expect(pendingMessagesInOrder()).toEqual([
+    expect(await pendingMessagesInOrder(SESSION)).toEqual([
       expect.objectContaining({ roomId: "!project-x:workspace.example", body: "offline words" }),
     ]);
   });
 
   it("replays everything queued from a previous session once connect() succeeds, oldest first", async () => {
     // Written to storage out of chronological order on purpose — replay
-    // must sort by composedAt, not by storage order.
+    // must sort by composedAt, not by storage order. Keyed exactly as
+    // #288's cache names this same account (`workspaceCacheName`) — the
+    // one queue this launch's `connect(SESSION, …)` reads.
     localStorage.setItem(
-      "duo.workspace-outbox",
+      `duo.workspace-outbox|${workspaceCacheName(SESSION)}`,
       JSON.stringify([
         { localId: "outbox:old-2", roomId: "!project-x:workspace.example", body: "second", mentions: [], replyToEventId: null, composedAt: 2_000 },
         { localId: "outbox:old-1", roomId: "!project-x:workspace.example", body: "first", mentions: [], replyToEventId: null, composedAt: 1_000 },
@@ -3522,13 +3532,13 @@ describe("#289 — a queued send survives a reload", () => {
     const bodies = client.sendMessage.mock.calls.map(([, content]) => (content as { body: string }).body);
     expect(bodies).toEqual(["first", "second"]);
     // Both confirmed (the fake resolves every send) — nothing left queued.
-    await vi.waitFor(() => expect(pendingMessagesInOrder()).toEqual([]));
+    await vi.waitFor(async () => expect(await pendingMessagesInOrder(SESSION)).toEqual([]));
   });
 
   it("a message that already sent before the reload is never replayed — no duplicate", async () => {
     // Nothing queued: the previous session's `send()` dequeued it the
     // moment the homeserver confirmed it, before the reload ever happened.
-    expect(pendingMessagesInOrder()).toEqual([]);
+    expect(await pendingMessagesInOrder(SESSION)).toEqual([]);
     const client = fakeClient();
     vi.mocked(createClient).mockReturnValue(client);
 
@@ -3538,7 +3548,7 @@ describe("#289 — a queued send survives a reload", () => {
   });
 
   it("a room this account can no longer reach is dropped from the outbox rather than retried forever", async () => {
-    enqueuePendingMessage({ localId: "outbox:gone-1", roomId: "!left:workspace.example", body: "anyone there?", mentions: [], replyToEventId: null });
+    await enqueuePendingMessage(SESSION, { localId: "outbox:gone-1", roomId: "!left:workspace.example", body: "anyone there?", mentions: [], replyToEventId: null });
     const client = fakeClient();
     // This account isn't (or is no longer) in the queued room at all —
     // nothing for a resend to land into.
@@ -3547,8 +3557,36 @@ describe("#289 — a queued send survives a reload", () => {
 
     await connectPrepared(client);
 
-    await vi.waitFor(() => expect(pendingMessagesInOrder()).toEqual([]));
+    await vi.waitFor(async () => expect(await pendingMessagesInOrder(SESSION)).toEqual([]));
     expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+
+  /*
+   * #289 (post-#288/#320 review): the outbox is keyed exactly like #288's
+   * cache — one queue per account — so it is swept by the very same
+   * backstop `connect()` already runs for that cache
+   * (`sweepWorkspaceCaches`), via `sweepPendingMessages`. A queue some
+   * other account on this device left behind (its own sign-out never ran
+   * — the tab closed first, a crash) is gone once a NEW account's
+   * `connect()` succeeds — it is never read, and never resent into this
+   * account's rooms.
+   */
+  it("connect() sweeps every other account's leftover queue from this device, never resending it here", async () => {
+    const OTHER = { homeserverUrl: SESSION.homeserverUrl, userId: "@bose:workspace.example", accessToken: "syt_bose", deviceId: "BOSEDEVICE" };
+    localStorage.setItem(
+      `duo.workspace-outbox|${workspaceCacheName(OTHER)}`,
+      JSON.stringify([
+        { localId: "outbox:bose-1", roomId: "!project-x:workspace.example", body: "bose's unsent draft", mentions: [], replyToEventId: null, composedAt: 1_000 },
+      ]),
+    );
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+
+    await connectPrepared(client);
+
+    // Never read into THIS account's rooms, and wiped from the device.
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    await vi.waitFor(async () => expect(await pendingMessagesInOrder(OTHER)).toEqual([]));
   });
 });
 
