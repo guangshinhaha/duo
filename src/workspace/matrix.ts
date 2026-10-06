@@ -22,6 +22,7 @@ import {
   type MatrixClient,
   type MatrixEvent,
   type Room as MatrixRoom,
+  type RoomMember,
 } from "matrix-js-sdk";
 // #207: case- and accent-insensitive matching for the one search box's
 // display-name matching — Apache-2.0, the SDK's own fold (it also strips the
@@ -33,6 +34,7 @@ import {
 import { normalize } from "matrix-js-sdk/lib/utils";
 import { duoOwnerUserIdOf, isDuoUserId, localpartOf } from "./identity.js";
 import { normalizeHomeserverUrl } from "../homeserver.js";
+import { readPrivateReceiptsPref } from "../readReceiptPrefs.js";
 import { markdownToHtml } from "./markdown.js";
 import {
   mentionAnchorsFrom,
@@ -422,6 +424,32 @@ export interface RoomMessage {
    * `pending`.
    */
   readonly failed?: boolean;
+  /**
+   * #286: this own message's state once it's no longer a local echo —
+   * "sent" the moment the homeserver's synced copy folds it into the live
+   * timeline (`pending`/`failed` above cover everything before that),
+   * "read" the moment ANY other member's read receipt reaches at or past
+   * it. Undefined for anyone else's message (a member never sees a
+   * delivery state on words they didn't send themselves — there is
+   * nothing here to show it with) and for a redacted one (there is
+   * nothing left to have read). A duo's own receipt, were it ever to send
+   * one, never counts: this is a person-to-person fact, and a duo
+   * reading its indexing pass over a room is not a colleague seeing it.
+   */
+  readonly readState?: "sent" | "read";
+  /**
+   * #286: who, among those other members, has read this far — present
+   * only alongside `readState: "read"`, so the render can name them
+   * (collapsed past a few, AC2) rather than just ticking a box. The same
+   * exclusions as `readState`: never the sender, never a duo.
+   */
+  readonly readBy?: readonly ReadReceipt[];
+}
+
+/** #286: one other member whose read receipt has reached a given message — never a duo (see `RoomMessage.readState`'s own doc comment). */
+export interface ReadReceipt {
+  readonly userId: string;
+  readonly name: string;
 }
 
 /**
@@ -1120,6 +1148,53 @@ function pendingEventsOf(room: MatrixRoom): readonly MatrixEvent[] {
 }
 
 /**
+ * #286: a room's members, read as defensively as `pendingEventsOf` reads
+ * its own list — a seam fixture built for a narrower purpose (#211's
+ * pagination room, among others) never modelled a member list at all, and
+ * that costs it nothing: there is simply nobody to resolve a read receipt
+ * against.
+ */
+function membersOf(room: MatrixRoom): readonly RoomMember[] {
+  try {
+    return room.getMembers();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * #286: how far one OTHER member has read, as a timestamp this device can
+ * compare a message's own `originServerTs` against — `room.getEventReadUpTo`
+ * (the SDK method the issue names) answers with an event id, which only
+ * means anything once resolved to a point in time. Resolved against the
+ * window already in hand (`events`, the same list the projection reads
+ * everything else from) first, falling back to the room's own index when the
+ * receipt points further back than that window reaches; null when neither
+ * has it, which this device reads as "unknown", never as "unread" — a
+ * member's receipt existing at all already means they read SOMETHING.
+ */
+function readThroughTsOf(room: MatrixRoom, events: readonly MatrixEvent[], userId: string): number | null {
+  let upToId: string | null;
+  try {
+    upToId = room.getEventReadUpTo(userId);
+  } catch {
+    return null;
+  }
+  if (upToId === null || upToId === undefined) {
+    return null;
+  }
+  const inWindow = events.find((event) => event.getId() === upToId);
+  if (inWindow) {
+    return inWindow.getTs();
+  }
+  try {
+    return room.findEventById(upToId)?.getTs() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * #209: whether an event is this device's own send still on its way, or one
  * the homeserver never got — read straight from matrix-js-sdk's own
  * `event.status`, never a second, hand-rolled copy of it. A confirmed event
@@ -1260,6 +1335,25 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
   // — a context window never carries them, there being nothing "in flight"
   // about history.
   const events = around ?? [...room.getLiveTimeline().getEvents(), ...pendingEventsOf(room)];
+  const selfUserId = client.getUserId() ?? "";
+  // #286: each OTHER joined member's read position, resolved to a
+  // timestamp once here rather than per message below — every own message
+  // compares against the same snapshot, which is what keeps a tick "read"
+  // forever once it's true (a later message's receipt moving on from an
+  // older one's exact event id never un-reads it). Never a duo (its own
+  // indexing pass over a room is not a colleague seeing it — #286's own
+  // read on the vocabulary's person/duo split) and never this account's
+  // own membership (nobody reads their own words as a receipt).
+  const readThroughByUser = new Map<string, number>();
+  for (const member of membersOf(room)) {
+    if (member.userId === selfUserId || member.membership !== "join" || isDuoUserId(member.userId)) {
+      continue;
+    }
+    const ts = readThroughTsOf(room, events, member.userId);
+    if (ts !== null) {
+      readThroughByUser.set(member.userId, ts);
+    }
+  }
   const nameOf = (senderId: string): string => {
     const member = room.getMember(senderId);
     return nonIdName(member?.rawDisplayName ?? member?.name, senderId) ?? localpartOf(senderId);
@@ -1495,6 +1589,16 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
   const messages: RoomMessage[] = [];
   for (const [eventId, base] of bases) {
     const thread = threads.get(eventId);
+    // #286: a delivery state only ever reads on THIS device's own,
+    // confirmed (not pending, not failed, not struck) sends — anyone
+    // else's message has nothing here to show, and a local echo already
+    // has its own tick (`pending`/`failed`, above).
+    const readers =
+      base.senderId === selfUserId && !base.pending && !base.failed && !base.redacted
+        ? [...readThroughByUser].filter(([, ts]) => ts >= base.ts).map(([userId]) => ({ userId, name: nameOf(userId) }))
+        : [];
+    const readState: "sent" | "read" | undefined =
+      base.senderId === selfUserId && !base.pending && !base.failed && !base.redacted ? (readers.length > 0 ? "read" : "sent") : undefined;
     messages.push({
       eventId,
       roomId: room.roomId,
@@ -1528,6 +1632,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       replyToEventId: base.replyToEventId,
       pending: base.pending ? true : undefined,
       failed: base.failed ? true : undefined,
+      readState,
+      readBy: readers.length > 0 ? readers : undefined,
     });
   }
   return messages;
@@ -2691,7 +2797,11 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       const events = room?.getLiveTimeline().getEvents() ?? [];
       const last = events[events.length - 1];
       if (last) {
-        await client.sendReadReceipt(last, ReceiptType.Read, true);
+        // #286: the spec's own private-receipt type (MSC2285) when this
+        // member chose it in Settings — still moves this account's own read
+        // position everywhere that matters (unread counts, every device),
+        // the one thing it withholds is telling other members in the room.
+        await client.sendReadReceipt(last, readPrivateReceiptsPref() ? ReceiptType.ReadPrivate : ReceiptType.Read, true);
       }
       // #220: reading the conversation — however that happened — undoes an
       // explicit "mark unread" the same way it undoes a true unread count.
@@ -3047,12 +3157,21 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       const localEchoListener = (_event: MatrixEvent, room: MatrixRoom): void => {
         handler(room.roomId);
       };
+      // #286: another member's read receipt arriving is room news the same
+      // way a reaction is — no arrival, because it is never a NEW message,
+      // only this device's own sent rows reading differently (sent → read)
+      // the next time the timeline projection runs.
+      const receiptListener = (_event: MatrixEvent, room: MatrixRoom): void => {
+        handler(room.roomId);
+      };
       client.on(RoomEvent.Timeline, listener);
       client.on(RoomEvent.LocalEchoUpdated, localEchoListener);
+      client.on(RoomEvent.Receipt, receiptListener);
       handlers.add(handler);
       return () => {
         client.off(RoomEvent.Timeline, listener);
         client.off(RoomEvent.LocalEchoUpdated, localEchoListener);
+        client.off(RoomEvent.Receipt, receiptListener);
         handlers.delete(handler);
       };
     },

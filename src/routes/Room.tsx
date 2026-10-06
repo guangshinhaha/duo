@@ -23,7 +23,7 @@ import { mentionCandidatesOf } from "../composer/mentionOffer.js";
 import { RewriteMenu } from "../composer/RewriteMenu.js";
 import type { RewriteInstruction } from "../composer/rewrite.js";
 import { readFactCheckPref } from "../factCheckPrefs.js";
-import type { RoomMemberRef, RoomMessage, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
+import type { ReadReceipt, RoomMemberRef, RoomMessage, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { duoConversationOf, questionOutcomes, questionOutcomeWords, type QuestionOutcome } from "../workspace/duoConversation.js";
@@ -912,6 +912,18 @@ export function Room({
   );
 }
 
+/** #286: how many readers' names a "Read by" line names before collapsing the rest into a count — AC2's "collapsed past a few". */
+const READ_BY_VISIBLE = 3;
+
+/** #286: "Bose" · "Bose, Carol" · "Bose, Carol, Dan +2" — never more than `READ_BY_VISIBLE` names before the collapse. */
+function readByLabel(readBy: readonly ReadReceipt[]): string {
+  const names = readBy.map((reader) => reader.name);
+  if (names.length <= READ_BY_VISIBLE) {
+    return names.join(", ");
+  }
+  return `${names.slice(0, READ_BY_VISIBLE).join(", ")} +${names.length - READ_BY_VISIBLE}`;
+}
+
 /**
  * One message's reading half — attribution by the id's grammar, the words,
  * the edit mark, the pending mark, the server's time, and the reactions
@@ -1071,6 +1083,27 @@ export function MessageBody({
               >
                 Cancel
               </button>
+            )}
+          </span>
+        )}
+        {/* #286: sending → sent → read, this device's own send only —
+            `pending`/`failed` above already cover everything before the
+            homeserver's synced copy lands; from there `readState` takes
+            over. A duo's receipt never promotes this (see `readState`'s
+            own doc comment in matrix.ts), so a message to a colleague's
+            duo alone reads "Sent" until a PERSON also reads it. */}
+        {message.readState === "sent" && (
+          <span className="ml-1" data-testid="room-message-sent">
+            Sent
+          </span>
+        )}
+        {message.readState === "read" && (
+          <span className="ml-1" data-testid="room-message-read">
+            Read
+            {message.readBy && message.readBy.length > 0 && (
+              <span className="ml-1 text-[var(--faint)]" data-testid="room-message-read-by">
+                {readByLabel(message.readBy)}
+              </span>
             )}
           </span>
         )}

@@ -26,6 +26,7 @@ import { MutationError } from "../components/MutationError.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import { readUrlPreviewPref, writeUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { readFactCheckPref, writeFactCheckPref } from "../factCheckPrefs.js";
+import { readPrivateReceiptsPref, writePrivateReceiptsPref } from "../readReceiptPrefs.js";
 import { SendingSettings } from "../components/SendingSettings.js";
 import {
   clearMissed,
@@ -150,6 +151,10 @@ export function Settings({
   // #264: off until this member turns it on — same "their own call, on
   // their own device" default as link previews above.
   const [factCheck, setFactCheck] = useState<boolean>(readFactCheckPref);
+  // #286: off (ordinary, visible receipts — this app's behavior since #63)
+  // until this member turns it on — same "their own call, on their own
+  // device" default as the two above.
+  const [privateReceipts, setPrivateReceipts] = useState<boolean>(readPrivateReceiptsPref);
   // #69: this device's own rule. State read on mount (the route mounts
   // fresh per visit), written through — the log's read is the same story.
   const [dnd, setDnd] = useState<DndPrefs>(readDndPrefs);
@@ -341,6 +346,34 @@ export function Settings({
           type="button"
         >
           {factCheck ? "Turn off quiet fact-check" : "Turn on quiet fact-check"}
+        </button>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-private-receipts">
+        <h2 className="type-heading">Private read receipts</h2>
+        {/* #286: off unless this member turns it on — the ordinary,
+            visible receipt (#63) stays the default. Turning this on
+            doesn't stop this account reading its own place in a
+            conversation (unread counts and every device still agree) —
+            it only stops other members seeing that this account in
+            particular has read up to here. Matrix's own distinction
+            (`m.read` vs `m.read.private`), not a client-side pretense. */}
+        <p className="type-provenance text-[var(--muted)]">
+          Other members see a tick turn to "Read" once you've seen their message — the same way you see theirs. Turn this on and your
+          own reading stops showing: you still keep your place, nobody else sees it.
+        </p>
+        <button
+          aria-pressed={privateReceipts}
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+          data-testid="settings-private-receipts-toggle"
+          onClick={() => {
+            const next = !privateReceipts;
+            writePrivateReceiptsPref(next);
+            setPrivateReceipts(next);
+          }}
+          type="button"
+        >
+          {privateReceipts ? "Turn off private read receipts" : "Turn on private read receipts"}
         </button>
       </section>
 
