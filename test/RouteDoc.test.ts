@@ -68,6 +68,8 @@ const SERVED: [method: string, path: string][] = [
   ["GET", "/drafts"],
   ["GET", "/drafts/:id"],
   ["POST", "/drafts"],
+  ["POST", "/compose/rewrite"],
+  ["POST", "/compose/fact-check"],
   ["POST", "/ask"],
   ["POST", "/drafts/:id/outcome"],
   ["POST", "/drafts/:id/answer"],

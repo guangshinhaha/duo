@@ -25,6 +25,7 @@ import { usePushSubscriptionStatus, useSubscribeToPush, useUnsubscribeFromPush }
 import { MutationError } from "../components/MutationError.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import { readUrlPreviewPref, writeUrlPreviewPref } from "../urlPreviewPrefs.js";
+import { readFactCheckPref, writeFactCheckPref } from "../factCheckPrefs.js";
 import {
   clearMissed,
   isDndActive,
@@ -145,6 +146,9 @@ export function Settings({
   // #219: this member's own opt-in, off until they turn it on — never a
   // default this app chose for them (see urlPreviewPrefs.ts for why).
   const [urlPreviews, setUrlPreviews] = useState<boolean>(readUrlPreviewPref);
+  // #264: off until this member turns it on — same "their own call, on
+  // their own device" default as link previews above.
+  const [factCheck, setFactCheck] = useState<boolean>(readFactCheckPref);
   // #69: this device's own rule. State read on mount (the route mounts
   // fresh per visit), written through — the log's read is the same story.
   const [dnd, setDnd] = useState<DndPrefs>(readDndPrefs);
@@ -309,6 +313,33 @@ export function Settings({
           type="button"
         >
           {urlPreviews ? "Turn off link previews" : "Turn on link previews"}
+        </button>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-fact-check">
+        <h2 className="type-heading">Quiet fact-check</h2>
+        {/* #264: off unless this member turns it on, same stance as link
+            previews just above — a flag is shown only in the composer
+            this member is typing in, and only after they've opted in
+            here. At most one flag at a time, only above a real
+            confidence threshold (the daemon's own call); sending is
+            never blocked by it, on or off. */}
+        <p className="type-provenance text-[var(--muted)]">
+          While you're typing your own reply, your duo quietly checks it against what it already knows — a wrong date, number, or
+          commitment gets a subtle underline with its source, nothing more. Off until you turn it on, and it never blocks sending.
+        </p>
+        <button
+          aria-pressed={factCheck}
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+          data-testid="settings-fact-check-toggle"
+          onClick={() => {
+            const next = !factCheck;
+            writeFactCheckPref(next);
+            setFactCheck(next);
+          }}
+          type="button"
+        >
+          {factCheck ? "Turn off quiet fact-check" : "Turn on quiet fact-check"}
         </button>
       </section>
 

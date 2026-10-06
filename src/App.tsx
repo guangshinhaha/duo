@@ -15,8 +15,8 @@ import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js"
 import { unsubscribeFromPush } from "./push.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
-import { shouldPersistQuery, useOrgOverview } from "./api/queries.js";
-import type { DraftRecord } from "./api/types.js";
+import { shouldPersistQuery, useFactCheck, useOrgOverview, useRewriteText } from "./api/queries.js";
+import type { DraftRecord, RewriteInstruction } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Admin } from "./routes/Admin.js";
 import { Connect } from "./routes/Connect.js";
@@ -251,6 +251,17 @@ interface SurfaceContext {
   onDuoEnded: () => void;
   /** #254: the admin screens this device may open, and where. */
   admin: AdminAccess;
+  /**
+   * #263/#264: the daemon calls `Room`'s own composer drives, bound here
+   * (where `api` may be imported) rather than in `Room.tsx`/`RoomComposer`
+   * itself, which sit on the share path and may never import `src/api/*`
+   * (`test/WorkspaceMatrixSeam.test.ts`'s structural pin) — the same
+   * reasoning `drafts`'s `RoomDrafts` slot already follows, generalized
+   * from a rendered slot to a plain bound function. `undefined` with no
+   * paired duo.
+   */
+  onRewrite?: (text: string, instruction: RewriteInstruction) => Promise<string>;
+  onFactCheck?: (text: string, threadContext: string | null) => Promise<{ claim: string; concern: string; sourceLabel: string } | null>;
 }
 
 /** Settings: the index of its sections, or one section alone (#148). */
@@ -289,8 +300,10 @@ function routeSurface(route: Route, shell: SurfaceContext) {
         <Room
           at={route.at}
           connection={shell.connection}
-          roomId={route.chat}
           drafts={shell.api ? <RoomDrafts api={shell.api} key={route.chat} roomId={route.chat} /> : null}
+          onFactCheck={shell.onFactCheck}
+          onRewrite={shell.onRewrite}
+          roomId={route.chat}
         />
       );
     }
@@ -406,6 +419,22 @@ function AppShell() {
     }
   }, [api, overview.data]);
   const activeSession = hostedActive ? hosted.session : session;
+  // #263/#264: owned here, not in Room.tsx — see `SurfaceContext.onRewrite`'s
+  // own doc comment. Always mounted (the hooks themselves degrade to a
+  // rejected promise with no `api`, per `useRewriteText`/`useFactCheck`'s
+  // own doc comments), so the bound functions below are only ever handed
+  // down when there's actually a duo to call.
+  const rewriteMutation = useRewriteText(api);
+  const factCheckMutation = useFactCheck(api);
+  const onRewrite = api
+    ? (text: string, instruction: RewriteInstruction) => rewriteMutation.mutateAsync({ text, instruction }).then((result) => result.text)
+    : undefined;
+  const onFactCheck = api
+    ? (text: string, threadContext: string | null) =>
+        factCheckMutation
+          .mutateAsync({ text, threadContext })
+          .then((result) => (result.flag ? { claim: result.flag.claim, concern: result.flag.concern, sourceLabel: result.flag.source.label } : null))
+    : undefined;
   // The public front door: a signed-out visitor who arrives at the bare
   // root of a hosted build sees the landing page, not the sign-in card.
   // Decided once, at arrival — signing out later returns to sign-in, never
@@ -912,6 +941,8 @@ function AppShell() {
           onWorkspaceSignIn: openWorkspaceSignIn,
           onDuoEnded: duoEnded,
           admin,
+          onRewrite,
+          onFactCheck,
         })}
         route={route}
         session={activeSession}

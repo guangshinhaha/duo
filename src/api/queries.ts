@@ -48,6 +48,9 @@ import type {
   DraftPipelineResult,
   DraftRecord,
   DuoKnowledge,
+  FactCheckResult,
+  RewriteInstruction,
+  RewriteResult,
   EscalationUrgencyRate,
   EmbedJobStatus,
   GridRow,
@@ -396,6 +399,35 @@ export function useCreateDraft(api: DuoApiConfig) {
     controllerRef.current?.abort();
   }, []);
   return { mutation, cancel };
+}
+
+/**
+ * #263: `POST /compose/rewrite` — polishes text the owner typed
+ * themselves (a selection or the whole composer), never a duo-generated
+ * draft. No query to invalidate: nothing is written anywhere until the
+ * composer's own Replace applies the result locally.
+ */
+export function useRewriteText(api: DuoApiConfig | null) {
+  return useMutation({
+    mutationFn: (input: { text: string; instruction: RewriteInstruction }) =>
+      api
+        ? apiRequest<RewriteResult>(api, "/compose/rewrite", { method: "POST", body: JSON.stringify(input) })
+        : Promise.reject(new Error("No duo is paired to rewrite with.")),
+  });
+}
+
+/**
+ * #264: `POST /compose/fact-check` — a debounced, opt-in check of the
+ * owner's own typed composer text. Also writes nothing: the daemon reads
+ * the corpus, never the composer's words.
+ */
+export function useFactCheck(api: DuoApiConfig | null) {
+  return useMutation({
+    mutationFn: (input: { text: string; threadContext?: string | null }) =>
+      api
+        ? apiRequest<FactCheckResult>(api, "/compose/fact-check", { method: "POST", body: JSON.stringify(input) })
+        : Promise.reject(new Error("No duo is paired to fact-check against.")),
+  });
 }
 
 /**

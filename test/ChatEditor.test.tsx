@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { UNDO_COMMAND } from "lexical";
 import { ChatEditor, type ChatEditorHandle } from "../src/composer/ChatEditor.js";
 import type { MentionCandidate } from "../src/composer/mentionOffer.js";
-import { composed, composerText, pressEnter, typeInto } from "./composerHelpers.js";
+import { composed, composerText, editorOf, pressEnter, selectText, typeInto } from "./composerHelpers.js";
 
 const CANDIDATES: readonly MentionCandidate[] = [
   { userId: "@carol:workspace.example", label: "Carol", kind: "person" },
@@ -253,5 +254,121 @@ describe("#248 — the handle", () => {
   it("starts from initialText, lines kept", () => {
     const { field } = renderEditor({ initialText: "kept\nacross a route switch", mode: "plain" });
     expect(composerText(field)).toBe("kept\nacross a route switch");
+  });
+});
+
+describe("#263 — the rewrite primitives", () => {
+  it("rewriteTarget reads the whole document when nothing is selected", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "hi there");
+    const target = handle.current!.rewriteTarget();
+    expect(target).toEqual({ text: "hi there", hasSelection: false });
+  });
+
+  it("rewriteTarget reads the selection when one exists; applyRewrite replaces exactly that range", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "hello world");
+    selectText(field, "world");
+    const target = handle.current!.rewriteTarget();
+    expect(target).toEqual({ text: "world", hasSelection: true });
+    act(() => handle.current!.applyRewrite("WORLD"));
+    expect(composerText(field)).toBe("hello WORLD");
+  });
+
+  it("applyRewrite replaces the whole document when rewriteTarget captured no selection", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "hi there");
+    handle.current!.rewriteTarget();
+    act(() => handle.current!.applyRewrite("hello!"));
+    expect(composerText(field)).toBe("hello!");
+  });
+
+  it("applyRewrite on a multi-line replacement keeps each line as its own line", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "one line");
+    handle.current!.rewriteTarget();
+    act(() => handle.current!.applyRewrite("first\nsecond"));
+    expect(composerText(field)).toBe("first\nsecond");
+  });
+
+  it("a whole-document rewrite is one undoable step — undo restores the original text", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "hi there");
+    handle.current!.rewriteTarget();
+    act(() => handle.current!.applyRewrite("hello!"));
+    expect(composerText(field)).toBe("hello!");
+    act(() => {
+      editorOf(field).dispatchCommand(UNDO_COMMAND, undefined);
+    });
+    expect(composerText(field)).toBe("hi there");
+  });
+
+  it("a selection rewrite is also one undoable step", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "hello world");
+    selectText(field, "world");
+    handle.current!.rewriteTarget();
+    act(() => handle.current!.applyRewrite("WORLD"));
+    expect(composerText(field)).toBe("hello WORLD");
+    act(() => {
+      editorOf(field).dispatchCommand(UNDO_COMMAND, undefined);
+    });
+    expect(composerText(field)).toBe("hello world");
+  });
+
+  it("setEditable(false) makes the field non-editable; setEditable(true) restores it", () => {
+    const { field, handle } = renderEditor();
+    act(() => handle.current!.setEditable(false));
+    expect(field).toHaveAttribute("contenteditable", "false");
+    act(() => handle.current!.setEditable(true));
+    expect(field).toHaveAttribute("contenteditable", "true");
+  });
+
+  it("getRootElement returns the same DOM node the composer renders", () => {
+    const { field, handle } = renderEditor();
+    expect(handle.current!.getRootElement()).toBe(field);
+  });
+});
+
+describe("#264 — the fact-check mark", () => {
+  it("applyFactCheck underlines the claim's exact text and carries its concern/source as data attributes", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "let's meet Friday to finish this");
+    act(() => handle.current!.applyFactCheck({ claim: "Friday", concern: "The doc says Thursday.", sourceLabel: "standing order: meetings are on Thursday" }));
+    const mark = field.querySelector('[data-testid="fact-check-flag"]');
+    expect(mark).not.toBeNull();
+    expect(mark).toHaveTextContent("Friday");
+    expect(mark).toHaveAttribute("data-fact-check-concern", "The doc says Thursday.");
+    expect(mark).toHaveAttribute("data-fact-check-source", "standing order: meetings are on Thursday");
+    // The mark changes how the text renders, never what it says.
+    expect(composerText(field)).toBe("let's meet Friday to finish this");
+  });
+
+  it("applyFactCheck(null) clears an existing mark, text unchanged", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "let's meet Friday");
+    act(() => handle.current!.applyFactCheck({ claim: "Friday", concern: "x", sourceLabel: "y" }));
+    expect(field.querySelector('[data-testid="fact-check-flag"]')).not.toBeNull();
+    act(() => handle.current!.applyFactCheck(null));
+    expect(field.querySelector('[data-testid="fact-check-flag"]')).toBeNull();
+    expect(composerText(field)).toBe("let's meet Friday");
+  });
+
+  it("a second applyFactCheck call clears the first mark before placing the new one — never two at once", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "Friday works, and so does ten units");
+    act(() => handle.current!.applyFactCheck({ claim: "Friday", concern: "a", sourceLabel: "s" }));
+    act(() => handle.current!.applyFactCheck({ claim: "ten units", concern: "b", sourceLabel: "s2" }));
+    const marks = field.querySelectorAll('[data-testid="fact-check-flag"]');
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toHaveTextContent("ten units");
+  });
+
+  it("does nothing (and never throws) when the claim can't be found within a single text run", () => {
+    const { field, handle } = renderEditor();
+    typeInto(field, "make it **bold** now");
+    expect(() => act(() => handle.current!.applyFactCheck({ claim: "bold now", concern: "x", sourceLabel: "y" }))).not.toThrow();
+    expect(field.querySelector('[data-testid="fact-check-flag"]')).toBeNull();
+    expect(composerText(field)).toBe("make it **bold** now");
   });
 });
