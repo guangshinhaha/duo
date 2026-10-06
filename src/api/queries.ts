@@ -49,6 +49,7 @@ import type {
   DraftRecord,
   DuoKnowledge,
   DuoRequest,
+  ExcludedEvidence,
   FactCheckResult,
   RewriteInstruction,
   RewriteResult,
@@ -173,6 +174,12 @@ export const queryKeys = {
   voiceAdaptation: (personId: string) => ["people", personId, "voice-adaptation"] as const,
   // #315: colleagues' held requests to talk to the duo.
   duoRequests: ["workspace-requests"] as const,
+  // duo#272 (digital-duo#288): the evidence the owner has removed from
+  // citation — read back by the Knows tab. Its own key, not nested under
+  // ["knowledge"]: the knowledge summary route never changes when an
+  // exclusion is made or undone, so invalidating one must never imply the
+  // other reads stale.
+  excludedEvidence: ["knowledge", "evidence", "excluded"] as const,
 };
 
 /** `null` (a member with no duo paired) reads nothing: the query stays idle, and its data is `undefined`. */
@@ -865,6 +872,50 @@ export function useRuleAction(api: DuoApiConfig) {
       apiRequest<Rule>(api, `/mirror/rules/${ruleId}/${action}`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.mirrorRules });
+    },
+  });
+}
+
+/**
+ * duo#272 (digital-duo#288): what the Knows tab shows under "Removed from
+ * citation" — every past exchange the owner has excluded, newest first,
+ * with enough of its own text to recognise it (or an honest `null` once
+ * the record itself is gone).
+ */
+export function useExcludedEvidence(api: DuoApiConfig) {
+  return useQuery({
+    queryKey: queryKeys.excludedEvidence,
+    queryFn: () => apiRequest<{ excluded: ExcludedEvidence[] }>(api, "/knowledge/evidence/excluded"),
+  });
+}
+
+/**
+ * `POST /knowledge/evidence/:recordId/exclude` (digital-duo#288): the owner
+ * removing one bad "past exchange" source inline, from a draft's Used list
+ * or the Review surface's own provenance rail. Idempotent on the daemon's
+ * side (excluding twice is a no-op), and this stops the record being cited
+ * in any future draft without touching the one already on screen —
+ * reversible from the Knows tab (`useRestoreEvidence`), never undone here.
+ */
+export function useExcludeEvidence(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ recordId }: { recordId: string }) =>
+      apiRequest<{ excluded: true }>(api, `/knowledge/evidence/${encodeURIComponent(recordId)}/exclude`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.excludedEvidence });
+    },
+  });
+}
+
+/** `POST /knowledge/evidence/:recordId/restore` (digital-duo#288) — the Knows tab's undo for `useExcludeEvidence`, the same idempotent shape as a rule's approve/reject. */
+export function useRestoreEvidence(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ recordId }: { recordId: string }) =>
+      apiRequest<{ excluded: false }>(api, `/knowledge/evidence/${encodeURIComponent(recordId)}/restore`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.excludedEvidence });
     },
   });
 }

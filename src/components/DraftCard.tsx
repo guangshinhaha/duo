@@ -108,7 +108,7 @@ export function DraftCard({
           <div className="rounded-[var(--r-md)] border border-dashed border-[var(--edge)] px-4 py-3 type-body text-[var(--muted)]" data-testid="escalation-reason">
             {draft.escalationReason}
           </div>
-          <SourceList sources={draft.sources} />
+          <SourceList api={api} sources={draft.sources} />
           {!draft.refused &&
             (answerEscalation.isSuccess ? (
               <p className="type-provenance text-[var(--confident)]" data-testid="answer-confirmation">
@@ -190,7 +190,7 @@ export function DraftCard({
             a sent draft's delivery state reads here too. Escalations never
             deliver, so the escalated branch has no line to show. */}
         <DeliveryStateLine delivery={draft.delivery} />
-        <SourceList sources={draft.sources} />
+        <SourceList api={api} sources={draft.sources} />
         {sendingUntil !== null ? (
           // #260: the held Send — nothing posted until the countdown ends.
           <SendWindow onUndo={undoSend} until={sendingUntil} />

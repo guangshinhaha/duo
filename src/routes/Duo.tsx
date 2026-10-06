@@ -91,7 +91,7 @@ function Turn({ api, draft, keyboard }: { api: DuoApiConfig; draft: DraftRecord;
               )}
             </DuoLine>
           </div>
-          <SourceList sources={draft.sources} />
+          <SourceList api={api} sources={draft.sources} />
           <p className="type-provenance text-[var(--faint)]" data-testid="entry-outcome">
             {outcomeLabel(draft)}
             {draft.threadContext ? ` · about ${draft.threadContext}` : ""}

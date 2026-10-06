@@ -1,7 +1,8 @@
 import type { DuoApiConfig } from "../api/client.js";
-import { useChannels, useKnowledge } from "../api/queries.js";
+import { useChannels, useExcludedEvidence, useKnowledge, useRestoreEvidence } from "../api/queries.js";
 import type { DuoKnowledge } from "../api/types.js";
 import { MeterBar } from "../components/MeterBar.js";
+import { MutationError } from "../components/MutationError.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { ChannelList, isChannelList } from "./ChannelList.js";
@@ -15,6 +16,52 @@ function Section({ title, testId, children }: { title: string; testId: string; c
       <h2 className="type-heading">{title}</h2>
       {children}
     </section>
+  );
+}
+
+/**
+ * duo#272 (digital-duo#288): what the owner has removed from citation —
+ * the reversible half of the draft's inline Remove. Every excluded past
+ * exchange, newest first, with its own label (or an honest "no longer
+ * exists" once the record itself is gone) and a Restore undoing it through
+ * the same idempotent route the daemon exposes.
+ */
+function RemovedFromCitation({ api }: { api: DuoApiConfig }) {
+  const excluded = useExcludedEvidence(api);
+  const restore = useRestoreEvidence(api);
+  if (excluded.isLoading) {
+    return <RouteLoading variant="rows" />;
+  }
+  if (excluded.error) {
+    return <RouteError api={api} error={excluded.error} onRetry={() => void excluded.refetch()} />;
+  }
+  const rows = excluded.data?.excluded ?? [];
+  return (
+    <>
+      {rows.length === 0 ? (
+        <p className="type-provenance text-[var(--faint)]" data-testid="knows-removed-empty">
+          Nothing removed. A past exchange you remove inline on a draft shows up here.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2" data-testid="knows-removed-list">
+          {rows.map((row) => (
+            <li className="flex items-center justify-between gap-2" data-testid="knows-removed-row" key={row.recordId}>
+              <span className="min-w-0 truncate type-body text-[var(--muted)]">{row.label ?? "This record no longer exists."}</span>
+              <button
+                className="min-h-9 shrink-0 type-provenance text-[var(--muted)] underline disabled:opacity-40"
+                data-testid="knows-removed-restore"
+                disabled={restore.isPending && restore.variables?.recordId === row.recordId}
+                onClick={() => restore.mutate({ recordId: row.recordId })}
+                type="button"
+              >
+                Restore
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <MutationError error={restore.error} />
+    </>
   );
 }
 
@@ -40,6 +87,10 @@ function KnowsBody({ api, knowledge }: { api: DuoApiConfig; knowledge: DuoKnowle
         <a className="inline-flex min-h-11 items-center self-start underline" href="#onboarding">
           Import more history
         </a>
+      </Section>
+
+      <Section testId="knows-removed" title="Removed from citation">
+        <RemovedFromCitation api={api} />
       </Section>
 
       <Section testId="knows-asked" title="What people ask you">

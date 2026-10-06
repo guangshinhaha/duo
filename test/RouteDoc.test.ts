@@ -81,6 +81,10 @@ const SERVED: [method: string, path: string][] = [
   ["POST", "/review/:id/reject"],
   ["GET", "/mirror/portrait"],
   ["GET", "/knowledge"],
+  // digital-duo#288 (duo#272): landed on origin/main's src/serve/server.ts.
+  ["POST", "/knowledge/evidence/:recordId/exclude"],
+  ["POST", "/knowledge/evidence/:recordId/restore"],
+  ["GET", "/knowledge/evidence/excluded"],
   ["GET", "/mirror/rules"],
   ["GET", "/mirror/rules/:id"],
   ["GET", "/mirror/refusals"],
