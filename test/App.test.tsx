@@ -1,8 +1,25 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { App } from "../src/App.js";
 import { stubDesktop } from "./desktop.js";
 import type { DraftRecord } from "../src/api/types.js";
+
+/*
+ * #308: `setApi`'s own choke point (every forget/sign-out/revoke/end path)
+ * is where a dangling push subscription gets cleaned up — mocked here the
+ * same way `ArrivalNotifications.test.ts` mocks `postNotification`, so the
+ * rest of `push.ts` (feature detection, real subscribe/unsubscribe logic)
+ * stays exactly as it ships and is covered on its own in
+ * `test/PushSubscription.test.ts`.
+ */
+vi.mock("../src/push.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/push.js")>();
+  return { ...actual, unsubscribeFromPush: vi.fn(async () => undefined) };
+});
+
+import { unsubscribeFromPush } from "../src/push.js";
+import { App } from "../src/App.js";
+
+const unsubscribeFromPushMock = vi.mocked(unsubscribeFromPush);
 
 function draftFor(owner: string): DraftRecord {
   return {
@@ -63,6 +80,7 @@ function knowledgeFor() {
 describe("App — the query cache never leaks across a reconnect to a different daemon", () => {
   beforeEach(() => {
     localStorage.clear();
+    unsubscribeFromPushMock.mockClear();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -395,5 +413,10 @@ describe("App — hash routing between the surfaces", () => {
     await waitFor(() => expect(screen.getByPlaceholderText("100.64.1.5:7717")).toBeInTheDocument());
     expect(localStorage.getItem("duo.api-config")).toBeNull();
     await waitFor(() => expect(localStorage.getItem("duo-cache")).toBeNull());
+
+    // #308: the forgotten pairing's own push subscription, if any, is torn
+    // down through the same choke point — fired with the config that was
+    // just forgotten (the token unsubscribing needs), not `null`.
+    expect(unsubscribeFromPushMock).toHaveBeenCalledWith({ baseUrl: "http://d:7717", token: "tok" });
   });
 });

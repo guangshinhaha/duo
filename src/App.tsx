@@ -12,6 +12,7 @@ import { SyncStatusProvider } from "./sync.js";
 import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
 import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
+import { unsubscribeFromPush, wirePushNavigationMessages } from "./push.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
 import { shouldPersistQuery, useOrgOverview } from "./api/queries.js";
@@ -506,6 +507,13 @@ function AppShell() {
     return () => unwire?.();
   }, []);
 
+  // #308: the web-push twin of the effect above — a click on a notification
+  // the service worker showed while this tab (or every tab) was closed
+  // posts a message here once one is open again, and this is what turns
+  // that message into the same hash navigation a live arrival's own click
+  // already does.
+  useEffect(() => wirePushNavigationMessages() ?? undefined, []);
+
   // #69: the interruption decision's ear — the same live arrivals every
   // surface hears, held for the connection's life. The decision itself is
   // dispatchArrival above, beside the routes it speaks for.
@@ -567,6 +575,15 @@ function AppShell() {
   function setApi(next: DuoApiConfig | null): void {
     queryClient.clear();
     void persister.removeClient();
+    if (next === null && api) {
+      // #308: every path that clears the pairing — forget, sign out, a
+      // revoked token, the duo's end — goes through this one choke point,
+      // so this is the one place a dangling push subscription (now
+      // pointed at a token that's about to stop working) is cleaned up
+      // too. Fired, not awaited: nothing here may delay the sign-out
+      // itself, and `unsubscribeFromPush` never throws regardless.
+      void unsubscribeFromPush(api);
+    }
     // Hosted mode: who this browser is signed in as goes with the pairing it
     // describes — unpairing (forget, sign out, revocation, the duo's end)
     // leaves no name or admin flag behind.

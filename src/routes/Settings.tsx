@@ -21,6 +21,8 @@ import { PairAnotherDevice } from "../components/PairAnotherDevice.js";
 import { AskLinks } from "../components/AskLinks.js";
 import { InvitePeople } from "../components/InvitePeople.js";
 import { readHostedAccount, type AdminAccess } from "../api/hosted.js";
+import { usePushSubscriptionStatus, useSubscribeToPush, useUnsubscribeFromPush } from "../api/queries.js";
+import { MutationError } from "../components/MutationError.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import { readUrlPreviewPref, writeUrlPreviewPref } from "../urlPreviewPrefs.js";
 import {
@@ -38,6 +40,55 @@ import { SETTINGS_SECTIONS, type SettingsSectionId } from "../shell/routes.js";
 /** Masked to the last few characters — a paired token is a bearer credential, and a settings screen is exactly where screens get shared. */
 function maskedToken(token: string): string {
   return `•••• ${token.slice(-4)}`;
+}
+
+/**
+ * #308: the web-push control. A separate component (not inlined into
+ * `Settings` itself) because its three hooks all need `api` non-null —
+ * `Settings` renders this only once a duo is paired, which keeps the
+ * hooks themselves unconditional here, same reasoning as `PairedDevices`
+ * and `AskLinks` below.
+ */
+function PushNotificationsSection({ api }: { api: DuoApiConfig }) {
+  const status = usePushSubscriptionStatus(true);
+  const subscribe = useSubscribeToPush(api);
+  const unsubscribe = useUnsubscribeFromPush(api);
+
+  // Nothing is known yet about this browser's own `PushManager` state —
+  // rendering neither button for a moment beats flashing the wrong one.
+  // (`!status.data` alongside `isPending` is belt-and-braces for
+  // TypeScript's narrowing, not a real second state: `pushSubscriptionStatus`
+  // never throws, so this query has no error branch in practice.)
+  if (status.isPending || !status.data) {
+    return null;
+  }
+  if (!status.data.supported) {
+    return (
+      <p className="type-provenance text-[var(--muted)]" data-testid="push-unsupported">
+        This browser doesn&apos;t support push notifications when the app is closed.
+      </p>
+    );
+  }
+  const subscribed = status.data.subscribed;
+  return (
+    <div className="flex flex-col gap-2" data-testid="push-notifications">
+      <p className="type-provenance text-[var(--muted)]" data-testid="push-status">
+        {subscribed
+          ? "On for this browser — a draft waiting on you will notify you even with the app closed."
+          : "Off. Turn this on to be notified even when the app is closed."}
+      </p>
+      <button
+        className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+        data-testid="push-toggle"
+        disabled={subscribe.isPending || unsubscribe.isPending}
+        onClick={() => (subscribed ? unsubscribe.mutate() : subscribe.mutate())}
+        type="button"
+      >
+        {subscribed ? "Turn off" : "Turn on"}
+      </button>
+      <MutationError error={subscribe.error ?? unsubscribe.error} />
+    </div>
+  );
 }
 
 /**
@@ -189,6 +240,17 @@ export function Settings({
           )}
         </div>
       </section>
+
+      {/* #308: web push — the one path that reaches this device while the
+          app is fully closed, which nothing above this (a live tab, or the
+          Tauri shell's own native path) can. Needs a paired duo: there is
+          nowhere to register a subscription without one. */}
+      {api && (
+        <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-push">
+          <h2 className="type-heading">Notify me when the app is closed</h2>
+          <PushNotificationsSection api={api} />
+        </section>
+      )}
 
       </>
     ),
