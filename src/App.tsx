@@ -54,6 +54,7 @@ import { WorkspaceSignInDialog } from "./components/WorkspaceSignInDialog.js";
 import { isHostedAccess, useHostedWorkspace, WorkspaceAccessProvider } from "./workspace/access.js";
 import { useWorkspaceSession } from "./workspace/session.js";
 import { forgetWorkspaceCache, workspaceCacheName } from "./workspace/cache.js";
+import { clearPendingMessages } from "./workspace/outbox.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "./workspace/identity.js";
 import type { LiveArrival, RoomSummary, WorkspaceConnection, WorkspaceSession } from "./workspace/matrix.js";
 import { ProfilePane } from "./shell/ProfilePane.js";
@@ -598,7 +599,9 @@ function AppShell() {
   // rooms and timelines are another member's business, or nobody's) and
   // drops the persisted blob. Signing out is what #62 AC4 means by "leaves
   // nothing behind": cached messages and cached duo data both go, while
-  // the pairing itself stands.
+  // the pairing itself stands. #289: anything still queued to send goes
+  // with it too — a draft typed offline under one account must never
+  // resend itself into whichever account signs in here next.
   function setSession(next: WorkspaceSession | null): void {
     queryClient.clear();
     void persister.removeClient();
@@ -608,6 +611,7 @@ function AppShell() {
     if (session && (next === null || workspaceCacheName(next) !== workspaceCacheName(session))) {
       void forgetWorkspaceCache(session);
     }
+    clearPendingMessages();
     setSessionRaw(next);
   }
   function signOutWorkspace(): void {
