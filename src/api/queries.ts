@@ -66,6 +66,7 @@ import type {
   SearchOutcome,
   SentEscalationDigest,
   SettableDraftOutcome,
+  ShapeInstruction,
 } from "./types.js";
 
 /**
@@ -440,18 +441,23 @@ export function useFactCheck(api: DuoApiConfig | null) {
 export function useRecordOutcome(api: DuoApiConfig) {
   const queryClient = useQueryClient();
   return useMutation({
+    // #257: `alternative` names which of a hedged draft's candidates was
+    // sent or kept; the daemon records the rest as not chosen. Absent for a
+    // single draft — and then absent from the body too (JSON drops it).
     mutationFn: ({
       draftId,
       outcome,
       sentText,
       dismissReason,
+      alternative,
     }: {
       draftId: string;
       outcome: SettableDraftOutcome;
       sentText?: string;
       /** #259: an optional, one-tap reason for a "discarded" outcome — the daemon refuses it alongside any other outcome. */
       dismissReason?: DismissReason;
-    }) => apiRequest(api, `/drafts/${draftId}/outcome`, { method: "POST", body: JSON.stringify({ outcome, sentText, dismissReason }) }),
+      alternative?: number;
+    }) => apiRequest(api, `/drafts/${draftId}/outcome`, { method: "POST", body: JSON.stringify({ outcome, sentText, dismissReason, alternative }) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["drafts"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.review });
@@ -479,6 +485,60 @@ export function requestNeverAnswerRule(api: DuoApiConfig, draftId: string): Prom
   void api;
   void draftId;
   return Promise.resolve({ created: false });
+}
+
+/**
+ * Puts a draft the daemon just returned into every cached place it is
+ * shown — the pending list, the paged feed, its own address — so a shaped
+ * draft swaps in at once instead of after a refetch. Anything that isn't a
+ * draft list or this draft is left alone.
+ */
+function replaceCachedDraft(queryClient: ReturnType<typeof useQueryClient>, updated: DraftRecord): void {
+  const swap = (draft: DraftRecord): DraftRecord => (draft.id === updated.id ? updated : draft);
+  queryClient.setQueriesData({ queryKey: ["drafts"] }, (data: unknown) => {
+    if (Array.isArray(data)) {
+      return (data as DraftRecord[]).map(swap);
+    }
+    if (data && typeof data === "object" && "pages" in data && Array.isArray((data as { pages: unknown }).pages)) {
+      const paged = data as { pages: DraftRecord[][] };
+      return { ...paged, pages: paged.pages.map((page) => page.map(swap)) };
+    }
+    if (data && typeof data === "object" && (data as DraftRecord).id === updated.id) {
+      return updated;
+    }
+    return data;
+  });
+}
+
+/**
+ * #258: one tap on a shape chip — the daemon regenerates that candidate
+ * with the instruction, over the sources it already cites, and logs the
+ * tap as training signal (the request IS the record; nothing is logged
+ * client-side). The returned draft swaps into the caches straight away.
+ */
+export function useShapeDraft(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ draftId, instruction, alternative }: { draftId: string; instruction: ShapeInstruction; alternative: number }) =>
+      apiRequest<DraftRecord>(api, `/drafts/${draftId}/shape`, { method: "POST", body: JSON.stringify({ instruction, alternative }), timeoutMs: ASK_TIMEOUT_MS }),
+    onSuccess: (updated) => {
+      replaceCachedDraft(queryClient, updated);
+      queryClient.invalidateQueries({ queryKey: ["drafts"] });
+    },
+  });
+}
+
+/** #258: the one-tap undo — the daemon puts back the text the latest shape on that candidate replaced (and keeps the shape on record, marked undone). */
+export function useUndoShape(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ draftId, alternative }: { draftId: string; alternative: number }) =>
+      apiRequest<DraftRecord>(api, `/drafts/${draftId}/shape/undo`, { method: "POST", body: JSON.stringify({ alternative }) }),
+    onSuccess: (updated) => {
+      replaceCachedDraft(queryClient, updated);
+      queryClient.invalidateQueries({ queryKey: ["drafts"] });
+    },
+  });
 }
 
 export function useAnswerEscalation(api: DuoApiConfig) {

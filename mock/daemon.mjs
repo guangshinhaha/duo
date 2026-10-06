@@ -980,6 +980,56 @@ export function createMockDaemon({ empty = false, embedTickMs = 400 } = {}) {
         },
       ],
       [
+        // #258: one-tap shaping. The real daemon re-runs generation over the
+        // draft's own sources; the mock applies a fixed, visible rewrite so
+        // the chips, the swap and Undo can be seen working.
+        "POST",
+        /^\/drafts\/([^/]+)\/shape$/,
+        (m, body) => {
+          const draft = state.drafts.find((d) => d.id === m[1]);
+          if (!draft) {
+            return fail(404, "not_found", "No such draft.");
+          }
+          const rewrites = {
+            shorter: (text) => text.split(/(?<=[.!?])\s/)[0] ?? text,
+            warmer: (text) => `Happy to help — ${text}`,
+            more_formal: (text) => `Thank you for asking. ${text}`,
+            more_direct: (text) => text.replace(/^(I think|I believe|Probably)\s*,?\s*/i, ""),
+          };
+          if (!Object.hasOwn(rewrites, body?.instruction)) {
+            return fail(400, "bad_request", "instruction must be one of: shorter, warmer, more_formal, more_direct");
+          }
+          if (draft.escalated || draft.outcome !== null) {
+            return fail(409, "DraftNotShapeableError", "Only a pending draft can be shaped.");
+          }
+          const fromText = draft.draftText ?? "";
+          const toText = rewrites[body.instruction](fromText);
+          if (toText === fromText) {
+            return fail(409, "DraftNotShapeableError", "Your duo couldn't change that — the draft is unchanged.");
+          }
+          draft.shapes = [...(draft.shapes ?? []), { id: `s-${Date.now()}`, alternative: 0, instruction: body.instruction, createdAt: new Date().toISOString(), undoneAt: null, fromText }];
+          draft.draftText = toText;
+          return ok(draft);
+        },
+      ],
+      [
+        "POST",
+        /^\/drafts\/([^/]+)\/shape\/undo$/,
+        (m) => {
+          const draft = state.drafts.find((d) => d.id === m[1]);
+          if (!draft) {
+            return fail(404, "not_found", "No such draft.");
+          }
+          const standing = (draft.shapes ?? []).filter((shape) => shape.undoneAt === null).at(-1);
+          if (!standing) {
+            return fail(409, "DraftNotShapeableError", "There is no shape to undo.");
+          }
+          standing.undoneAt = new Date().toISOString();
+          draft.draftText = standing.fromText;
+          return ok(draft);
+        },
+      ],
+      [
         "POST",
         /^\/drafts\/([^/]+)\/answer$/,
         (m, body) => {

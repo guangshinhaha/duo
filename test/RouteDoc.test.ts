@@ -73,6 +73,9 @@ const SERVED: [method: string, path: string][] = [
   ["POST", "/ask"],
   ["POST", "/drafts/:id/outcome"],
   ["POST", "/drafts/:id/answer"],
+  // digital-duo #257/#258 (drafting): one-tap shaping and its undo.
+  ["POST", "/drafts/:id/shape"],
+  ["POST", "/drafts/:id/shape/undo"],
   ["GET", "/review"],
   ["POST", "/review/:id/approve"],
   ["POST", "/review/:id/reject"],
