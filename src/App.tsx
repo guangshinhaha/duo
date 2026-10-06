@@ -45,6 +45,7 @@ import { roomTitle } from "./shell/roomTitle.js";
 import { roomHref } from "./workspace/links.js";
 import { Room } from "./routes/Room.js";
 import { RoomDrafts } from "./components/RoomDrafts.js";
+import { OffTheRecordControl } from "./components/OffTheRecordControl.js";
 import { ThreadView } from "./routes/Thread.js";
 import { Duo } from "./routes/Duo.js";
 import { Confirmations } from "./routes/Confirmations.js";
@@ -304,6 +305,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
           at={route.at}
           connection={shell.connection}
           drafts={shell.api ? <RoomDrafts api={shell.api} connection={shell.connection} key={route.chat} roomId={route.chat} /> : null}
+          offTheRecordControl={shell.api ? <OffTheRecordControl api={shell.api} key={route.chat} roomId={route.chat} /> : null}
           onFactCheck={shell.onFactCheck}
           onPinAnswer={shell.onPinAnswer}
           onRewrite={shell.onRewrite}

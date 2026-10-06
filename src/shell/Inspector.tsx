@@ -5,6 +5,7 @@ import type { DraftRecord } from "../api/types.js";
 import { hairlineState, type HairlineState } from "../components/ConfidenceHairline.js";
 import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { Mark } from "../components/Mark.js";
+import { OffTheRecordControl } from "../components/OffTheRecordControl.js";
 import { ProvenanceLine } from "../components/ProvenanceLine.js";
 import { SourceRemoveButton } from "../components/SourceRemoveButton.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -499,7 +500,7 @@ function MemberRow({ member, duoHere, connection }: { member: RoomMemberRef; duo
 }
 
 /** A conversation with nothing waiting in it: who is in it, what your duo does here, and (a group's) its own name, topic and picture (#223). */
-export function RoomInfo({ room, connection = null }: { room: RoomSummary; connection?: WorkspaceConnection | null }) {
+export function RoomInfo({ room, connection = null, api = null }: { room: RoomSummary; connection?: WorkspaceConnection | null; api?: DuoApiConfig | null }) {
   const sole = soleDuoLabel(room);
   const title = sole ?? roomTitle(room);
   // #247: one row per person, a duo attached to its owner's row when the
@@ -538,6 +539,12 @@ export function RoomInfo({ room, connection = null }: { room: RoomSummary; conne
             </div>
           )}
           {room.kind !== "direct" && connection && <GroupSettings connection={connection} room={room} />}
+          {api && (
+            <div className="flex flex-col gap-2 border-t border-[var(--edge)] pt-4" data-testid="room-settings-off-the-record">
+              <p className="type-identifier uppercase text-[var(--faint)]">Learning</p>
+              <OffTheRecordControl api={api} roomId={room.roomId} />
+            </div>
+          )}
         </>
       )}
     </div>
@@ -590,6 +597,15 @@ export function useInspectorTarget(api: DuoApiConfig | null, connection: Workspa
 }
 
 /** The Info panel's content for a target. */
-export function InspectorBody({ target, connection = null }: { target: InspectorTarget; connection?: WorkspaceConnection | null }) {
-  return target.kind === "room" ? <RoomInfo connection={connection} room={target.room} /> : <DuoInfo />;
+export function InspectorBody({
+  target,
+  connection = null,
+  api = null,
+}: {
+  target: InspectorTarget;
+  connection?: WorkspaceConnection | null;
+  /** duo#274: the room settings section's "don't learn from this" toggle needs the daemon; `null` with no paired duo renders the rest of Info exactly as before. */
+  api?: DuoApiConfig | null;
+}) {
+  return target.kind === "room" ? <RoomInfo api={api} connection={connection} room={target.room} /> : <DuoInfo />;
 }
