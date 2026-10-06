@@ -157,6 +157,8 @@ export interface DraftRecord {
   adaptedForRecipient?: boolean;
   /** The adaptation itself when `adaptedForRecipient` is true; `null` otherwise (never both missing and `true`). */
   recipientAdaptation?: RecipientAdaptation | null;
+  /** Who the draft is addressed to (digital-duo#262) — null when nobody was named. Optional for the same cache reason as the fields above. */
+  recipient?: { id: string; name: string | null } | null;
 }
 
 // digital-duo #279 (issue #262): who a draft is addressed to, sent on
@@ -260,7 +262,51 @@ export interface ScheduledSend {
   state: "scheduled" | "sent" | "cancelled" | "superseded" | "failed";
   settledAt: string | null;
   failureReason: string | null;
+  /** #268: true for a send your duo is making by itself, inside its undo window — listed by `GET /autonomous-sends`, never by `GET /scheduled-sends`. Absent on a daemon that predates #268. */
+  autonomous?: boolean;
   draft: DraftRecord;
+}
+
+/**
+ * #266: what your duo has to show for itself with one person (digital-duo
+ * `src/trust/recipient-autonomy.ts`'s `TrackRecord`, verbatim): its most
+ * recent decided replies to them, and how many you sent exactly as drafted.
+ */
+export interface AutonomyTrackRecord {
+  readonly recipientKey: string;
+  readonly recipientName: string | null;
+  readonly considered: number;
+  readonly sentUnedited: number;
+  readonly edited: number;
+  readonly dismissed: number;
+  readonly uneditedShare: number;
+  readonly since: string | null;
+  readonly latest: string | null;
+  readonly recentClean: boolean;
+  readonly disqualified: boolean;
+}
+
+/** #266: `GET /autonomy/offers` — your duo asking to answer one person itself, with the evidence in its own words. */
+export interface AutonomyOffer {
+  readonly recipientKey: string;
+  readonly recipientName: string | null;
+  readonly trackRecord: AutonomyTrackRecord;
+  readonly holdSeconds: number;
+  readonly evidence: string;
+}
+
+/** #266: `GET /autonomy/grants` — a person your duo answers by itself, and the record that earned it. */
+export interface AutonomyGrant {
+  readonly recipientKey: string;
+  readonly recipientName: string | null;
+  readonly grantedAt: string;
+  readonly evidence: AutonomyTrackRecord;
+  readonly revokedAt: string | null;
+}
+
+/** #268: `GET/PUT /settings/autonomy` — how long an autonomous reply waits for Stop/Edit. 0 (no wait) only with explicit confirmation. */
+export interface AutonomySettings {
+  readonly holdSeconds: number;
 }
 
 /** #261: when to send it — an exact time, or the start of working hours, which the daemon resolves from its own setting. */

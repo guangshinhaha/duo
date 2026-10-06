@@ -127,6 +127,17 @@ domain types.
 | `PUT` | `/settings/working-hours` | `WorkingHours` plus `nextStart` (#261) | `drafting/scheduled-sends` |
 | `GET` | `/people/:id/voice-adaptation` | `VoiceAdaptationStatus \| null` — what the daemon has derived about how the owner writes to this one person, from their own approved sends/edits; `null` below its sample threshold (digital-duo #279, issue #262) | `drafting/recipient-voice` |
 | `DELETE` | `/people/:id/voice-adaptation` | 204 — clears the derived adaptation only, never the sends/edits it was learned from; the person's profile's "Reset learned tone" (#262) | `drafting/recipient-voice` |
+| `GET` | `/autonomy/offers` | `AutonomyOffer[]` — computed fresh from each person's track record; reading changes nothing (#266) | `trust/recipient-autonomy` |
+| `POST` | `/autonomy/offers/:recipientKey/accept` | `AutonomyGrant` (201) — autonomy for that one person; 404 when no offer is pending (#266) | `trust/recipient-autonomy` |
+| `POST` | `/autonomy/offers/:recipientKey/decline` | 204 — the same offer stays quiet for the cooldown; 404 when none is pending (#266) | `trust/recipient-autonomy` |
+| `GET` | `/autonomy/track-records` | `AutonomyTrackRecord[]` — every person's record, offered or not (#266) | `trust/recipient-autonomy` |
+| `GET` | `/autonomy/grants` | `AutonomyGrant[]` — standing grants only (#266) | `trust/recipient-autonomy` |
+| `POST` | `/autonomy/grants/:recipientKey/revoke` | `AutonomyGrant` plus `stoppedDraftIds` — revoked, and any reply to them still in its window stopped (#266) | `trust/recipient-autonomy` |
+| `GET` | `/settings/autonomy` | `AutonomySettings` — the undo window on autonomous replies, default 30s (#268) | `trust/recipient-autonomy` |
+| `PUT` | `/settings/autonomy` | `AutonomySettings` — body `{ holdSeconds, confirmNoHold? }`; 0 is refused without `confirmNoHold: true` (#268) | `trust/recipient-autonomy` |
+| `GET` | `/autonomous-sends` | `ScheduledSend[]` (`autonomous: true`) with each `draft` — what the duo is about to send by itself (#268) | `drafting/autonomous-send` |
+| `POST` | `/autonomous-sends/:id/stop` | `{ draft }` — nothing is posted; the draft waits on you again. 404 once the window has ended (#268) | `drafting/scheduled-sends` |
+| `POST` | `/autonomous-sends/:id/edit` | `{ draft }` — the same stop, for the client to open the editor (#268) | `drafting/scheduled-sends` |
 | `GET` | `/review?status=` | the merged queue's rows — draft edits *and* standing-order candidates, each tagged `source` (#166) | `corrections/review` |
 | `POST` | `/review/:id/approve` | `{ candidate, result }` (#173) | `corrections/review` |
 | `POST` | `/review/:id/reject` | `{ candidate }` (#173) | `corrections/review` |

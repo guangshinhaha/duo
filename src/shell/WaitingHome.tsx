@@ -2,6 +2,7 @@ import type { DuoApiConfig } from "../api/client.js";
 import { useKnowledge } from "../api/queries.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { AutonomousSends } from "../components/AutonomousSends.js";
 import { ScheduledSends } from "../components/ScheduledSends.js";
 import { corpusSentence, lastImportSentence } from "../profile/knowledgeWords.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
@@ -34,6 +35,8 @@ export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; con
     const known = knowledge.data;
     return (
       <div className="p-6" data-testid="waiting-home-empty">
+        {/* #268: what your duo is about to send by itself comes first — it is the one thing here with a clock on it. */}
+        <AutonomousSends api={api} />
         <h1 className="type-heading motion-rise">Nothing waiting on you.</h1>
         <div className="shape-container mt-4 flex max-w-xl flex-col gap-2 p-4" data-testid="waiting-home-knowledge">
           {known?.records && known.corpus ? (
@@ -56,6 +59,7 @@ export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; con
   const oldest = waiting.items[0]!;
   return (
     <div className="flex max-w-xl flex-col gap-3 p-6" data-testid="waiting-home">
+      <AutonomousSends api={api} />
       <h1 className="type-heading">Waiting on you</h1>
       <p className="type-body text-[var(--muted)]">
         {waiting.count === 1 ? "One decision is waiting on you." : `${waiting.count} decisions are waiting on you.`} They are decided in the chat

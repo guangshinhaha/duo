@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { useSaveWorkingHours, useWorkingHours } from "../api/queries.js";
+import { useAutonomySettings, useSaveAutonomySettings, useSaveWorkingHours, useWorkingHours } from "../api/queries.js";
 import { readUndoSendSeconds, UNDO_SEND_CHOICES, writeUndoSendSeconds, type UndoSendSeconds } from "../undoSendPrefs.js";
 import { MutationError } from "./MutationError.js";
 
@@ -46,8 +46,87 @@ export function SendingSettings({ api }: { api: DuoApiConfig | null }) {
           ))}
         </select>
       </section>
+      {api && <AutonomyHoldSection api={api} />}
       {api && <WorkingHoursSection api={api} />}
     </>
+  );
+}
+
+/** #268: the undo-window choices for what your duo sends by itself. 0 is offered, but only behind its own confirmation. */
+export const AUTONOMY_HOLD_CHOICES = [10, 15, 30, 60, 120, 300] as const;
+
+/**
+ * #268: how long a reply your duo sends by itself (under autonomy you granted,
+ * #266) waits for Stop or Edit. Kept by the daemon, unlike Undo send above —
+ * the daemon is what holds these replies, whether or not this app is open.
+ * Turning it off is possible but never a single slip: choosing "Off" asks
+ * first, and the daemon refuses a 0 that doesn't carry that confirmation.
+ */
+function AutonomyHoldSection({ api }: { api: DuoApiConfig }) {
+  const settings = useAutonomySettings(api);
+  const save = useSaveAutonomySettings(api);
+  const [confirmingOff, setConfirmingOff] = useState(false);
+  const current = typeof settings.data?.holdSeconds === "number" ? settings.data.holdSeconds : 30;
+  const choices: number[] = (AUTONOMY_HOLD_CHOICES as readonly number[]).includes(current) || current === 0 ? [...AUTONOMY_HOLD_CHOICES] : [...AUTONOMY_HOLD_CHOICES, current].sort((a, b) => a - b);
+  return (
+    <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-autonomy-hold">
+      <h2 className="type-heading">When your duo answers by itself</h2>
+      <p className="type-provenance text-[var(--muted)]">
+        For people you&rsquo;ve let it answer, each reply waits this long first, so you can stop or edit it — from Waiting on you or a
+        notification.
+      </p>
+      <select
+        aria-label="Time to stop it"
+        className="min-h-11 self-start rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
+        data-testid="settings-autonomy-hold-select"
+        disabled={save.isPending}
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          if (next === 0) {
+            setConfirmingOff(true);
+            return;
+          }
+          setConfirmingOff(false);
+          save.mutate({ holdSeconds: next });
+        }}
+        value={confirmingOff ? 0 : current}
+      >
+        {choices.map((seconds) => (
+          <option key={seconds} value={seconds}>
+            {seconds >= 60 ? `${seconds / 60} minute${seconds === 60 ? "" : "s"}` : `${seconds} seconds`}
+          </option>
+        ))}
+        <option value={0}>Off — send straight away</option>
+      </select>
+      {confirmingOff && (
+        <div className="flex flex-col gap-2" data-testid="settings-autonomy-hold-confirm" role="alertdialog" aria-label="Turn off the wait?">
+          <p className="type-body">With no wait, your duo&rsquo;s replies go out the moment they&rsquo;re written — there is no chance to stop one.</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              autoFocus
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
+              data-testid="settings-autonomy-hold-keep"
+              onClick={() => setConfirmingOff(false)}
+              type="button"
+            >
+              Keep the wait
+            </button>
+            <button
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--refused)]"
+              data-testid="settings-autonomy-hold-off"
+              onClick={() => {
+                setConfirmingOff(false);
+                save.mutate({ holdSeconds: 0, confirmNoHold: true });
+              }}
+              type="button"
+            >
+              Turn it off
+            </button>
+          </div>
+        </div>
+      )}
+      <MutationError error={save.error} />
+    </section>
   );
 }
 

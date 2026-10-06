@@ -69,6 +69,9 @@ import type {
   SettableDraftOutcome,
   ShapeInstruction,
   ScheduledSend,
+  AutonomyOffer,
+  AutonomyGrant,
+  AutonomySettings,
   SendLater,
   VoiceAdaptationStatus,
   WorkingHours,
@@ -101,6 +104,13 @@ export const queryKeys = {
   // #261: the sends the daemon is holding. Under the ["drafts"] root so every outcome mutation refreshes it too.
   scheduledSends: ["drafts", { scheduled: true }] as const,
   workingHours: ["settings", "working-hours"] as const,
+  // #268: what your duo is about to send by itself. Under ["drafts"] so a
+  // draft-ready push and every outcome mutation refresh the live strip too.
+  autonomousSends: ["drafts", { autonomous: true }] as const,
+  autonomySettings: ["settings", "autonomy"] as const,
+  // #266: under the ["trust"] root, so deciding an offer refreshes grants with it.
+  autonomyOffers: ["trust", "autonomy", "offers"] as const,
+  autonomyGrants: ["trust", "autonomy", "grants"] as const,
   review: ["review"] as const,
   mirrorPortrait: ["mirror", "portrait"] as const,
   mirrorRules: ["mirror", "rules"] as const,
@@ -613,6 +623,93 @@ export function useSaveWorkingHours(api: DuoApiConfig) {
   });
 }
 
+/**
+ * #268: every reply your duo is about to send by itself, still inside its
+ * undo window. Re-read every couple of seconds while any is held — a held
+ * reply leaves on its own when the window ends, and the strip must not show
+ * a Stop for something already sent — and quietly otherwise.
+ */
+export function useAutonomousSends(api: DuoApiConfig | null) {
+  return useQuery({
+    queryKey: queryKeys.autonomousSends,
+    queryFn: () => apiRequest<ScheduledSend[]>(api!, "/autonomous-sends"),
+    enabled: api !== null,
+    refetchInterval: (query) => (Array.isArray(query.state.data) && query.state.data.length > 0 ? 2_000 : 30_000),
+  });
+}
+
+/**
+ * #268: Stop or Edit an autonomous reply inside its window. Both stop it —
+ * nothing is posted — and the draft returns to Waiting on you; Edit answers
+ * with the draft so the caller can open it in the editor.
+ */
+export function useStopAutonomousSend(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ draftId, action }: { draftId: string; action: "stop" | "edit" }) =>
+      apiRequest<{ draft: DraftRecord | undefined }>(api, `/autonomous-sends/${encodeURIComponent(draftId)}/${action}`, { method: "POST" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["drafts"] });
+    },
+  });
+}
+
+/** #266: what your duo is asking to answer by itself, computed fresh by the daemon. */
+export function useAutonomyOffers(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.autonomyOffers, queryFn: () => apiRequest<AutonomyOffer[]>(api, "/autonomy/offers") });
+}
+
+/** #266: Accept grants autonomy for that one person; Decline keeps the offer quiet for the daemon's cooldown. Nothing changes without this call. */
+export function useDecideAutonomyOffer(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ recipientKey, decision }: { recipientKey: string; decision: "accept" | "decline" }) =>
+      apiRequest<unknown>(api, `/autonomy/offers/${encodeURIComponent(recipientKey)}/${decision}`, { method: "POST" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["trust"] });
+    },
+  });
+}
+
+/** #266: the people your duo answers by itself. */
+export function useAutonomyGrants(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.autonomyGrants, queryFn: () => apiRequest<AutonomyGrant[]>(api, "/autonomy/grants") });
+}
+
+/** #266: takes autonomy back — the daemon also stops any reply to that person still inside its window. */
+export function useRevokeAutonomyGrant(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (recipientKey: string) => apiRequest<unknown>(api, `/autonomy/grants/${encodeURIComponent(recipientKey)}/revoke`, { method: "POST" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["trust"] });
+      queryClient.invalidateQueries({ queryKey: ["drafts"] });
+    },
+  });
+}
+
+/** #268: the undo window on autonomous replies, kept by the daemon (it is the daemon that holds them). */
+export function useAutonomySettings(api: DuoApiConfig | null) {
+  return useQuery({
+    queryKey: queryKeys.autonomySettings,
+    queryFn: () => apiRequest<AutonomySettings>(api!, "/settings/autonomy"),
+    enabled: api !== null,
+  });
+}
+
+export function useSaveAutonomySettings(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { holdSeconds: number; confirmNoHold?: boolean }) =>
+      apiRequest<AutonomySettings>(api, "/settings/autonomy", { method: "PUT", body: JSON.stringify(input) }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(queryKeys.autonomySettings, saved);
+      // An offer states the window in its words.
+      queryClient.invalidateQueries({ queryKey: queryKeys.autonomyOffers });
+    },
+  });
+}
+
 export function useAnswerEscalation(api: DuoApiConfig) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -970,6 +1067,9 @@ export function shouldPersistQuery(query: Query): boolean {
   return (
     defaultShouldDehydrateQuery(query) &&
     !(root === "workspace" && second === "search") &&
+    // #268: an autonomous reply's undo window lasts seconds — one read back
+    // from storage would offer Stop on a reply that has long since gone.
+    !(root === "drafts" && typeof second === "object" && second !== null && "autonomous" in second) &&
     root !== "hosted-orgs" &&
     root !== "hosted-invites" &&
     root !== "org"

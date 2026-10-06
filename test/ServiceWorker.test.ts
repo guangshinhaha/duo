@@ -97,6 +97,21 @@ describe("public/sw.js — the push handler (#308)", () => {
     });
   });
 
+  it("#268: an autonomous reply's undo window says so and opens Waiting on you, where Stop and Edit are", async () => {
+    const [handler] = fakeSelf.listeners.push!;
+    const event = pushEvent({ draftId: "draft-7", kind: "autonomous_hold", sendAt: "2026-10-06T12:00:30.000Z" });
+    handler!(event);
+    await event.settled;
+    expect(fakeSelf.registration.showNotification).toHaveBeenCalledTimes(1);
+    const [title, options] = fakeSelf.registration.showNotification.mock.calls[0]!;
+    expect(title).toBe("Duo");
+    expect(options).toMatchObject({
+      body: "Your duo is about to send a reply for you. Tap to stop or edit it.",
+      tag: "duo-autonomous-draft-7",
+      data: { hash: "#waiting" },
+    });
+  });
+
   it("percent-encodes a draft id that needs it", async () => {
     const [handler] = fakeSelf.listeners.push!;
     const event = pushEvent({ draftId: "has space" });
