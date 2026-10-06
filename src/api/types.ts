@@ -176,24 +176,49 @@ export interface RecipientRef {
  * (the daemon's threshold; below it nothing is flagged, so a `DraftRecord`
  * reads `adaptedForRecipient: false` and this is `null`). `register` is the
  * daemon's own word for the tone it found (e.g. "formal", "casual") —
- * rendered verbatim, never translated.
+ * rendered verbatim, never translated. Mirrors the daemon's own
+ * `RecipientAdaptation` (`src/drafting/pipeline.ts`) — `recipientName` is
+ * nullable there (a recipient can be known by id alone), so it is here too.
  */
 export interface RecipientAdaptation {
   readonly recipientId: string;
-  readonly recipientName: string;
+  readonly recipientName: string | null;
   readonly sampleSize: number;
   readonly register: string;
 }
 
 /**
- * `GET`/`DELETE /people/:id/voice-adaptation` (digital-duo #279): the same
- * shape a draft's own `recipientAdaptation` carries, minus the id/name this
- * route already addresses by path. `null` is the honest "nothing learned
- * yet" — below the daemon's sample threshold, or never reset-and-relearned.
+ * The learned, per-relationship features the daemon conditions a draft's
+ * wording on, once `active` below. Mirrors the daemon's
+ * `RecipientVoiceFeatures` (`src/drafting/recipient-voice.ts`), kept
+ * intentionally minimal per this file's own convention — `register` is the
+ * only field any UI renders today; add more (formalityScore,
+ * habitualGreeting, …) here if a future surface needs them.
+ */
+export interface RecipientVoiceFeatures {
+  readonly register: string;
+}
+
+/**
+ * `GET`/`DELETE /people/:id/voice-adaptation` (digital-duo #279): mirrors
+ * the daemon's own `RecipientVoiceStatus` in full — unlike `RecipientAdaptation`
+ * above, this route is the *only* source for `active`/`threshold`/`resetAt`,
+ * so there is no narrower shape to keep instead. `features` is `null` until
+ * `active` (below the daemon's sample threshold, or never reset-and-relearned)
+ * — there is nothing worth rendering until then.
  */
 export interface VoiceAdaptationStatus {
+  readonly recipientId: string;
+  readonly recipientName: string | null;
+  /** Approved sends to this person counted since the last reset. */
   readonly sampleSize: number;
-  readonly register: string;
+  /** The sample-size threshold adaptation activates at. */
+  readonly threshold: number;
+  /** True once drafts to this person are actually conditioned on `features`. */
+  readonly active: boolean;
+  readonly features: RecipientVoiceFeatures | null;
+  /** When the owner last reset this relationship's learned tone, or null if never. */
+  readonly resetAt: string | null;
 }
 
 /** One candidate among a hedged draft's alternatives (#257): its own text and confidence, citing the draft's one evidence pool. */

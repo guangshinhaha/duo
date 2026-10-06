@@ -41,7 +41,18 @@ describe("issue #262 — a person's learned tone, from their profile", () => {
       if (String(url).endsWith("/voice-adaptation") && method === "DELETE") {
         return new Response(null, { status: 204 });
       }
-      return new Response(JSON.stringify({ sampleSize: 6, register: "formal" }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          recipientId: "@wei:w",
+          recipientName: "Wei",
+          sampleSize: 6,
+          threshold: 5,
+          active: true,
+          features: { register: "formal" },
+          resetAt: null,
+        }),
+        { status: 200 },
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -73,7 +84,19 @@ describe("issue #262 — a person's learned tone, from their profile", () => {
 
   it("cancelling the confirm leaves the control in place, and never calls DELETE", async () => {
     const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
-      async () => new Response(JSON.stringify({ sampleSize: 6, register: "casual" }), { status: 200 }),
+      async () =>
+        new Response(
+          JSON.stringify({
+            recipientId: "@wei:w",
+            recipientName: "Wei",
+            sampleSize: 6,
+            threshold: 5,
+            active: true,
+            features: { register: "casual" },
+            resetAt: null,
+          }),
+          { status: 200 },
+        ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -88,8 +111,17 @@ describe("issue #262 — a person's learned tone, from their profile", () => {
     expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE")).toBe(false);
   });
 
-  it("shows nothing when the daemon has learned nothing yet (below its sample threshold)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(null), { status: 200 })));
+  it("shows nothing when there isn't a single send to this person yet", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ recipientId: "@wei:w", recipientName: "Wei", sampleSize: 0, threshold: 5, active: false, features: null, resetAt: null }),
+            { status: 200 },
+          ),
+      ),
+    );
 
     mount(
       <PersonProfile api={api} connection={fakeConnection()} onMessage={() => {}} onOpenChange={() => {}} open person={{ userId: "@wei:w", name: "Wei" }} />,
@@ -97,6 +129,26 @@ describe("issue #262 — a person's learned tone, from their profile", () => {
 
     await waitFor(() => expect(screen.getByTestId("person-profile-name")).toBeInTheDocument());
     expect(screen.queryByTestId("person-profile-voice-adaptation")).toBeNull();
+  });
+
+  it("shows a lighter progress line, and no reset control, below the sample threshold", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ recipientId: "@wei:w", recipientName: "Wei", sampleSize: 3, threshold: 5, active: false, features: null, resetAt: null }),
+            { status: 200 },
+          ),
+      ),
+    );
+
+    mount(
+      <PersonProfile api={api} connection={fakeConnection()} onMessage={() => {}} onOpenChange={() => {}} open person={{ userId: "@wei:w", name: "Wei" }} />,
+    );
+
+    expect(await screen.findByTestId("person-profile-voice-adaptation")).toHaveTextContent("still learning how you write to Wei — 3 of 5 sends so far");
+    expect(screen.queryByTestId("person-profile-reset-tone")).toBeNull();
   });
 
   it("without a paired duo the control never renders, though the profile itself still does", () => {

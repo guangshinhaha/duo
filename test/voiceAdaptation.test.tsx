@@ -65,14 +65,23 @@ describe("issue #262 — sending a draft's recipient", () => {
 
 describe("issue #262 — reading and resetting a person's learned tone", () => {
   it("useVoiceAdaptation reads GET /people/:id/voice-adaptation, URL-encoding the id", async () => {
+    const body = {
+      recipientId: "@wei:example.com",
+      recipientName: "Wei",
+      sampleSize: 8,
+      threshold: 5,
+      active: true,
+      features: { register: "formal" },
+      resetAt: null,
+    };
     const fetchMock = vi.fn(async (url: string) => {
       expect(String(url)).toBe(`${api.baseUrl}/people/%40wei%3Aexample.com/voice-adaptation`);
-      return new Response(JSON.stringify({ sampleSize: 8, register: "formal" }), { status: 200 });
+      return new Response(JSON.stringify(body), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useVoiceAdaptation(api, "@wei:example.com"), { wrapper: wrapper(newClient()) });
 
-    await waitFor(() => expect(result.current.data).toEqual({ sampleSize: 8, register: "formal" }));
+    await waitFor(() => expect(result.current.data).toEqual(body));
   });
 
   it("a member with no paired duo never asks — the query stays idle", () => {

@@ -1121,15 +1121,16 @@ export function useUnsubscribeFromPush(api: DuoApiConfig) {
 
 /**
  * `GET /people/:id/voice-adaptation` (digital-duo #279, issue #262): what
- * your duo has learned about how you write to this one person — `null`
- * below the daemon's own sample threshold. `personId` is the same id a
- * draft's `recipient.id` and `recipientAdaptation.recipientId` carry — this
- * client never mints or guesses one.
+ * your duo has learned about how you write to this one person. Always
+ * returns a status object — `active: false` (with `features: null`) below
+ * the daemon's own sample threshold, never a bare `null`. `personId` is the
+ * same id a draft's `recipient.id` and `recipientAdaptation.recipientId`
+ * carry — this client never mints or guesses one.
  */
 export function useVoiceAdaptation(api: DuoApiConfig | null, personId: string) {
   return useQuery({
     queryKey: queryKeys.voiceAdaptation(personId),
-    queryFn: () => apiRequest<VoiceAdaptationStatus | null>(api!, `/people/${encodeURIComponent(personId)}/voice-adaptation`),
+    queryFn: () => apiRequest<VoiceAdaptationStatus>(api!, `/people/${encodeURIComponent(personId)}/voice-adaptation`),
     enabled: api !== null,
   });
 }

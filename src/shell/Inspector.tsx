@@ -103,7 +103,7 @@ export function WhyPanel({ draft }: { draft: DraftRecord }) {
             carries one without the flag. */}
         {draft.adaptedForRecipient && draft.recipientAdaptation && (
           <Field label="Tuned for" testId="why-recipient-adaptation">
-            Tuned for how you write to {draft.recipientAdaptation.recipientName}.
+            Tuned for how you write to {draft.recipientAdaptation.recipientName ?? "this person"}.
           </Field>
         )}
         <Field label="Who's asking" testId="why-asker">
