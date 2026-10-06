@@ -292,6 +292,7 @@ export function Room({
   onRewrite,
   onFactCheck,
   onPinAnswer,
+  offTheRecordControl = null,
 }: {
   connection: WorkspaceConnection | null;
   roomId: string;
@@ -317,6 +318,14 @@ export function Room({
   onFactCheck?: (text: string, threadContext: string | null) => Promise<{ claim: string; concern: string; sourceLabel: string } | null>;
   /** duo#275: pins one of the owner's own messages as the exact answer to a question/topic — same reasoning as `onRewrite`/`onFactCheck`. `undefined` (no paired duo) hides the message action entirely. */
   onPinAnswer?: (pattern: string, answerText: string) => Promise<unknown>;
+  /**
+   * duo#274: the header's "don't learn from this conversation" control — a
+   * rendered slot, same reasoning and shape as `drafts`'s `RoomDrafts`
+   * (this route may never import `src/api/*` itself): App.tsx mounts
+   * `OffTheRecordControl` here, keyed by the open room, or `null` with no
+   * paired duo (there is nothing to mark off the record against).
+   */
+  offTheRecordControl?: ReactNode;
 }) {
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -692,6 +701,7 @@ export function Room({
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-[var(--edge)] px-4 py-2" data-testid="room-header">
         <h1 className="min-w-0 truncate type-heading">{roomName}</h1>
+        {offTheRecordControl && <div className="ml-auto flex items-center">{offTheRecordControl}</div>}
         <InfoButton />
       </header>
       {duoConversation !== null && <DuoConversationBanner conversation={duoConversation} />}

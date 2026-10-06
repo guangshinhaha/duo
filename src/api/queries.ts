@@ -51,6 +51,7 @@ import type {
   DuoRequest,
   ExcludedEvidence,
   FactCheckResult,
+  RoomOffTheRecord,
   RewriteInstruction,
   RewriteResult,
   EscalationUrgencyRate,
@@ -183,6 +184,9 @@ export const queryKeys = {
   // exclusion is made or undone, so invalidating one must never imply the
   // other reads stale.
   excludedEvidence: ["knowledge", "evidence", "excluded"] as const,
+  // duo#274: keyed by room, so marking one conversation off the record
+  // never invalidates another's read.
+  roomOffTheRecord: (roomId: string) => ["workspace", "rooms", roomId, "off-the-record"] as const,
 };
 
 /** `null` (a member with no duo paired) reads nothing: the query stays idle, and its data is `undefined`. */
@@ -981,6 +985,58 @@ export function useRestoreEvidence(api: DuoApiConfig) {
       apiRequest<{ excluded: false }>(api, `/knowledge/evidence/${encodeURIComponent(recordId)}/restore`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.excludedEvidence });
+    },
+  });
+}
+
+/**
+ * duo#274: whether this room is currently off the record — `GET
+ * /workspace/rooms/:roomId/off-the-record`. Read on demand (the room
+ * header toggle and the Info panel's own switch both mount this), never
+ * pre-fetched for every room in the list: a mark is rare, so there is no
+ * reason to carry the daemon round trip for rooms nobody has opened.
+ */
+export function useRoomOffTheRecord(api: DuoApiConfig | null, roomId: string) {
+  return useQuery({
+    queryKey: queryKeys.roomOffTheRecord(roomId),
+    queryFn: () => apiRequest<RoomOffTheRecord>(api!, `/workspace/rooms/${encodeURIComponent(roomId)}/off-the-record`),
+    enabled: api !== null,
+  });
+}
+
+/**
+ * duo#274: marks a room off the record — `POST
+ * /workspace/rooms/:roomId/off-the-record`. The daemon purges what it
+ * already learned from the room in the same call (standing-order and
+ * correction candidates still pending, and any rule already written from
+ * one of its drafts); the client has nothing further to do but show the
+ * confirmation and let the read below settle to `offTheRecord: true`.
+ */
+export function useMarkRoomOffTheRecord(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ roomId }: { roomId: string }) =>
+      apiRequest<RoomOffTheRecord>(api, `/workspace/rooms/${encodeURIComponent(roomId)}/off-the-record`, { method: "POST" }),
+    onSuccess: (_result, { roomId }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.roomOffTheRecord(roomId) });
+    },
+  });
+}
+
+/**
+ * duo#274: lifts the off-the-record marker — `DELETE
+ * /workspace/rooms/:roomId/off-the-record`. This only stops the room being
+ * excluded going forward; it never un-purges what marking it already
+ * removed, the same one-way shape a rule's or a correction's rejection
+ * already has.
+ */
+export function useClearRoomOffTheRecord(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ roomId }: { roomId: string }) =>
+      apiRequest<RoomOffTheRecord & { wasOn: boolean }>(api, `/workspace/rooms/${encodeURIComponent(roomId)}/off-the-record`, { method: "DELETE" }),
+    onSuccess: (_result, { roomId }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.roomOffTheRecord(roomId) });
     },
   });
 }

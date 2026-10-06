@@ -408,6 +408,96 @@ describe("a group conversation's name, topic and picture (#223)", () => {
   });
 });
 
+/**
+ * Routes every call by path, the way `/workspace/rooms/:roomId/off-the-record`
+ * tests need. Stateful like the real daemon: a POST/DELETE updates what the
+ * next GET reads back, exactly as `markRoomOffTheRecord`/`clearRoomOffTheRecord`
+ * do server-side — so a mutation's own invalidated refetch sees its effect.
+ */
+function offTheRecordFetch(initial: { roomId: string; offTheRecord: boolean; decidedAt: string | null }) {
+  let state = initial;
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (!url.includes("/off-the-record")) {
+      return new Response("[]", { status: 200 });
+    }
+    const method = init?.method ?? "GET";
+    if (method === "POST") {
+      state = { roomId: state.roomId, offTheRecord: true, decidedAt: state.decidedAt ?? "2026-10-07T00:00:00.000Z" };
+      return new Response(JSON.stringify({ ...state, purged: { draftIds: [], standingOrderCandidatesRejected: 0, correctionCandidatesRejected: 0, rulesRejected: 0 } }), { status: 200 });
+    }
+    if (method === "DELETE") {
+      const wasOn = state.offTheRecord;
+      state = { roomId: state.roomId, offTheRecord: false, decidedAt: null };
+      return new Response(JSON.stringify({ ...state, wasOn }), { status: 200 });
+    }
+    return new Response(JSON.stringify(state), { status: 200 });
+  });
+}
+
+describe("duo#274: don't learn from this conversation — the room settings section", () => {
+  it("renders nothing without a paired duo — the rest of Info is unaffected", () => {
+    mount(<RoomInfo connection={fakeRoomConnection()} room={room()} />);
+    expect(screen.queryByTestId("room-settings-off-the-record")).toBeNull();
+  });
+
+  it("a room never marked shows the off-the-record trigger, not the marker", async () => {
+    vi.stubGlobal("fetch", offTheRecordFetch({ roomId: "!p:w", offTheRecord: false, decidedAt: null }));
+    mount(<RoomInfo api={api} connection={fakeRoomConnection()} room={room()} />);
+
+    expect(await screen.findByTestId("off-the-record-trigger")).toBeInTheDocument();
+    expect(screen.queryByTestId("off-the-record-marker")).toBeNull();
+  });
+
+  it("a room already marked shows the persistent marker and a way to resume learning", async () => {
+    vi.stubGlobal("fetch", offTheRecordFetch({ roomId: "!p:w", offTheRecord: true, decidedAt: "2026-10-07T00:00:00.000Z" }));
+    mount(<RoomInfo api={api} connection={fakeRoomConnection()} room={room()} />);
+
+    const marker = await screen.findByTestId("off-the-record-marker");
+    expect(marker).toHaveTextContent("Off the record — your duo doesn't learn from this");
+    expect(screen.queryByTestId("off-the-record-trigger")).toBeNull();
+  });
+
+  it("marking off the record is a two-step confirm, and the read settles to the marker afterwards", async () => {
+    vi.stubGlobal("fetch", offTheRecordFetch({ roomId: "!p:w", offTheRecord: false, decidedAt: null }));
+    mount(<RoomInfo api={api} connection={fakeRoomConnection()} room={room()} />);
+
+    fireEvent.click(await screen.findByTestId("off-the-record-trigger"));
+    const confirmation = await screen.findByTestId("off-the-record-confirmation");
+    expect(within(confirmation).getByText(/can't be brought back/)).toBeInTheDocument();
+
+    fireEvent.click(within(confirmation).getByTestId("off-the-record-confirm"));
+    expect(await screen.findByTestId("off-the-record-marker")).toHaveTextContent("Off the record");
+  });
+
+  it("Cancel leaves the room exactly as it was — nothing is marked", async () => {
+    vi.stubGlobal("fetch", offTheRecordFetch({ roomId: "!p:w", offTheRecord: false, decidedAt: null }));
+    mount(<RoomInfo api={api} connection={fakeRoomConnection()} room={room()} />);
+
+    fireEvent.click(await screen.findByTestId("off-the-record-trigger"));
+    const confirmation = await screen.findByTestId("off-the-record-confirmation");
+    fireEvent.click(within(confirmation).getByTestId("off-the-record-cancel"));
+
+    await waitFor(() => expect(screen.queryByTestId("off-the-record-confirmation")).toBeNull());
+    expect(screen.getByTestId("off-the-record-trigger")).toBeInTheDocument();
+  });
+
+  it("resuming learning lifts the marker without a confirm step", async () => {
+    vi.stubGlobal("fetch", offTheRecordFetch({ roomId: "!p:w", offTheRecord: true, decidedAt: "2026-10-07T00:00:00.000Z" }));
+    mount(<RoomInfo api={api} connection={fakeRoomConnection()} room={room()} />);
+
+    fireEvent.click(await screen.findByTestId("off-the-record-clear"));
+    await screen.findByTestId("off-the-record-trigger");
+    expect(screen.queryByTestId("off-the-record-marker")).toBeNull();
+  });
+
+  it("also shows for a direct conversation — off the record applies to any room, not only groups", async () => {
+    vi.stubGlobal("fetch", offTheRecordFetch({ roomId: "!dm:w", offTheRecord: false, decidedAt: null }));
+    mount(<RoomInfo api={api} connection={fakeRoomConnection()} room={room({ roomId: "!dm:w", kind: "direct", name: null })} />);
+    expect(await screen.findByTestId("off-the-record-trigger")).toBeInTheDocument();
+  });
+});
+
 describe("Why? beside the draft — only when asked (#185)", () => {
   it("on a desktop opens a popover next to the draft; Escape closes it and gives focus back", async () => {
     stubDesktop();

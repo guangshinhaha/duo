@@ -67,6 +67,21 @@ export interface ExcludedEvidence {
   readonly label: string | null;
 }
 
+/**
+ * `GET /workspace/rooms/:roomId/off-the-record` (duo#274): the owner's
+ * "don't learn from this conversation" marker for one room. `decidedAt` is
+ * `null` exactly when `offTheRecord` is `false`. `POST` to mark it also
+ * returns a `purged` summary of what the daemon removed because it was
+ * already learned from the room — the client never needs that count for
+ * anything but an honest confirmation line, so it isn't modeled further
+ * here.
+ */
+export interface RoomOffTheRecord {
+  readonly roomId: string;
+  readonly offTheRecord: boolean;
+  readonly decidedAt: string | null;
+}
+
 // Mirrors the daemon's own split (src/drafting/draft-log.ts):
 // SETTABLE_DRAFT_OUTCOMES is what this client may POST to
 // /drafts/:id/outcome; DRAFT_OUTCOMES adds "escalation_answered", which
