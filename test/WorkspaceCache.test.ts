@@ -265,8 +265,20 @@ describe("#288 — a cold open renders from the local cache before the network a
     vi.stubGlobal("fetch", homeserver({ silent: true }).fetch);
     const reopened = await connect(ANA);
     open.push(reopened);
-    expect((await reopened.timeline(ROOM)).map((row) => row.body)).toEqual(["confirmed words"]);
-    // Nor parked in web storage under a key no sign-out would find.
+    // Not read back from the cache as a confirmed message — #289's own,
+    // separate device-local outbox is what brings "not sent yet" back, as a
+    // FRESH attempt (still pending; this homeserver answers nothing), never
+    // as something the store is pretending the server already has.
+    await vi.waitFor(async () => {
+      const rows = await reopened.timeline(ROOM);
+      expect(rows.map((row) => row.body)).toEqual(["confirmed words", "not sent yet"]);
+      expect(rows.find((row) => row.body === "confirmed words")?.pending).toBeFalsy();
+      expect(rows.find((row) => row.body === "not sent yet")?.pending).toBe(true);
+    });
+    // Nor parked in the SDK's own web storage under a key no sign-out would
+    // find — #289's record lives under this app's own `duo.` key instead
+    // (`WorkspaceOutbox.test.ts`, `WorkspaceMatrixSeam.test.ts`'s "#289"
+    // suite), which sign-out already knows to clear.
     expect(Object.keys(localStorage).filter((key) => key.startsWith("mx_"))).toEqual([]);
   });
 });
