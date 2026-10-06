@@ -8,6 +8,8 @@ import { DuoLine } from "../components/DuoLine.js";
 import { hairlineState } from "../components/ConfidenceHairline.js";
 import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { Mark } from "../components/Mark.js";
+import { NeverAnswerOffer, openNeverAnswerOffers } from "../components/NeverAnswerOffer.js";
+import { AwayStatusLine, ReturnSummaryCard } from "../profile/Away.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -94,6 +96,8 @@ function Turn({ api, draft, keyboard }: { api: DuoApiConfig; draft: DraftRecord;
             {outcomeLabel(draft)}
             {draft.threadContext ? ` · about ${draft.threadContext}` : ""}
           </p>
+          {/* #259 → #269: the offer the tray opened stays here once the dismissal lands and the tray is gone. */}
+          {draft.outcome === "discarded" && openNeverAnswerOffers.has(draft.id) && <NeverAnswerOffer api={api} draftId={draft.id} />}
         </>
       )}
     </div>
@@ -167,10 +171,14 @@ export function Duo({ api }: { api: DuoApiConfig }) {
             </a>
           </h1>
           <p className="type-provenance text-[var(--faint)]">Only you can see this chat</p>
+          {/* #270: while you're away, what colleagues are being told. */}
+          <AwayStatusLine api={api} />
         </div>
         <InfoButton />
       </header>
       <div className="flex-1 overflow-y-auto p-4" ref={scroller}>
+        {/* #270: back from away — what your duo did while you were out, until you put it away. */}
+        <ReturnSummaryCard api={api} />
         {/* Older history arrives on demand (#29), at the top where older things are. */}
         {feed.hasNextPage ? (
           <button

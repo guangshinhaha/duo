@@ -197,7 +197,21 @@ describe("#142 — Send, Edit and Dismiss decide it, exactly as they did in Revi
     expect(posted()).toEqual([]);
   });
 
-  it("picking \"Shouldn't answer this\" offers a never-answer rule, honestly worded since #269 doesn't exist yet", async () => {
+  it("picking \"Shouldn't answer this\" offers a never-answer rule, and saving it records one (#259 → #269)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).endsWith("/never-answer-suggestion")) {
+          return new Response(JSON.stringify({ draftId: draft.id, question: draft.question, subject: "prod deploy logs" }), { status: 200 });
+        }
+        if (String(url).endsWith("/mirror/refusals") && init?.method === "POST") {
+          return new Response(JSON.stringify({ decided: true, refusals: [{ heading: "prod deploy logs", reason: "I never answer about prod deploy logs" }] }), {
+            status: 201,
+          });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
     mount(<DraftTray api={api} draft={draft} />);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     fireEvent.click(screen.getByTestId("dismiss-reason-shouldnt_answer"));
@@ -205,7 +219,9 @@ describe("#142 — Send, Edit and Dismiss decide it, exactly as they did in Revi
     expect(screen.getByTestId("never-answer-offer")).toHaveTextContent("Add a never-answer rule for this?");
 
     fireEvent.click(screen.getByTestId("never-answer-confirm"));
-    await waitFor(() => expect(screen.getByTestId("never-answer-noted")).toHaveTextContent("aren't available yet"));
+    await waitFor(() => expect(screen.getByTestId("never-answer-subject")).toHaveValue("prod deploy logs"));
+    fireEvent.click(screen.getByTestId("never-answer-save"));
+    await waitFor(() => expect(screen.getByTestId("never-answer-noted")).toHaveTextContent("Saved. Your duo will never answer about prod deploy logs"));
   });
 
   it("\"No thanks\" on the never-answer offer just clears it — no call, nothing claimed", async () => {

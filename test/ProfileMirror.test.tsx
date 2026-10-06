@@ -9,8 +9,11 @@ import { Rules } from "../src/profile/Rules.js";
 
 /*
  * What the old Mirror page pinned, carried to the profile tabs that now own
- * it: the Portrait tab for the portrait, the Rules tab for the rule buckets,
- * and RefusalsSection (hosted by the Rules tab) for refusals.
+ * it: the Portrait tab for the portrait, the Rules tab for the rule buckets.
+ * RefusalsSection moved to May do with #269 — it is a limit now, owner-
+ * authored in the app, not a Rules-tab, files-only read (see test/Hosted.test.tsx
+ * and test/Profile.test.tsx for the May do tab's own coverage); this file
+ * still exercises RefusalsSection's own read/write behaviour directly.
  */
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
@@ -144,7 +147,7 @@ describe("Portrait tab — the owner's window onto what the duo worked out (C6)"
   });
 });
 
-describe("Rules tab — the buckets, the refusals, and no authoring here (AR-18)", () => {
+describe("Rules tab — the buckets, and no authoring here (AR-18)", () => {
   beforeEach(() => {
     stubMirrorResponses(portrait, listing);
   });
@@ -199,84 +202,9 @@ describe("Rules tab — the buckets, the refusals, and no authoring here (AR-18)
     expect(screen.queryByTestId("bucket-awaitingApproval")).toBeNull();
   });
 
-  describe("refusals — what the duo will not speak for the owner on, and why (#53)", () => {
-    it("shows each refusal with what is refused and the basis the owner wrote", async () => {
-      renderWithClient(<Rules api={api} />);
-      const rows = await screen.findAllByTestId("refusal");
-      expect(rows).toHaveLength(2);
-      expect(rows[0]).toHaveTextContent("Salary negotiations");
-      expect(rows[0]).toHaveTextContent("Never speak for me on pay");
-      expect(screen.getByTestId("refusals")).toHaveTextContent("Refusals (2)");
-    });
-
-    it("says so, rather than showing a blank, when a refusal carries no written reason", async () => {
-      renderWithClient(<Rules api={api} />);
-      const rows = await screen.findAllByTestId("refusal");
-      expect(rows[1]).toHaveTextContent("Legal holds");
-      expect(rows[1]).toHaveTextContent("No reason written.");
-    });
-
-    it("keeps the owner's multi-line reason as written", async () => {
-      stubMirrorResponses(portrait, listing, { decided: true, refusals: [{ heading: "Pay", reason: "line one\nline two" }] });
-      renderWithClient(<RefusalsSection api={api} />);
-      const reason = await screen.findByTestId("refusal-reason");
-      expect(reason.textContent).toBe("line one\nline two");
-      expect(reason.className).toContain("whitespace-pre-wrap");
-    });
-
-    it("tells 'never asked' from 'asked, none' — the daemon's own decided flag (AR-19)", async () => {
-      stubMirrorResponses(portrait, listing, { decided: false, refusals: [] });
-      const { unmount } = renderWithClient(<RefusalsSection api={api} />);
-      await waitFor(() => expect(screen.getByTestId("refusals-undecided")).toBeInTheDocument());
-      expect(screen.getByTestId("refusals-undecided")).toHaveTextContent("hasn't been asked");
-      expect(screen.queryAllByTestId("refusal")).toHaveLength(0);
-      unmount();
-
-      stubMirrorResponses(portrait, listing, { decided: true, refusals: [] });
-      renderWithClient(<RefusalsSection api={api} />);
-      await waitFor(() => expect(screen.getByTestId("refusals-none")).toBeInTheDocument());
-      expect(screen.getByTestId("refusals-none")).toHaveTextContent("none");
-      expect(screen.queryByTestId("refusals-undecided")).toBeNull();
-    });
-
-    it("points the empty state at the terminal instead of offering to record one here (AR-18)", async () => {
-      stubMirrorResponses(portrait, listing, { decided: false, refusals: [] });
-      renderWithClient(<RefusalsSection api={api} />);
-      await waitFor(() => expect(screen.getByTestId("refusals-undecided")).toBeInTheDocument());
-      expect(screen.getByTestId("refusals-undecided")).toHaveTextContent("duo mirror refusals");
-    });
-
-    it("surfaces the daemon's error message when refusals cannot be read, without taking the rest of the tab down", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (url: string) => {
-          if (url.includes("/mirror/refusals")) {
-            return new Response(JSON.stringify({ error: { code: "unknown", message: "refusals file unreadable" } }), { status: 500 });
-          }
-          if (url.includes("/review")) {
-            return new Response("[]", { status: 200 });
-          }
-          return new Response(JSON.stringify(listing), { status: 200 });
-        }),
-      );
-      renderWithClient(<Rules api={api} />);
-      await waitFor(() => expect(screen.getByText("refusals file unreadable")).toBeInTheDocument());
-      await waitFor(() => expect(screen.getByTestId("bucket-awaitingApproval")).toBeInTheDocument());
-    });
-
-    it("reads the daemon's route and nothing else — no write leaves the refusals view", async () => {
-      renderWithClient(<RefusalsSection api={api} />);
-      await screen.findAllByTestId("refusal");
-      const calls = vi.mocked(fetch).mock.calls as unknown as [string, RequestInit | undefined][];
-      expect(calls.some(([url]) => url === "http://test/mirror/refusals")).toBe(true);
-      expect(calls.filter(([, init]) => init?.method && init.method !== "GET")).toEqual([]);
-    });
-  });
-
-  describe("authoring stays with the files (AR-18, #53)", () => {
-    it("renders no free-text editing anywhere on the Rules tab — rules or refusals", async () => {
+  describe("authoring stays with the files, for the buckets this tab still owns (AR-18)", () => {
+    it("renders no free-text editing anywhere on the Rules tab", async () => {
       const { container } = renderWithClient(<Rules api={api} />);
-      await screen.findAllByTestId("refusal");
       await screen.findByTestId("bucket-awaitingApproval");
       expect(container.querySelectorAll("input, textarea, select, [contenteditable]")).toHaveLength(0);
       expect(screen.queryAllByRole("button").length).toBeGreaterThan(0); // approve / reject / promote are here…
@@ -285,10 +213,98 @@ describe("Rules tab — the buckets, the refusals, and no authoring here (AR-18)
       }
     });
 
-    it("carries no percentage numeral anywhere, refusals included", async () => {
+    it("carries no percentage numeral anywhere on the Rules tab", async () => {
       renderWithClient(<Rules api={api} />);
-      await screen.findAllByTestId("refusal");
+      await screen.findByTestId("bucket-awaitingApproval");
       expect(screen.getByTestId("rules-tab")).not.toHaveTextContent("%");
     });
+
+    it("points at May do instead of listing never-answer rules here (#269)", async () => {
+      renderWithClient(<Rules api={api} />);
+      await screen.findByTestId("bucket-awaitingApproval");
+      expect(screen.queryByTestId("refusals")).toBeNull();
+      expect(screen.getByTestId("rules-never-answer-pointer")).toHaveTextContent("May do");
+    });
+  });
+});
+
+// #269 moved never-answer rules off the files-only Rules tab into May do,
+// owner-authored from the app — RefusalsSection itself, exercised directly.
+describe("RefusalsSection — never-answer rules, owner-authored in the app (#269)", () => {
+  beforeEach(() => {
+    stubMirrorResponses(portrait, listing);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows each refusal with what is refused and the basis the owner wrote", async () => {
+    renderWithClient(<RefusalsSection api={api} />);
+    const rows = await screen.findAllByTestId("refusal");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Salary negotiations");
+    expect(rows[0]).toHaveTextContent("Never speak for me on pay");
+    expect(screen.getByTestId("refusals")).toHaveTextContent("Never answers (2)");
+  });
+
+  it("says so, rather than showing a blank, when a refusal carries no written reason", async () => {
+    renderWithClient(<RefusalsSection api={api} />);
+    const rows = await screen.findAllByTestId("refusal");
+    expect(rows[1]).toHaveTextContent("Legal holds");
+    expect(rows[1]).toHaveTextContent("No reason written.");
+  });
+
+  it("keeps the owner's multi-line reason as written", async () => {
+    stubMirrorResponses(portrait, listing, { decided: true, refusals: [{ heading: "Pay", reason: "line one\nline two" }] });
+    renderWithClient(<RefusalsSection api={api} />);
+    const reason = await screen.findByTestId("refusal-reason");
+    expect(reason.textContent).toBe("line one\nline two");
+    expect(reason.className).toContain("whitespace-pre-wrap");
+  });
+
+  it("tells 'never asked' from 'asked, none' — the daemon's own decided flag (AR-19)", async () => {
+    stubMirrorResponses(portrait, listing, { decided: false, refusals: [] });
+    const { unmount } = renderWithClient(<RefusalsSection api={api} />);
+    await waitFor(() => expect(screen.getByTestId("refusals-undecided")).toBeInTheDocument());
+    expect(screen.getByTestId("refusals-undecided")).toHaveTextContent("haven't been asked");
+    expect(screen.queryAllByTestId("refusal")).toHaveLength(0);
+    unmount();
+
+    stubMirrorResponses(portrait, listing, { decided: true, refusals: [] });
+    renderWithClient(<RefusalsSection api={api} />);
+    await waitFor(() => expect(screen.getByTestId("refusals-none")).toBeInTheDocument());
+    expect(screen.getByTestId("refusals-none")).toHaveTextContent("none");
+    expect(screen.queryByTestId("refusals-undecided")).toBeNull();
+  });
+
+  it("offers to add a rule right here instead of pointing at the terminal (#269 supersedes AR-18 for this one list)", async () => {
+    stubMirrorResponses(portrait, listing, { decided: false, refusals: [] });
+    renderWithClient(<RefusalsSection api={api} />);
+    await waitFor(() => expect(screen.getByTestId("refusals-undecided")).toBeInTheDocument());
+    expect(screen.getByTestId("refusals-undecided")).toHaveTextContent("Add a rule below");
+    expect(screen.getByTestId("refusal-add")).toBeInTheDocument();
+  });
+
+  it("surfaces the daemon's error message when refusals cannot be read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/mirror/refusals")) {
+          return new Response(JSON.stringify({ error: { code: "unknown", message: "refusals file unreadable" } }), { status: 500 });
+        }
+        return new Response(JSON.stringify(listing), { status: 200 });
+      }),
+    );
+    renderWithClient(<RefusalsSection api={api} />);
+    await waitFor(() => expect(screen.getByText("refusals file unreadable")).toBeInTheDocument());
+  });
+
+  it("merely reading the view makes no write — a rule is only ever saved by an explicit Save", async () => {
+    renderWithClient(<RefusalsSection api={api} />);
+    await screen.findAllByTestId("refusal");
+    const calls = vi.mocked(fetch).mock.calls as unknown as [string, RequestInit | undefined][];
+    expect(calls.some(([url]) => url === "http://test/mirror/refusals")).toBe(true);
+    expect(calls.filter(([, init]) => init?.method && init.method !== "GET")).toEqual([]);
   });
 });

@@ -73,8 +73,24 @@ export interface DuoAnswerSource {
 /** Which side of the owner's hedging rule an answer fell on — never a number. */
 export type DuoTrust = "confident" | "hedging";
 
+/**
+ * #270: the line a duo's message opens with while its owner is away —
+ * "{owner} is away until {when} — {owner}'s duo is answering." (digital-duo
+ * `trust/away.ts`'s `awayStatusLine`, mirrored, contract). The backreference
+ * makes the two names one name, as the attribution line's does.
+ */
+const AWAY_LINE = /^(.+) is away until (.+) — \1's duo is answering\.$/;
+
+/** What an away line said: the owner's away, until when. */
+export interface DuoAwayNotice {
+  /** The line as the daemon wrote it — what renders. */
+  readonly line: string;
+  /** The end time as the daemon worded it, e.g. "Mon 12 Oct, 09:00". */
+  readonly until: string;
+}
+
 /** A duo message the daemon composed, read back into what it said. */
-export type DuoAnswerReading =
+export type DuoAnswerReading = (
   | {
       readonly kind: "answered";
       /** The answer's own words, without the composed scaffolding around them. */
@@ -90,7 +106,11 @@ export type DuoAnswerReading =
   /** The question went to the owner (the daemon's fixed passed-on message, whole body kept verbatim). */
   | { readonly kind: "passed-on"; readonly body: string }
   /** The subject is one the owner set a boundary on (the fixed refusal message, whole body kept verbatim). */
-  | { readonly kind: "refused"; readonly body: string };
+  | { readonly kind: "refused"; readonly body: string }
+) & {
+  /** #270: set when the message opened with its owner's away line; the line is not part of `body` or `answer`. */
+  readonly away: DuoAwayNotice | null;
+};
 
 /**
  * The identity line, whole: "— {owner}'s duo speaking here, not {owner}
@@ -145,7 +165,21 @@ function sourcesOf(paragraph: string): readonly DuoAnswerSource[] | null {
  * attribution is by user id (identity.ts), and a person typing the same
  * words is a person's words.
  */
-export function readDuoAnswer(body: string): DuoAnswerReading | null {
+export function readDuoAnswer(fullBody: string): DuoAnswerReading | null {
+  // #270: an away line opens the message when the owner is away. It is read
+  // off first, and only when the rest is itself the daemon's composition —
+  // an away line alone, or before plain words, is not an outcome.
+  const allParagraphs = fullBody.split("\n\n");
+  const awayMatch = allParagraphs.length > 2 ? AWAY_LINE.exec(allParagraphs[0]!) : null;
+  const away: DuoAwayNotice | null = awayMatch ? { line: allParagraphs[0]!, until: awayMatch[2]! } : null;
+  const body = away ? allParagraphs.slice(1).join("\n\n") : fullBody;
+  const reading = readComposed(body);
+  return reading ? ({ ...reading, away } as DuoAnswerReading) : null;
+}
+
+type ComposedReading = DuoAnswerReading extends infer R ? (R extends unknown ? Omit<R, "away"> : never) : never;
+
+function readComposed(body: string): ComposedReading | null {
   const paragraphs = body.split("\n\n");
   if (paragraphs.length < 2) {
     return null;

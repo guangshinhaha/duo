@@ -235,8 +235,29 @@ describe("#67 — reading a duo's composed answer (the pure half)", () => {
       trust: "confident",
       evidence: "Evidence up to 3 days old",
       attribution: IDENTITY,
+      away: null,
     });
     expect(JSON.stringify(reading)).not.toMatch(/0\.91|confidence/i);
+  });
+
+  // #270: the daemon opens every message with this line while the owner is away.
+  const AWAY = "carol is away until Mon 12 Oct, 09:00 — carol's duo is answering.";
+
+  it("reads an away line off the front of any composed outcome, keeping it out of the words (#270)", () => {
+    expect(readDuoAnswer(`${AWAY}\n\n${answered("0.91")}`)).toMatchObject({
+      kind: "answered",
+      answer: "Refunds within 30 days, full amount.",
+      away: { line: AWAY, until: "Mon 12 Oct, 09:00" },
+    });
+    expect(readDuoAnswer(`${AWAY}\n\n${PASSED_ON}`)).toEqual({ kind: "passed-on", body: PASSED_ON, away: { line: AWAY, until: "Mon 12 Oct, 09:00" } });
+    expect(readDuoAnswer(`${AWAY}\n\n${REFUSED}`)).toMatchObject({ kind: "refused", away: { line: AWAY } });
+  });
+
+  it("an away line is not an outcome on its own, and two different names are not the daemon's line (#270)", () => {
+    expect(readDuoAnswer(`${AWAY}\n\nRefunds within 30 days.`)).toBeNull();
+    expect(readDuoAnswer(`${AWAY}\n\n${IDENTITY}`)).toBeNull();
+    const mismatched = "carol is away until Mon 12 Oct, 09:00 — dave's duo is answering.";
+    expect(readDuoAnswer(`${mismatched}\n\n${PASSED_ON}`)).toBeNull();
   });
 
   it("reads the trust the way the owner's own hairline does: hedging below the threshold plus its margin", () => {
@@ -255,8 +276,8 @@ describe("#67 — reading a duo's composed answer (the pure half)", () => {
   });
 
   it("reads the two fixed outcomes only when the words are the daemon's exact words", () => {
-    expect(readDuoAnswer(PASSED_ON)).toEqual({ kind: "passed-on", body: PASSED_ON });
-    expect(readDuoAnswer(REFUSED)).toEqual({ kind: "refused", body: REFUSED });
+    expect(readDuoAnswer(PASSED_ON)).toEqual({ kind: "passed-on", body: PASSED_ON, away: null });
+    expect(readDuoAnswer(REFUSED)).toEqual({ kind: "refused", body: REFUSED, away: null });
     // A friendlier paraphrase is not the daemon's message and claims nothing.
     expect(readDuoAnswer(`I couldn't answer that, sorry — I've told the owner.\n\n${IDENTITY}`)).toBeNull();
   });

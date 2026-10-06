@@ -9,6 +9,9 @@ import { Swap } from "../components/Swap.js";
 import { AutonomyOfferCard, OfferCard } from "../components/TrainingCards.js";
 import { useSyncStatus } from "../sync.js";
 import { GRANTABLE, LEVEL_WORDS, TIER_WORDS } from "./words.js";
+import { AwaySection } from "./Away.js";
+import { CeilingSection } from "./Ceiling.js";
+import { RefusalsSection } from "./Refusals.js";
 
 /** One topic and what your duo does about it on its own — in words, with the daemon's codes kept for the detail. */
 function Row({ row }: { row: GridRow }) {
@@ -261,6 +264,10 @@ export function MayDo({ api }: { api: DuoApiConfig }) {
         Anything external or irreversible: never on its own. You confirm each one.
       </p>
       <Tell api={api} />
+      {/* #270: away, and what it answers meanwhile; #269: the limits it never crosses, away or not. */}
+      <AwaySection api={api} />
+      <RefusalsSection api={api} />
+      <CeilingSection />
     </div>
   );
 }

@@ -40,7 +40,7 @@ type Row = { method: string; path: string; returns: string };
 
 function tableRows(): Row[] {
   const rows: Row[] = [];
-  for (const match of routeTable().matchAll(/^\| `(GET|POST)` \| `([^`]+)` \| (.+) \|/gm)) {
+  for (const match of routeTable().matchAll(/^\| `(GET|POST|PUT|DELETE)` \| `([^`]+)` \| (.+) \|/gm)) {
     rows.push({ method: match[1]!, path: match[2]!, returns: match[3]! });
   }
   return rows;
@@ -84,6 +84,15 @@ const SERVED: [method: string, path: string][] = [
   ["GET", "/mirror/rules"],
   ["GET", "/mirror/rules/:id"],
   ["GET", "/mirror/refusals"],
+  // This list is the SERVED inventory — what the daemon actually exposes,
+  // transcribed from its server.ts. #269/#270's never-answer writes, the
+  // suggestion route and all of /topics and /away are this client's own
+  // proposed contract for daemon work that hasn't landed yet (see the
+  // route table's own note above those rows) — they are documented, so the
+  // "every client call has a row" check below still holds, but kept out of
+  // SERVED on purpose: adding them here would claim the daemon serves them
+  // when `digital-duo`'s origin/main does not (checked at the time of this
+  // PR).
   ["POST", "/mirror/rules/:id/:action"],
   ["GET", "/trust/grid"],
   ["GET", "/actions/t4/pending"],
