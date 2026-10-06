@@ -12,6 +12,7 @@ import { SyncStatusProvider } from "./sync.js";
 import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
 import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
+import { unsubscribeFromPush } from "./push.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
 import { shouldPersistQuery, useOrgOverview } from "./api/queries.js";
@@ -495,9 +496,12 @@ function AppShell() {
     announce("A draft is waiting on you.");
   });
 
-  // #25/#69: one subscription for the app's life — a clicked notification
-  // routes to what it was about, a draft or a conversation. Null outside
-  // the shell (nothing to click there), and the unmount unwire keeps a
+  // #25/#69/#308: one subscription for the app's life — a clicked
+  // notification routes to what it was about, a draft or a conversation.
+  // `getPlatform().wireNotificationClicks()` (`src/platform/`) is what this
+  // actually calls: the macOS notification centre on the Tauri side, and
+  // now (#308) `public/sw.js`'s own click messages on the web side — null
+  // wherever neither channel exists, and the unmount unwire keeps a
   // remount from double-firing.
   useEffect(() => {
     let unwire: (() => void) | null = null;
@@ -568,6 +572,15 @@ function AppShell() {
   function setApi(next: DuoApiConfig | null): void {
     queryClient.clear();
     void persister.removeClient();
+    if (next === null && api) {
+      // #308: every path that clears the pairing — forget, sign out, a
+      // revoked token, the duo's end — goes through this one choke point,
+      // so this is the one place a dangling push subscription (now
+      // pointed at a token that's about to stop working) is cleaned up
+      // too. Fired, not awaited: nothing here may delay the sign-out
+      // itself, and `unsubscribeFromPush` never throws regardless.
+      void unsubscribeFromPush(api);
+    }
     // Hosted mode: who this browser is signed in as goes with the pairing it
     // describes — unpairing (forget, sign out, revocation, the duo's end)
     // leaves no name or admin flag behind.

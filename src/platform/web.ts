@@ -1,5 +1,5 @@
 import { readTouchPrimary, webStorage } from "./shared.js";
-import type { Platform, ShareData } from "./types.js";
+import type { Platform, ShareData, Unwire } from "./types.js";
 
 /*
  * #320: the browser adapter — standard web APIs only, each feature-detected.
@@ -25,6 +25,12 @@ export interface WebNavigator {
   share?(data: ShareData): Promise<void>;
 }
 
+/** The slice of `ServiceWorkerContainer` this adapter listens to — #308's own message channel from `public/sw.js`, never its registration (`src/push.ts` owns that half). */
+export interface WebServiceWorkerContainer {
+  addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
+  removeEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
+}
+
 /**
  * Everything the web adapter touches in the browser, injectable so a test
  * hands it a fake (test/platformFakes.ts) instead of stubbing globals.
@@ -38,6 +44,8 @@ export interface WebHost {
   storageArea(): Storage | undefined;
   navigator(): WebNavigator | undefined;
   matchMedia: ((query: string) => { matches: boolean }) | undefined;
+  /** Undefined where this browser has no service worker container at all. */
+  serviceWorker(): WebServiceWorkerContainer | undefined;
 }
 
 export function browserHost(): WebHost {
@@ -55,6 +63,7 @@ export function browserHost(): WebHost {
     get matchMedia() {
       return typeof window !== "undefined" && typeof window.matchMedia === "function" ? (query: string) => window.matchMedia(query) : undefined;
     },
+    serviceWorker: () => (typeof navigator === "undefined" || !("serviceWorker" in navigator) ? undefined : navigator.serviceWorker),
   };
 }
 
@@ -86,10 +95,33 @@ export function createWebPlatform(host: WebHost = browserHost()): Platform {
       }
     },
 
-    // Each web notification carries its own onclick above; there is no
-    // outside channel yet. #308's service worker adds one here.
+    /**
+     * #308: a push notification's own click, which arrives here instead of
+     * through a live `Notification.onclick` above — it was shown by
+     * `public/sw.js`'s `showNotification` while this page may not even
+     * have been open, and its `notificationclick` handler answers by
+     * focusing an existing window (if any) and `postMessage`-ing it the
+     * hash (`{ type: "duo-notification-click", hash }`), rather than
+     * navigating the window directly — a service worker's `client.navigate()`
+     * would reload the whole SPA for what is, inside it, only a hash
+     * change. Null where this browser has no service worker container at
+     * all, same as the "no outside channel" answer for a browser with no
+     * such concept.
+     */
     async wireNotificationClicks() {
-      return null;
+      const container = host.serviceWorker();
+      if (container === undefined) {
+        return null;
+      }
+      const listener = (event: { data: unknown }): void => {
+        const data = event.data as { type?: unknown; hash?: unknown } | null;
+        if (data && data.type === "duo-notification-click" && typeof data.hash === "string") {
+          host.open(data.hash);
+        }
+      };
+      container.addEventListener("message", listener);
+      const unwire: Unwire = () => container.removeEventListener("message", listener);
+      return unwire;
     },
 
     async setBadge(count) {

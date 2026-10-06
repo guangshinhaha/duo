@@ -9,6 +9,7 @@ import {
   type UseQueryOptions,
 } from "@tanstack/react-query";
 import { apiRequest, type DuoApiConfig } from "./client.js";
+import { pushSubscriptionStatus, subscribeToPush, unsubscribeFromPush } from "../push.js";
 import {
   createInvite,
   createOrg,
@@ -129,6 +130,10 @@ export const queryKeys = {
   // cache entry, so revisiting a recent query is instant and a stale
   // search never blocks a new one.
   search: (q: string) => ["search", q] as const,
+  // #308: this browser's own `PushManager` state — never persisted (the
+  // real answer lives in the browser, not the daemon) and re-read after
+  // every subscribe/unsubscribe.
+  pushSubscription: ["push-subscription"] as const,
 };
 
 /** `null` (a member with no duo paired) reads nothing: the query stays idle, and its data is `undefined`. */
@@ -879,6 +884,40 @@ export function useSetOrgAdmin(api: DuoApiConfig, scope: { origin: string; orgId
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: scope ? queryKeys.hostedOrgMembers(scope.orgId) : queryKeys.orgMembers(orgId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.orgOverview });
+    },
+  });
+}
+
+/**
+ * #308: whether THIS browser could ever subscribe to web push, and whether
+ * it already has — `push.ts`'s own read of `navigator`/`PushManager`, never
+ * the daemon (the daemon only ever sees subscriptions that were registered
+ * with it, not this browser's live `PushManager` state). `enabled` lets
+ * Settings skip the check entirely while no duo is paired — there is
+ * nothing to register a subscription with yet.
+ */
+export function usePushSubscriptionStatus(enabled: boolean) {
+  return useQuery({ queryKey: queryKeys.pushSubscription, queryFn: pushSubscriptionStatus, enabled, staleTime: 0 });
+}
+
+/** Subscribes this device to web push and registers it with the daemon (`subscribeToPush`, `src/push.ts`) — Settings' "Notify me when the app is closed" control. */
+export function useSubscribeToPush(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => subscribeToPush(api),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.pushSubscription });
+    },
+  });
+}
+
+/** Unsubscribes this device from web push, locally and at the daemon (`unsubscribeFromPush`, `src/push.ts`) — Settings' own off switch, independent of the sign-out choke point in `App.tsx` that calls the same function. */
+export function useUnsubscribeFromPush(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => unsubscribeFromPush(api),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.pushSubscription });
     },
   });
 }

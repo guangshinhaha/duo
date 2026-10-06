@@ -133,6 +133,36 @@ describe("web adapter", () => {
     expect(createWebPlatform(fakeWebHost({ matchMedia: phone }).host).isTouchPrimary()).toBe(true);
     expect(createWebPlatform(fakeWebHost({ matchMedia: () => ({ matches: true }) }).host).isTouchPrimary()).toBe(false);
   });
+
+  // #308: a push notification's click arrives as a message from
+  // `public/sw.js`, not as a live `Notification.onclick` — this is the seam
+  // `wireNotificationClicks`'s own doc comment (src/platform/types.ts) names.
+  it("routes a service worker's notification-click message to its hash, and unwires cleanly", async () => {
+    const fake = fakeWebHost();
+    const platform = createWebPlatform(fake.host);
+    const unwire = await platform.wireNotificationClicks();
+    expect(unwire).not.toBeNull();
+    expect(fake.serviceWorker.listenerCount()).toBe(1);
+
+    fake.serviceWorker.postMessage({ type: "duo-notification-click", hash: "#draft/abc" });
+    expect(fake.opened).toEqual(["#draft/abc"]);
+
+    unwire!();
+    expect(fake.serviceWorker.listenerCount()).toBe(0);
+  });
+
+  it("ignores a message that isn't its own", async () => {
+    const fake = fakeWebHost();
+    await createWebPlatform(fake.host).wireNotificationClicks();
+    fake.serviceWorker.postMessage({ type: "something-else" });
+    fake.serviceWorker.postMessage("not even an object");
+    expect(fake.opened).toEqual([]);
+  });
+
+  it("has no outside channel, and says so, where this browser has no service worker container at all", async () => {
+    const fake = fakeWebHost({ serviceWorker: () => undefined });
+    expect(await createWebPlatform(fake.host).wireNotificationClicks()).toBeNull();
+  });
 });
 
 describe.each([
