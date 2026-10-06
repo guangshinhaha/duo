@@ -18,7 +18,11 @@ import { Timestamp } from "../components/Timestamp.js";
 import { roomTitle } from "../shell/roomTitle.js";
 import { addressed, mentionLabelOf, mentionPillClassName } from "../workspace/mentions.js";
 import { ChatEditor, type ChatEditorHandle } from "../composer/ChatEditor.js";
+import { FactCheckAssist } from "../composer/FactCheckAssist.js";
 import { mentionCandidatesOf } from "../composer/mentionOffer.js";
+import { RewriteMenu } from "../composer/RewriteMenu.js";
+import type { RewriteInstruction } from "../composer/rewrite.js";
+import { readFactCheckPref } from "../factCheckPrefs.js";
 import type { RoomMemberRef, RoomMessage, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
@@ -282,6 +286,8 @@ export function Room({
   roomId,
   at,
   drafts = null,
+  onRewrite,
+  onFactCheck,
 }: {
   connection: WorkspaceConnection | null;
   roomId: string;
@@ -294,6 +300,17 @@ export function Room({
    * nothing of where they come from.
    */
   drafts?: ReactNode;
+  /**
+   * #263: polishes the owner's OWN typed text. Plain callback props, not
+   * the daemon's `DuoApiConfig` — this route is on the share path (#66's
+   * structural pin, `test/WorkspaceMatrixSeam.test.ts`) and may never
+   * import `src/api/*` itself. App.tsx owns the actual daemon call (the
+   * same way it owns `drafts`'s `RoomDrafts`) and hands down only the
+   * bound function; `undefined` (no paired duo) disables the feature.
+   */
+  onRewrite?: (text: string, instruction: RewriteInstruction) => Promise<string>;
+  /** #264: same reasoning as `onRewrite` — a plain callback, never the daemon client itself. */
+  onFactCheck?: (text: string, threadContext: string | null) => Promise<{ claim: string; concern: string; sourceLabel: string } | null>;
 }) {
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -784,6 +801,8 @@ export function Room({
           members={room?.members ?? []}
           replyTarget={replyTarget}
           onCancelReply={() => setReplyTarget(null)}
+          onFactCheck={onFactCheck}
+          onRewrite={onRewrite}
         />
       ) : (
         // A window into history has no composer: the words go to the live
@@ -1399,6 +1418,8 @@ function RoomComposer({
   members,
   replyTarget = null,
   onCancelReply,
+  onRewrite,
+  onFactCheck,
 }: {
   connection: WorkspaceConnection;
   roomId: string;
@@ -1408,10 +1429,16 @@ function RoomComposer({
   replyTarget?: RoomMessage | null;
   /** #215: cancels the reply in progress — the composer never holds this state itself, so cancelling and sending both just ask `Room` to let go of it. */
   onCancelReply?: () => void;
+  /** #263/#264: `undefined` when there's no paired duo — the rewrite button disabled rather than hidden (see `RewriteMenu`'s own doc comment), and the fact-check assist never calling out. */
+  onRewrite?: (text: string, instruction: RewriteInstruction) => Promise<string>;
+  onFactCheck?: (text: string, threadContext: string | null) => Promise<{ claim: string; concern: string; sourceLabel: string } | null>;
 }) {
   const fileInput = useRef<HTMLInputElement | null>(null);
   const form = useRef<HTMLFormElement | null>(null);
   const editor = useRef<ChatEditorHandle | null>(null);
+  // #264: this member's own opt-in, read fresh on mount — off unless
+  // Settings says otherwise (factCheckPrefs.ts).
+  const [factCheckEnabled] = useState<boolean>(readFactCheckPref);
   // The editor's composed body, mirrored for the one thing the form itself
   // needs to know before Send: whether there's anything to send at all.
   const [text, setText] = useState("");
@@ -1652,6 +1679,10 @@ function RoomComposer({
         >
           <Paperclip aria-label="Attach files" className="size-4" />
         </button>
+        {/* #263: polishes the owner's OWN typed text — disabled rather than
+            hidden with no paired duo, so the control's presence doesn't
+            itself signal whether a duo is paired. */}
+        <RewriteMenu disabled={onRewrite === undefined} editorRef={editor} onRewrite={onRewrite ?? (() => Promise.reject(new Error("No duo is paired to rewrite with.")))} />
         <ChatEditor
           ariaLabel={`Message ${roomName}`}
           editorRef={editor}
@@ -1675,6 +1706,20 @@ function RoomComposer({
           {pending ? "Sending…" : "Send"}
         </button>
       </div>
+      {/* #264: never part of the visible layout beyond its own hover/tap
+          card (a portal) — mounted here so it shares this composer's
+          editor handle and live body without RoomComposer's own render
+          tree needing to make room for it. */}
+      <FactCheckAssist
+        editorRef={editor}
+        enabled={factCheckEnabled && onFactCheck !== undefined}
+        text={text}
+        onCheck={(checkText) =>
+          onFactCheck
+            ? onFactCheck(checkText, roomId)
+            : Promise.resolve(null)
+        }
+      />
       {status !== null && (
         <p className="mt-2 type-provenance text-[var(--muted)]" data-testid="room-composer-status">
           {status}

@@ -1,11 +1,17 @@
 import { act, fireEvent } from "@testing-library/react";
 import {
   $createParagraphNode,
+  $createRangeSelection,
   $getRoot,
   $getSelection,
+  $isElementNode,
   $isRangeSelection,
+  $isTextNode,
+  $setSelection,
   INSERT_PARAGRAPH_COMMAND,
   type LexicalEditor,
+  type LexicalNode,
+  type TextNode,
 } from "lexical";
 import { $composedMessage, type ComposedMessage } from "../src/composer/serialize.js";
 
@@ -106,6 +112,42 @@ export function composed(element: HTMLElement): ComposedMessage {
 /** The composer's text, the editor's stand-in for a textarea's `value`. */
 export function composerText(element: HTMLElement): string {
   return composed(element).body;
+}
+
+/**
+ * Selects the first occurrence of `substring` in the editor's plain text
+ * (which must sit entirely within one text node) — a test-only stand-in
+ * for a mouse drag-select, used by #263's rewrite-on-selection tests.
+ */
+function collectTextNodes(node: LexicalNode, into: TextNode[]): void {
+  if ($isTextNode(node)) {
+    into.push(node);
+  } else if ($isElementNode(node)) {
+    node.getChildren().forEach((child) => collectTextNodes(child, into));
+  }
+}
+
+export function selectText(field: HTMLElement, substring: string): void {
+  const editor = editorOf(field);
+  act(() => {
+    editor.update(
+      () => {
+        const textNodes: TextNode[] = [];
+        $getRoot().getChildren().forEach((child) => collectTextNodes(child, textNodes));
+        const matched = textNodes
+          .map((node) => ({ node, index: node.getTextContent().indexOf(substring) }))
+          .find((entry) => entry.index !== -1);
+        if (!matched) {
+          throw new Error(`could not locate "${substring}" within a single text node`);
+        }
+        const range = $createRangeSelection();
+        range.anchor.set(matched.node.getKey(), matched.index, "text");
+        range.focus.set(matched.node.getKey(), matched.index + substring.length, "text");
+        $setSelection(range);
+      },
+      { discrete: true },
+    );
+  });
 }
 
 /** A real Enter keydown on the editor — modifiers as given. */

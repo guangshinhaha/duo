@@ -28,10 +28,13 @@ import {
 import {
   $createLineBreakNode,
   $createParagraphNode,
+  $createRangeSelection,
   $createTextNode,
+  $getNodeByKey,
   $getRoot,
   $getSelection,
   $isRangeSelection,
+  $setSelection,
   COMMAND_PRIORITY_LOW,
   COMMAND_PRIORITY_NORMAL,
   DROP_COMMAND,
@@ -44,6 +47,7 @@ import {
   type TextNode,
 } from "lexical";
 import { mergeRegister } from "@lexical/utils";
+import { $applyFactCheckMark, $clearFactCheckMarks, FactCheckNode } from "./FactCheckNode.js";
 import { $createMentionNode, MentionNode } from "./MentionNode.js";
 import { mentionOffer, mentionTokenBeforeCaret, type MentionCandidate } from "./mentionOffer.js";
 import { $composedMessage, type ComposedMessage } from "./serialize.js";
@@ -74,6 +78,14 @@ import { enterSends } from "./enterSends.js";
  *   always arrive as plain text (foreign rich text would otherwise import
  *   headings and tables this composer can't send). A dropped file is left
  *   to the composer's own drop zone, which already stages it.
+ * - **Rewrite** (#263): `rewriteTarget`/`applyRewrite` are the two
+ *   primitives a host's own toolbar (`RewriteMenu.tsx`) needs to read the
+ *   selection-or-whole-document and, later, replace exactly that range —
+ *   every other concern (the daemon call, the before/after panel, the
+ *   Replace button) lives outside this component entirely.
+ * - **Fact-check** (#264): `applyFactCheck` lands or clears the daemon's
+ *   at-most-one flag as an underline (`FactCheckNode.ts`); the debounce
+ *   and the daemon call live in `FactCheckAssist.tsx`, outside this file.
  */
 
 export interface ChatEditorHandle {
@@ -82,6 +94,16 @@ export interface ChatEditorHandle {
   /** Empties the editor (after a send). */
   clear(): void;
   focus(): void;
+  /** #263: toggles whether the editor accepts input — used to lock it while a rewrite is pending or its before/after panel is open, so the range `applyRewrite` replaces can never go stale underneath it. */
+  setEditable(editable: boolean): void;
+  /** #263: the editor's own root DOM element, for a host that needs to attach listeners to it directly (`FactCheckAssist.tsx`'s hover/focus detection) without reaching into Lexical internals. */
+  getRootElement(): HTMLElement | null;
+  /** #263: the text a rewrite acts on — the current selection if one is non-empty, else the whole document — and records which of the two `applyRewrite` will replace. */
+  rewriteTarget(): { text: string; hasSelection: boolean };
+  /** #263: replaces exactly the range `rewriteTarget` last captured with plain text — one undoable editor step, so ⌘Z after Replace restores the original. */
+  applyRewrite(text: string): void;
+  /** #264: clears any existing fact-check mark, then — when `flag` is given and its claim can be isolated within one existing text run — places a new one. Pass `null` to only clear (e.g. the owner edited, or the feature was turned off). */
+  applyFactCheck(flag: { claim: string; concern: string; sourceLabel: string } | null): void;
 }
 
 /** The live shortcuts a member gets in `markdown` mode — #216's scope: bold, italic, inline code, lists, plus GFM strikethrough (`markdown.ts` renders it, `sanitizeMatrixHtml.ts` allows `del`). */
@@ -261,9 +283,15 @@ function ChangePlugin({ onChange }: { onChange?: (body: string) => void }) {
   return null;
 }
 
-/** The imperative half the composer's form drives: read on submit, clear after, focus after a pick. */
+/** What the editor replaces when a rewrite is applied — captured by `rewriteTarget()`, consumed once by `applyRewrite()`. `null` means nothing has been captured (or the editor regained focus on a fresh target since) — `applyRewrite` then does nothing rather than guess. */
+type RewriteRange =
+  | { readonly kind: "selection"; readonly anchorKey: string; readonly anchorOffset: number; readonly focusKey: string; readonly focusOffset: number }
+  | { readonly kind: "all" };
+
+/** The imperative half the composer's form (and #263/#264's assist components) drive: read on submit, clear after, focus after a pick, plus the rewrite and fact-check primitives. */
 function HandlePlugin({ handleRef }: { handleRef?: Ref<ChatEditorHandle> }) {
   const [editor] = useLexicalComposerContext();
+  const rewriteRange = useRef<RewriteRange | null>(null);
   useImperativeHandle(
     handleRef,
     () => ({
@@ -280,6 +308,69 @@ function HandlePlugin({ handleRef }: { handleRef?: Ref<ChatEditorHandle> }) {
         );
       },
       focus: () => editor.focus(),
+      setEditable: (editable) => editor.setEditable(editable),
+      getRootElement: () => editor.getRootElement(),
+      rewriteTarget: () => {
+        let result = { text: "", hasSelection: false };
+        editor.getEditorState().read(() => {
+          const selection = $getSelection();
+          if ($isRangeSelection(selection) && !selection.isCollapsed()) {
+            rewriteRange.current = {
+              kind: "selection",
+              anchorKey: selection.anchor.key,
+              anchorOffset: selection.anchor.offset,
+              focusKey: selection.focus.key,
+              focusOffset: selection.focus.offset,
+            };
+            result = { text: selection.getTextContent(), hasSelection: true };
+          } else {
+            rewriteRange.current = { kind: "all" };
+            result = { text: $composedMessage().body.trim(), hasSelection: false };
+          }
+        });
+        return result;
+      },
+      applyRewrite: (text) => {
+        editor.update(() => {
+          const target = rewriteRange.current;
+          if (target?.kind === "selection") {
+            const anchorNode = $getNodeByKey(target.anchorKey);
+            const focusNode = $getNodeByKey(target.focusKey);
+            if (anchorNode && focusNode) {
+              const range = $createRangeSelection();
+              range.anchor.set(target.anchorKey, target.anchorOffset, "text");
+              range.focus.set(target.focusKey, target.focusOffset, "text");
+              $setSelection(range);
+              range.insertText(text);
+              return;
+            }
+            // The captured nodes are gone (shouldn't happen — the editor
+            // is locked via setEditable while a rewrite is in flight —
+            // but falling through to a whole-document replace is still
+            // correct, never a thrown error over a stale key.
+          }
+          const root = $getRoot();
+          root.clear();
+          const paragraph = $createParagraphNode();
+          text.split("\n").forEach((line, index) => {
+            if (index > 0) {
+              paragraph.append($createLineBreakNode());
+            }
+            if (line.length > 0) {
+              paragraph.append($createTextNode(line));
+            }
+          });
+          root.append(paragraph);
+          root.selectEnd();
+        });
+        rewriteRange.current = null;
+      },
+      applyFactCheck: (flag) => {
+        $clearFactCheckMarks(editor);
+        if (flag) {
+          $applyFactCheckMark(editor, flag.claim, flag.concern, flag.sourceLabel);
+        }
+      },
     }),
     [editor],
   );
@@ -419,7 +510,7 @@ export function ChatEditor({
   // state from the first render on.
   const [initialConfig] = useState(() => ({
     namespace: "duo-composer",
-    nodes: mode === "markdown" ? [ListNode, ListItemNode, MentionNode] : [MentionNode],
+    nodes: mode === "markdown" ? [ListNode, ListItemNode, MentionNode, FactCheckNode] : [MentionNode, FactCheckNode],
     theme: THEME,
     editorState: initialStateOf(initialText),
     onError: (error: Error) => {

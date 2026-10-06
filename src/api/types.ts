@@ -20,6 +20,35 @@ export interface DraftSource {
   label: string;
 }
 
+// `POST /compose/rewrite` (digital-duo#263): polishes the OWNER'S OWN typed
+// composer text — never a duo-generated draft, which already has
+// `POST /drafts` for that. Mirrors digital-duo's `src/drafting/rewrite.ts`
+// REWRITE_INSTRUCTIONS verbatim — the composer's own menu.
+export const REWRITE_INSTRUCTIONS = ["rewrite", "shorter", "warmer", "proofread"] as const;
+export type RewriteInstruction = (typeof REWRITE_INSTRUCTIONS)[number];
+
+export interface RewriteResult {
+  readonly text: string;
+}
+
+// `POST /compose/fact-check` (digital-duo#264): a quiet, conservative check
+// of the owner's own typed composer text against the corpus. `source`
+// reuses `DraftSource` above — the daemon never invents a source, only
+// cites one of the facts retrieval actually turned up. `flag` is `null`
+// far more often than not by design (see the daemon's own fact-check.ts
+// doc comment): no configured inference provider, no topical corpus
+// match, or a self-reported confidence under the daemon's threshold all
+// read the same way here — nothing to show.
+export interface FactCheckFlag {
+  readonly claim: string;
+  readonly concern: string;
+  readonly source: DraftSource;
+}
+
+export interface FactCheckResult {
+  readonly flag: FactCheckFlag | null;
+}
+
 // Mirrors the daemon's own split (src/drafting/draft-log.ts):
 // SETTABLE_DRAFT_OUTCOMES is what this client may POST to
 // /drafts/:id/outcome; DRAFT_OUTCOMES adds "escalation_answered", which

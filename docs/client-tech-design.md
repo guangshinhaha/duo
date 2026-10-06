@@ -113,6 +113,8 @@ domain types.
 | `GET` | `/drafts?outcome=&before=&limit=` | `DraftRecord[]` (G-b's filter/pagination) | `drafting/draft-log` |
 | `GET` | `/drafts/:id` | `DraftRecord` | `drafting/draft-log` |
 | `POST` | `/drafts` | `DraftPipelineResult` — 201, with a same-tick `draft-ready` push (#162) | `drafting/pipeline` |
+| `POST` | `/compose/rewrite` | `RewriteResult` — `{ text, instruction }` in (`instruction` one of `rewrite \| shorter \| warmer \| proofread`), polishes the OWNER'S OWN typed composer text, never a duo-generated draft; 400 `bad_request` for empty text or an unknown instruction, 503 `rewrite_unavailable` with no inference provider configured (#263) | `drafting/rewrite` |
+| `POST` | `/compose/fact-check` | `FactCheckResult` — `{ text, threadContext? }` in, `{ flag: FactCheckFlag \| null }` out; at most one high-confidence flag, citing one of `DraftSource`'s own kinds — `null` is the common case by design (no provider configured, no topical corpus match, or below the daemon's confidence threshold all read the same way) (#264) | `drafting/fact-check` |
 | `POST` | `/ask` | the public-answer envelope — `kind` + asker-visible `text`; a device principal also gets `draftId`/`confidence`/`ownerNotice` (R8's projection, #159). `duo: "shared"` routes to `answerSharedDuo` (KTD4) | `permissions/public-answer` |
 | `POST` | `/drafts/:id/outcome` | `ClassifyAndQueueResult \| {}` — delivery through the draft's origin channel rides the same seam (#170) | `drafting/delivery` |
 | `POST` | `/drafts/:id/answer` | `{ candidateId: string }` | `drafting/standing-order-candidates` |
