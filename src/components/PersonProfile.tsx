@@ -64,11 +64,15 @@ export function PersonProfile({
  * #262: "Reset learned tone" — the daemon has been quietly deriving how the
  * owner writes to THIS person from their own approved sends and edits
  * (digital-duo #279); this clears that derived adaptation on request,
- * never the messages it was learned from. Renders nothing while loading or
- * once the daemon says there is nothing learned yet (`null`) — a reset
- * control with nothing to reset would only invite a confusing no-op click.
- * The confirm step is a single inline question, not a T4-style dialog: this
- * undoes accumulated learning, never anything already sent.
+ * never the messages it was learned from. Renders nothing while loading,
+ * nor when the daemon has nothing at all to say yet (`sampleSize === 0`
+ * and not `active`) — a section with zero signal would only be noise on
+ * every other profile opened. Below the threshold but with some sends
+ * already counted, a lighter progress line shows instead of the reset
+ * flow: there's nothing learned yet to reset, only something to look
+ * forward to. The confirm step is a single inline question, not a
+ * T4-style dialog: this undoes accumulated learning, never anything
+ * already sent.
  */
 function VoiceAdaptationControl({ api, personId, personName }: { api: DuoApiConfig; personId: string; personName: string }) {
   const status = useVoiceAdaptation(api, personId);
@@ -80,55 +84,68 @@ function VoiceAdaptationControl({ api, personId, personName }: { api: DuoApiConf
     return null;
   }
 
+  const { active, features, sampleSize, threshold } = status.data;
+  if (!active && sampleSize === 0) {
+    return null;
+  }
+
   return (
     <div className="flex flex-col gap-2 border-t border-[var(--edge)] pt-3" data-testid="person-profile-voice-adaptation">
       <p className="type-provenance text-[var(--muted)]">
-        Your duo has learned a {status.data.register} tone for writing to {personName}.
+        {active && features ? (
+          <>Your duo has learned a {features.register} tone for writing to {personName}.</>
+        ) : (
+          <>
+            Your duo is still learning how you write to {personName} — {sampleSize} of {threshold} sends so far.
+          </>
+        )}
       </p>
-      {done ? (
-        <p className="type-body text-[var(--muted)]" data-testid="person-profile-reset-tone-done">
-          Reset. Your duo will learn again from what you send next.
-        </p>
-      ) : confirming ? (
-        <div className="flex flex-col gap-2" data-testid="person-profile-reset-tone-confirm">
-          <p className="type-body text-[var(--muted)]">
-            This clears what your duo has learned about how you write to {personName} — it won&apos;t touch anything you&apos;ve already sent.
+      {active &&
+        features &&
+        (done ? (
+          <p className="type-body text-[var(--muted)]" data-testid="person-profile-reset-tone-done">
+            Reset. Your duo will learn again from what you send next.
           </p>
-          <div className="flex gap-2">
-            <button
-              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)] disabled:opacity-40"
-              data-testid="person-profile-reset-tone-confirm-yes"
-              disabled={reset.isPending}
-              onClick={() => reset.mutate(personId, { onSuccess: () => setDone(true) })}
-              type="button"
-            >
-              {reset.isPending ? "Resetting…" : "Reset"}
-            </button>
-            <button
-              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] px-3 type-body text-[var(--muted)]"
-              data-testid="person-profile-reset-tone-cancel"
-              onClick={() => setConfirming(false)}
-              type="button"
-            >
-              Cancel
-            </button>
-          </div>
-          {reset.isError && (
-            <p className="type-body text-[var(--refused)]" data-testid="person-profile-reset-tone-error">
-              Couldn&apos;t reset that — try again.
+        ) : confirming ? (
+          <div className="flex flex-col gap-2" data-testid="person-profile-reset-tone-confirm">
+            <p className="type-body text-[var(--muted)]">
+              This clears what your duo has learned about how you write to {personName} — it won&apos;t touch anything you&apos;ve already sent.
             </p>
-          )}
-        </div>
-      ) : (
-        <button
-          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)]"
-          data-testid="person-profile-reset-tone"
-          onClick={() => setConfirming(true)}
-          type="button"
-        >
-          Reset learned tone
-        </button>
-      )}
+            <div className="flex gap-2">
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)] disabled:opacity-40"
+                data-testid="person-profile-reset-tone-confirm-yes"
+                disabled={reset.isPending}
+                onClick={() => reset.mutate(personId, { onSuccess: () => setDone(true) })}
+                type="button"
+              >
+                {reset.isPending ? "Resetting…" : "Reset"}
+              </button>
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] px-3 type-body text-[var(--muted)]"
+                data-testid="person-profile-reset-tone-cancel"
+                onClick={() => setConfirming(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+            {reset.isError && (
+              <p className="type-body text-[var(--refused)]" data-testid="person-profile-reset-tone-error">
+                Couldn&apos;t reset that — try again.
+              </p>
+            )}
+          </div>
+        ) : (
+          <button
+            className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--text)]"
+            data-testid="person-profile-reset-tone"
+            onClick={() => setConfirming(true)}
+            type="button"
+          >
+            Reset learned tone
+          </button>
+        ))}
     </div>
   );
 }
