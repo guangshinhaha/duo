@@ -93,15 +93,21 @@ const SERVED: [method: string, path: string][] = [
   ["POST", "/mirror/pinned-answers"],
   ["POST", "/mirror/pinned-answers/:id/edit"],
   ["DELETE", "/mirror/pinned-answers/:id"],
-  // This list is the SERVED inventory — what the daemon actually exposes,
-  // transcribed from its server.ts. #269/#270's never-answer writes, the
-  // suggestion route and all of /topics and /away are this client's own
-  // proposed contract for daemon work that hasn't landed yet (see the
-  // route table's own note above those rows) — they are documented, so the
-  // "every client call has a row" check below still holds, but kept out of
-  // SERVED on purpose: adding them here would claim the daemon serves them
-  // when `digital-duo`'s origin/main does not (checked at the time of this
-  // PR).
+  // digital-duo#292 (duo#274): landed on origin/main's src/serve/server.ts.
+  ["GET", "/workspace/rooms/:roomId/off-the-record"],
+  ["POST", "/workspace/rooms/:roomId/off-the-record"],
+  ["DELETE", "/workspace/rooms/:roomId/off-the-record"],
+  // digital-duo#287 (duo#269/#270): landed on origin/main's src/serve/server.ts
+  // (PR #293) — no longer a proposed contract, see the route table's note.
+  ["POST", "/mirror/refusals"],
+  ["PUT", "/mirror/refusals/:heading"],
+  ["DELETE", "/mirror/refusals/:heading"],
+  ["GET", "/drafts/:id/never-answer-suggestion"],
+  ["GET", "/topics"],
+  ["GET", "/away"],
+  ["PUT", "/away"],
+  ["DELETE", "/away"],
+  ["POST", "/away/summary/dismiss"],
   ["POST", "/mirror/rules/:id/:action"],
   ["GET", "/trust/grid"],
   ["GET", "/actions/t4/pending"],
