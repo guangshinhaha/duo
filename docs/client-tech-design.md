@@ -164,6 +164,7 @@ domain types.
 | `POST` | `/mirror/pinned-answers` | `PinnedAnswer` — pins a message as the exact answer to a question/topic `pattern`; `sourceLabel` optional (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
 | `POST` | `/mirror/pinned-answers/:id/edit` | `PinnedAnswer` — edits `pattern` and/or `answerText` in place; 404 for an unknown id (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
 | `DELETE` | `/mirror/pinned-answers/:id` | `{ deleted: true }` — unpins; idempotent, a 200 even for an id already gone (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
+| `GET` | `/mirror/voice-trend` | `VoiceTrend` — query `?bucket=week\|month`; each bucket's score against a rolling anchor of the owner's last 20 approved sends, re-anchored only when a bucket's average drops below 0.5; `sampleSize: 0, score: null` before the first anchor exists, honest-empty below 20 total sends; each bucket keeps its 3 worst-scoring drafts (duo#276, digital-duo#276) | `derivation/voice-trend` |
 | `GET` | `/workspace/rooms/:roomId/off-the-record` | `RoomOffTheRecord` — whether this room is currently marked "don't learn from this conversation" (duo#274) | `workspace/off-the-record` |
 | `POST` | `/workspace/rooms/:roomId/off-the-record` | `RoomOffTheRecord` — marks the room off the record and purges what it already taught (duo#274) | `workspace/off-the-record` |
 | `DELETE` | `/workspace/rooms/:roomId/off-the-record` | `RoomOffTheRecord & { wasOn: boolean }` — lifts the marker; nothing already purged is un-purged (duo#274) | `workspace/off-the-record` |
@@ -228,6 +229,8 @@ The nine rows below (#269's never-answer writes and suggestion, and #270's away/
 | `GET` | `/escalations/history?limit=&cursor=` | `SentEscalationDigest[]` (#178) — oldest first, `limit` 1–100 (default 10), `cursor` an offset; that section walks every page at `limit=100` before it counts | `escalation/digest` |
 | `GET` | `/escalations/rate` | `EscalationUrgencyRate` (#178) — `{ total, urgent, rate }` over every classified escalation, urgent ones included; drawn as counts plus a bar, never a percentage | `escalation/digest` |
 | `GET` | `/audit` | `AuditEntry[]` | `permissions/audit` |
+| `GET` | `/mirror/public-answers` | `PublicAnswerLogEntry[]` — every ask-link answer given on the owner's behalf, each with its draft's `sources` resolved at read time; merged with `/audit` into Activity's one newest-first feed (duo#267, digital-duo#267) | `permissions/public-answer-log` |
+| `POST` | `/mirror/public-answers/:id/correct` | `PublicAnswerLogEntry` — body `{ correctedText, threadStillExists? }`; posts a linked correction and demotes the topic's T0 autonomy immediately; 404 unknown id, 409 nothing to correct, 400 blank text (duo#267, digital-duo#267) | `permissions/public-correction` |
 | `GET` | `/ws` | the one push channel — `draft-ready`; auth by first message (#162) | `serve/ws` |
 
 **Ending the duo (#55).** "Instantly killable" is only true if it is not tied to one laptop, so
