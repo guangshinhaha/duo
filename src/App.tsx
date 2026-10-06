@@ -53,6 +53,7 @@ import { PairDuoDialog } from "./components/PairDuoDialog.js";
 import { WorkspaceSignInDialog } from "./components/WorkspaceSignInDialog.js";
 import { isHostedAccess, useHostedWorkspace, WorkspaceAccessProvider } from "./workspace/access.js";
 import { useWorkspaceSession } from "./workspace/session.js";
+import { forgetWorkspaceCache, workspaceCacheName } from "./workspace/cache.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "./workspace/identity.js";
 import type { LiveArrival, RoomSummary, WorkspaceConnection, WorkspaceSession } from "./workspace/matrix.js";
 import { ProfilePane } from "./shell/ProfilePane.js";
@@ -572,13 +573,20 @@ function AppShell() {
     // leaves no name or admin flag behind.
     if (next === null) {
       // The workspace session goes first: ended at the workspace with its own
-      // credential (the daemon cannot revoke it), then forgotten.
+      // credential (the daemon cannot revoke it), then forgotten — and its
+      // local cache of rooms and messages with it (#288).
+      if (hosted.session) {
+        void forgetWorkspaceCache(hosted.session);
+      }
       hosted.signOut();
       writeHostedAccount(null);
       if (hostedActive) {
         // A hosted device ignores a stored manual sign-in and Settings offers no
         // button to clear it, so it must not outlive the account here: signing
         // out leaves no live workspace token behind in this browser.
+        if (session) {
+          void forgetWorkspaceCache(session);
+        }
         setSessionRaw(null);
       }
     }
@@ -594,6 +602,12 @@ function AppShell() {
   function setSession(next: WorkspaceSession | null): void {
     queryClient.clear();
     void persister.removeClient();
+    // #288: the account that is leaving takes its local cache (rooms, state,
+    // recent messages) with it — signing out, or another account signing
+    // in, leaves none of it for whoever uses this machine next.
+    if (session && (next === null || workspaceCacheName(next) !== workspaceCacheName(session))) {
+      void forgetWorkspaceCache(session);
+    }
     setSessionRaw(next);
   }
   function signOutWorkspace(): void {
@@ -630,7 +644,22 @@ function AppShell() {
                 hosted.report("rejected");
               },
             })
-          : await connect(target);
+          : await connect(target, {
+              // #288: with a local cache the connection is up before the
+              // workspace has judged the credential, so a stored sign-in it
+              // no longer accepts is heard here rather than as a failed
+              // connect — and says so the same way, with the way out.
+              onSessionRejected: () => {
+                if (disposed) {
+                  return;
+                }
+                connectionRef.current = null;
+                setConnection(null);
+                void held?.stop();
+                // The same words as `SessionRejectedError`, the failed connect's answer.
+                setWorkspaceError("The workspace no longer accepts this sign-in.");
+              },
+            });
         if (disposed) {
           void handle.stop();
           return;

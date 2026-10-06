@@ -10,15 +10,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * #62: the seam test. `src/workspace/matrix.ts` is the ONE module that may
  * import matrix-js-sdk — the Tauri-seam pattern again, so daemon-only flows
  * never load the SDK transitively. Here the SDK itself is mocked and the
- * seam's side of the contract is pinned: the client is built with NOTHING
- * persistent (no IndexedDB store, no web-storage session — a workspace
+ * seam's side of the contract is pinned: the client is built with no
+ * persistent CREDENTIAL (no session store, no web storage — a workspace
  * session lives in this app's own credential store or nowhere, so signing
- * out can never leave a warm session behind, #62 AC4), sign-in follows the
+ * out can never leave a warm session behind, #62 AC4); the one thing that
+ * persists is #288's per-account data cache, an `IndexedDBStore` that
+ * sign-out deletes (test/WorkspaceCache.test.ts drives it for real), sign-in follows the
  * platform record's rules (https only — the token rides the URL), and the
  * projection from Matrix events to room messages is the honest minimal one.
  */
 vi.mock("matrix-js-sdk", () => ({
   createClient: vi.fn(),
+  // #288: the data cache — present only where the environment has IndexedDB.
+  IndexedDBStore: vi.fn(function (this: Record<string, unknown>, opts: unknown) {
+    this.opts = opts;
+    this.startup = vi.fn(async () => undefined);
+    this.destroy = vi.fn(async () => undefined);
+  }),
   ClientEvent: { Sync: "sync" },
   // #211: backward-pagination token checks (`loadOlder`) read this.
   Direction: { Backward: "b", Forward: "f" },
@@ -59,7 +67,7 @@ vi.mock("matrix-js-sdk", () => ({
   },
 }));
 
-import { ClientEvent, createClient, EventStatus, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent } from "matrix-js-sdk";
+import { ClientEvent, createClient, EventStatus, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent } from "matrix-js-sdk";
 import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
 
@@ -430,7 +438,35 @@ beforeEach(() => {
 });
 
 describe("the seam's persistence contract (#62 AC4)", () => {
-  it("builds its clients with nothing persistent — no store, no session store, no web storage", async () => {
+  it("#288: where there is IndexedDB, the one thing persisted is a per-account data store — no web storage, so no unscoped keys and no parked unsent messages", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const idb = {} as IDBFactory;
+    vi.stubGlobal("indexedDB", idb);
+    try {
+      const pending = connect(SESSION);
+      await vi.waitFor(() => expect(client.startClient).toHaveBeenCalled());
+      const syncHandler = client.on.mock.calls.find(([event]) => event === ClientEvent.Sync)?.[1] as (state: string) => void;
+      syncHandler("PREPARED");
+      const connection = await pending;
+
+      const storeOptions = vi.mocked(IndexedDBStore).mock.calls.at(-1)![0];
+      expect(storeOptions).toEqual({ indexedDB: idb, dbName: `duo-workspace|${SESSION.homeserverUrl}|${SESSION.userId}|${SESSION.deviceId}` });
+      const options = vi.mocked(createClient).mock.calls[0]![0]!;
+      expect(Object.keys(options).filter((key) => PERSISTENCE_KEYS.test(key))).toEqual(["store"]);
+      const store = options.store as unknown as { startup: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn> };
+      expect(store).toBe(vi.mocked(IndexedDBStore).mock.instances.at(-1));
+      // Started after the client holds it — the SDK's own order.
+      expect(store.startup).toHaveBeenCalled();
+
+      await connection.stop();
+      expect(store.destroy).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("with no IndexedDB, builds its clients with nothing persistent — no store, no session store, no web storage", async () => {
     const client = fakeClient();
     vi.mocked(createClient).mockReturnValue(client);
 
