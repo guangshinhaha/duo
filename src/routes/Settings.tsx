@@ -14,6 +14,7 @@ import {
   AlertDialogTrigger,
 } from "../components/primitives/AlertDialog.js";
 import { EndDuoSection } from "../components/EndDuoSection.js";
+import { PrivacyControls } from "../components/PrivacyControls.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { PairedDevices } from "../components/PairedDevices.js";
 import { ConnectToClaude } from "../components/ConnectToClaude.js";
@@ -423,6 +424,7 @@ export function Settings({
         </p>
       </section>
     ),
+    privacy: api ? <PrivacyControls api={api} /> : null,
     devices: api ? (
       <>
         <PairedDevices api={api} onConfigChange={onConfigChange} />

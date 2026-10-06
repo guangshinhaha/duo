@@ -61,6 +61,7 @@ describe("the index", () => {
       "Appearance",
       "Sending",
       "Profile",
+      "Privacy & data",
       "Devices",
       "Ask links",
       "Connect to Claude",
@@ -76,7 +77,7 @@ describe("the index", () => {
     const ids = screen.getAllByRole("link").map((link) => link.getAttribute("href"));
     expect(ids).toContain("#settings/advanced");
     expect(ids).toContain("#settings/notifications");
-    for (const needsDuo of ["devices", "links", "claude", "end"]) {
+    for (const needsDuo of ["privacy", "devices", "links", "claude", "end"]) {
       expect(ids).not.toContain(`#settings/${needsDuo}`);
     }
     expect(screen.getByTestId("settings-index-no-duo")).toHaveTextContent("Pair your duo under Advanced");
