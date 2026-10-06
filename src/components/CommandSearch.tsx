@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
+import type { DuoApiConfig } from "../api/client.js";
 import { MessageSearchResults } from "./ConversationSearch.js";
 import { PersonProfile } from "./PersonProfile.js";
 import { directoryEntryLabel, duoOwnerUserIdOf, isDuoUserId } from "../workspace/identity.js";
@@ -36,12 +37,15 @@ type Item = { readonly kind: "room"; readonly room: RoomSummary } | { readonly k
  * move and choose without a mouse.
  */
 export function CommandSearch({
+  api = null,
   connection,
   rooms,
   titleOf,
   onStartedConversation,
   children,
 }: {
+  /** #262: handed straight through to the person profile this search can open — lets it read and reset that person's learned-tone adaptation. */
+  api?: DuoApiConfig | null;
   connection: WorkspaceConnection;
   rooms: readonly RoomSummary[];
   /** How a conversation reads under its title — the list's own rule, so a suggestion says the same name the list does. */
@@ -337,6 +341,7 @@ export function CommandSearch({
         !showDropdown && children
       )}
       <PersonProfile
+        api={api}
         connection={connection}
         onMessage={(roomId) => {
           setSelectedPerson(null);

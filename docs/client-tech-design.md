@@ -112,7 +112,7 @@ domain types.
 | `POST` | `/devices/:id/revoke` | `DeviceToken` — same-tick teardown: cached auth and live socket drop with it | `serve/tokens` |
 | `GET` | `/drafts?outcome=&before=&limit=` | `DraftRecord[]` (G-b's filter/pagination) | `drafting/draft-log` |
 | `GET` | `/drafts/:id` | `DraftRecord` | `drafting/draft-log` |
-| `POST` | `/drafts` | `DraftPipelineResult` — 201, with a same-tick `draft-ready` push (#162) | `drafting/pipeline` |
+| `POST` | `/drafts` | `DraftPipelineResult` — 201, with a same-tick `draft-ready` push (#162); an optional `recipient: { id, name? }` in the body names who the draft is addressed to when the caller knows one, and the stored `DraftRecord` then carries `adaptedForRecipient`/`recipientAdaptation` (digital-duo #279, issue #262) | `drafting/pipeline` |
 | `POST` | `/compose/rewrite` | `RewriteResult` — `{ text, instruction }` in (`instruction` one of `rewrite \| shorter \| warmer \| proofread`), polishes the OWNER'S OWN typed composer text, never a duo-generated draft; 400 `bad_request` for empty text or an unknown instruction, 503 `rewrite_unavailable` with no inference provider configured (#263) | `drafting/rewrite` |
 | `POST` | `/compose/fact-check` | `FactCheckResult` — `{ text, threadContext? }` in, `{ flag: FactCheckFlag \| null }` out; at most one high-confidence flag, citing one of `DraftSource`'s own kinds — `null` is the common case by design (no provider configured, no topical corpus match, or below the daemon's confidence threshold all read the same way) (#264) | `drafting/fact-check` |
 | `POST` | `/ask` | the public-answer envelope — `kind` + asker-visible `text`; a device principal also gets `draftId`/`confidence`/`ownerNotice` (R8's projection, #159). `duo: "shared"` routes to `answerSharedDuo` (KTD4) | `permissions/public-answer` |
@@ -125,6 +125,8 @@ domain types.
 | `GET` | `/scheduled-sends` | `ScheduledSend[]` with each `draft` — held drafts are left out of `GET /drafts?outcome=pending` (#261) | `drafting/scheduled-sends` |
 | `GET` | `/settings/working-hours` | `WorkingHours` plus `nextStart` (#261) | `drafting/scheduled-sends` |
 | `PUT` | `/settings/working-hours` | `WorkingHours` plus `nextStart` (#261) | `drafting/scheduled-sends` |
+| `GET` | `/people/:id/voice-adaptation` | `VoiceAdaptationStatus \| null` — what the daemon has derived about how the owner writes to this one person, from their own approved sends/edits; `null` below its sample threshold (digital-duo #279, issue #262) | `drafting/recipient-voice` |
+| `DELETE` | `/people/:id/voice-adaptation` | 204 — clears the derived adaptation only, never the sends/edits it was learned from; the person's profile's "Reset learned tone" (#262) | `drafting/recipient-voice` |
 | `GET` | `/review?status=` | the merged queue's rows — draft edits *and* standing-order candidates, each tagged `source` (#166) | `corrections/review` |
 | `POST` | `/review/:id/approve` | `{ candidate, result }` (#173) | `corrections/review` |
 | `POST` | `/review/:id/reject` | `{ candidate }` (#173) | `corrections/review` |

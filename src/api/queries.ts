@@ -57,6 +57,7 @@ import type {
   InterruptionPortrait,
   PendingT4Request,
   PendingT4RequestForJudgement,
+  RecipientRef,
   RefusalsListing,
   PairedDevice,
   PasteImportSummary,
@@ -69,6 +70,7 @@ import type {
   ShapeInstruction,
   ScheduledSend,
   SendLater,
+  VoiceAdaptationStatus,
   WorkingHours,
 } from "./types.js";
 
@@ -145,6 +147,9 @@ export const queryKeys = {
   // real answer lives in the browser, not the daemon) and re-read after
   // every subscribe/unsubscribe.
   pushSubscription: ["push-subscription"] as const,
+  // digital-duo #279 (issue #262): keyed by recipient id, so resetting one
+  // person's learned tone never invalidates another's.
+  voiceAdaptation: (personId: string) => ["people", personId, "voice-adaptation"] as const,
 };
 
 /** `null` (a member with no duo paired) reads nothing: the query stays idle, and its data is `undefined`. */
@@ -386,7 +391,11 @@ export function useCreateDraft(api: DuoApiConfig) {
   const queryClient = useQueryClient();
   const controllerRef = useRef<AbortController | null>(null);
   const mutation = useMutation({
-    mutationFn: (input: { question: string; threadContext?: string | null }) => {
+    // `recipient` (digital-duo #279, issue #262) rides along only when this
+    // caller actually knows who the draft is addressed to — omitted
+    // entirely (never sent as `null`) when it doesn't, which is the common
+    // case: the owner's own "ask your duo" chat has nobody to name.
+    mutationFn: (input: { question: string; threadContext?: string | null; recipient?: RecipientRef }) => {
       controllerRef.current = new AbortController();
       return apiRequest<DraftPipelineResult>(api, "/drafts", {
         method: "POST",
@@ -1106,6 +1115,38 @@ export function useUnsubscribeFromPush(api: DuoApiConfig) {
     mutationFn: () => unsubscribeFromPush(api),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.pushSubscription });
+    },
+  });
+}
+
+/**
+ * `GET /people/:id/voice-adaptation` (digital-duo #279, issue #262): what
+ * your duo has learned about how you write to this one person — `null`
+ * below the daemon's own sample threshold. `personId` is the same id a
+ * draft's `recipient.id` and `recipientAdaptation.recipientId` carry — this
+ * client never mints or guesses one.
+ */
+export function useVoiceAdaptation(api: DuoApiConfig | null, personId: string) {
+  return useQuery({
+    queryKey: queryKeys.voiceAdaptation(personId),
+    queryFn: () => apiRequest<VoiceAdaptationStatus | null>(api!, `/people/${encodeURIComponent(personId)}/voice-adaptation`),
+    enabled: api !== null,
+  });
+}
+
+/**
+ * `DELETE /people/:id/voice-adaptation` (digital-duo #279, issue #262): the
+ * profile's "Reset learned tone" — clears what the daemon has derived from
+ * past approved sends/edits to this person, never the sends/edits
+ * themselves. Only this one person's cached status is invalidated; nothing
+ * else about them (or any other relationship) changes.
+ */
+export function useResetVoiceAdaptation(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (personId: string) => apiRequest<void>(api, `/people/${encodeURIComponent(personId)}/voice-adaptation`, { method: "DELETE" }),
+    onSuccess: (_result, personId) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.voiceAdaptation(personId) });
     },
   });
 }
