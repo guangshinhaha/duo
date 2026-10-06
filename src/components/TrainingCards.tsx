@@ -1,8 +1,18 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { useAudit, useDecideCandidate, useDecidePromotion, useMirrorRules, useReview, useRuleAction, useTrustPromotions } from "../api/queries.js";
-import type { AuditEntry, CorrectionCandidate, PromotionOffer, Rule } from "../api/types.js";
+import {
+  useAudit,
+  useAutonomyOffers,
+  useDecideAutonomyOffer,
+  useDecideCandidate,
+  useDecidePromotion,
+  useMirrorRules,
+  useReview,
+  useRuleAction,
+  useTrustPromotions,
+} from "../api/queries.js";
+import type { AuditEntry, AutonomyOffer, CorrectionCandidate, PromotionOffer, Rule } from "../api/types.js";
 import { isSetAside, setAside } from "../cardPacing.js";
 import { ConfirmationsPanel } from "../routes/Confirmations.js";
 import { useSyncStatus } from "../sync.js";
@@ -34,6 +44,14 @@ const isCandidate = (value: unknown): value is CorrectionCandidate =>
 const isRule = (value: unknown): value is Rule => isObject(value) && typeof value.id === "string" && typeof value.text === "string" && typeof value.supportCount === "number";
 const isOffer = (value: unknown): value is PromotionOffer =>
   isObject(value) && typeof value.topicId === "string" && typeof value.tier === "string" && typeof value.cleanStreak === "number" && typeof value.offeredLevel === "string";
+const isAutonomyOffer = (value: unknown): value is AutonomyOffer =>
+  isObject(value) &&
+  typeof value.recipientKey === "string" &&
+  typeof value.evidence === "string" &&
+  typeof value.holdSeconds === "number" &&
+  isObject(value.trackRecord) &&
+  typeof value.trackRecord.considered === "number" &&
+  typeof value.trackRecord.sentUnedited === "number";
 const isAuditEntry = (value: unknown): value is AuditEntry =>
   isObject(value) && typeof value.createdAt === "string" && typeof value.declined === "boolean" && !Number.isNaN(new Date(value.createdAt as string).getTime());
 
@@ -214,6 +232,54 @@ export function OfferCard({ api, offer }: { api: DuoApiConfig; offer: PromotionO
   );
 }
 
+/**
+ * #266: your duo asking to answer one person by itself, because its record
+ * with them earned it — the evidence first, in the daemon's own plain words
+ * ("You've sent all of my last 20 replies to Wei without changing a word"),
+ * then the ask. Accept grants autonomy for that one person and nobody else;
+ * Decline keeps the same offer quiet for the daemon's cooldown. Both are the
+ * daemon's routes: nothing here grants anything, and nothing grants by
+ * waiting. What a grant does is said up front, too: every reply is held for
+ * the undo window first (#268), and you can take it back from May do.
+ */
+export function AutonomyOfferCard({ api, offer }: { api: DuoApiConfig; offer: AutonomyOffer }) {
+  const decide = useDecideAutonomyOffer(api);
+  const { reachable } = useSyncStatus();
+  const who = offer.recipientName ?? "them";
+  return (
+    <Card
+      body={
+        <p className="type-provenance text-[var(--muted)]" data-testid="autonomy-offer-detail">
+          Only {who}, and only answers I'm confident in — anything I'm unsure of still comes to you. You can take this back any time
+          from May do.
+        </p>
+      }
+      testId="autonomy-offer-card"
+      title={offer.evidence}
+    >
+      <button
+        className={primary}
+        data-testid="autonomy-offer-accept"
+        disabled={decide.isPending || !reachable}
+        onClick={() => decide.mutate({ recipientKey: offer.recipientKey, decision: "accept" })}
+        type="button"
+      >
+        Answer {who} for me
+      </button>
+      <button
+        className={buttonBase}
+        data-testid="autonomy-offer-decline"
+        disabled={decide.isPending || !reachable}
+        onClick={() => decide.mutate({ recipientKey: offer.recipientKey, decision: "decline" })}
+        type="button"
+      >
+        Keep asking me
+      </button>
+      <MutationError error={decide.error} />
+    </Card>
+  );
+}
+
 /** A demotion, said out loud: the owner corrected the duo, and it went back to asking. There are no buttons — nothing was decided by anyone but the correction. */
 export interface TrustNotice {
   readonly id: string;
@@ -292,13 +358,18 @@ export function DigestCard({ api }: { api: DuoApiConfig }) {
  */
 export function TrainingCards({ api, notices = [] }: { api: DuoApiConfig; notices?: readonly TrustNotice[] }) {
   const promotions = useTrustPromotions(api);
+  const autonomy = useAutonomyOffers(api);
   const offers = listOf(promotions.data, isOffer);
+  const autonomyOffers = listOf(autonomy.data, isAutonomyOffer);
   return (
     <div className="flex flex-col gap-5" data-testid="training-cards">
       <ConfirmationsPanel api={api} quietWhenEmpty />
       <RulesCard api={api} />
       {offers.map((offer) => (
         <OfferCard api={api} key={`${offer.topicId}/${offer.tier}`} offer={offer} />
+      ))}
+      {autonomyOffers.map((offer) => (
+        <AutonomyOfferCard api={api} key={offer.recipientKey} offer={offer} />
       ))}
       {notices.map((notice) => (
         <NoticeCard key={notice.id} notice={notice} />
@@ -313,6 +384,7 @@ export function useTrainingCount(api: DuoApiConfig): number {
   const review = useReview(api);
   const rules = useMirrorRules(api);
   const promotions = useTrustPromotions(api);
+  const autonomy = useAutonomyOffers(api);
   const items = itemsOf(listOf(review.data, isCandidate), listOf(rules.data?.awaitingApproval, isRule));
-  return (isSetAside("rules") ? 0 : items.length) + listOf(promotions.data, isOffer).length;
+  return (isSetAside("rules") ? 0 : items.length) + listOf(promotions.data, isOffer).length + listOf(autonomy.data, isAutonomyOffer).length;
 }

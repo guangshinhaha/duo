@@ -4,6 +4,7 @@ import { requestNeverAnswerRule, useAnswerEscalation, useRecordOutcome, useSched
 import type { DismissReason, DraftRecord, SendLater } from "../api/types.js";
 import { useSyncStatus } from "../sync.js";
 import { readUndoSendSeconds } from "../undoSendPrefs.js";
+import { takeEditOnOpen } from "../editOnOpen.js";
 
 /**
  * #24: how long a clicked Ignore (now Dismiss) is held client-side before it
@@ -49,7 +50,8 @@ export function useDraftDecision(api: DuoApiConfig, draft: DraftRecord) {
   // is worse than no Send. Editing the text stays possible (a local buffer);
   // only the *sending* of anything waits for the daemon to answer again.
   const { reachable } = useSyncStatus();
-  const [editing, setEditing] = useState(false);
+  // #268: a reply stopped with Edit from the autonomous-send strip opens here already editing.
+  const [editing, setEditing] = useState(() => takeEditOnOpen(draft.id));
   const [editedText, setEditedText] = useState(draft.draftText ?? "");
   const [answerText, setAnswerText] = useState("");
   // #36: Escape on the editor hands focus back to the Edit that opened

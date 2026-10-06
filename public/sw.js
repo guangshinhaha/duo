@@ -21,17 +21,40 @@
 const DRAFT_WAITING_BODY = "A new draft is waiting for your review.";
 const DEFAULT_HASH = "#chats";
 
+// #268: a reply your duo is about to send by itself, inside its undo window
+// (`{ draftId, kind: "autonomous_hold", sendAt }`). The click opens Waiting on
+// you, where the live strip has Stop and Edit. The notification itself
+// carries no Stop button on purpose: stopping is a call to the daemon with
+// this device's token, which this worker never holds — a lock-screen "Stop"
+// that could not actually stop anything would be worse than none.
+const AUTONOMOUS_HOLD_BODY = "Your duo is about to send a reply for you. Tap to stop or edit it.";
+const AUTONOMOUS_HOLD_HASH = "#waiting";
+
 self.addEventListener("push", (event) => {
   let draftId = null;
+  let autonomous = false;
   try {
     const data = event.data ? event.data.json() : null;
     if (data && typeof data.draftId === "string" && data.draftId.length > 0) {
       draftId = data.draftId;
+      autonomous = data.kind === "autonomous_hold";
     }
   } catch {
     // Not JSON, or not shaped as expected — never crash the push handler
     // over a payload this worker doesn't recognize.
     draftId = null;
+  }
+
+  if (draftId !== null && autonomous) {
+    event.waitUntil(
+      self.registration.showNotification("Duo", {
+        body: AUTONOMOUS_HOLD_BODY,
+        tag: `duo-autonomous-${draftId}`,
+        requireInteraction: true,
+        data: { hash: AUTONOMOUS_HOLD_HASH },
+      }),
+    );
+    return;
   }
 
   // `userVisibleOnly: true` (the only way `PushManager.subscribe` is ever

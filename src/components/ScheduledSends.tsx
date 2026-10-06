@@ -15,7 +15,7 @@ export function ScheduledSends({ api }: { api: DuoApiConfig }) {
   const cancel = useCancelScheduledSend(api);
   const { reachable } = useSyncStatus();
   // A daemon that predates #261 has no such route; anything but a list reads as nothing held.
-  const sends = Array.isArray(scheduled.data) ? scheduled.data.filter((send) => send && typeof send.sendAt === "string" && send.draft) : [];
+  const sends = Array.isArray(scheduled.data) ? scheduled.data.filter((send) => send && typeof send.sendAt === "string" && send.draft && send.autonomous !== true) : [];
   if (sends.length === 0) {
     return null;
   }

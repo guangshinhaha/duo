@@ -1,12 +1,13 @@
 import { useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { useGrantAutonomy, useTrustGrid, useTrustPromotions } from "../api/queries.js";
-import type { GrantOutcome, GridRow, PromotionOffer, TrustTier } from "../api/types.js";
+import { useAutonomyGrants, useAutonomyOffers, useGrantAutonomy, useRevokeAutonomyGrant, useTrustGrid, useTrustPromotions } from "../api/queries.js";
+import type { AutonomyGrant, AutonomyOffer, GrantOutcome, GridRow, PromotionOffer, TrustTier } from "../api/types.js";
 import { MutationError } from "../components/MutationError.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { Swap } from "../components/Swap.js";
-import { OfferCard } from "../components/TrainingCards.js";
+import { AutonomyOfferCard, OfferCard } from "../components/TrainingCards.js";
+import { useSyncStatus } from "../sync.js";
 import { GRANTABLE, LEVEL_WORDS, TIER_WORDS } from "./words.js";
 
 /** One topic and what your duo does about it on its own — in words, with the daemon's codes kept for the detail. */
@@ -141,6 +142,69 @@ function Tell({ api }: { api: DuoApiConfig }) {
   );
 }
 
+const isGrant = (value: unknown): value is AutonomyGrant =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as AutonomyGrant).recipientKey === "string" &&
+  typeof (value as AutonomyGrant).grantedAt === "string" &&
+  typeof (value as AutonomyGrant).evidence === "object" &&
+  (value as AutonomyGrant).evidence !== null;
+
+const isAutonomyOffer = (value: unknown): value is AutonomyOffer =>
+  typeof value === "object" && value !== null && typeof (value as AutonomyOffer).recipientKey === "string" && typeof (value as AutonomyOffer).evidence === "string";
+
+function grantedOn(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+/**
+ * #266: the people your duo answers by itself — each one granted by you from
+ * an offer it earned, with the record it earned it on and one way to take it
+ * back. Revoking is immediate and also stops a reply to them still inside its
+ * undo window (the daemon does both in one call); after it, replies to them
+ * wait on you again, and your duo won't ask again for a while.
+ */
+function AnswersByItself({ api }: { api: DuoApiConfig }) {
+  const grants = useAutonomyGrants(api);
+  const revoke = useRevokeAutonomyGrant(api);
+  const { reachable } = useSyncStatus();
+  const rows = Array.isArray(grants.data) ? grants.data.filter(isGrant) : [];
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <section className="shape-container flex flex-col gap-2 p-4" data-testid="may-autonomy">
+      <h2 className="type-heading">Answers by itself</h2>
+      <p className="type-provenance text-[var(--muted)]">
+        Your duo replies to these people on its own, holding each reply for your undo window first. Anything it isn't sure of still comes to
+        you.
+      </p>
+      {rows.map((grant) => (
+        <div className="shape-entry flex flex-col gap-1 px-4 py-3" data-testid="may-autonomy-row" key={grant.recipientKey}>
+          <div className="flex items-baseline justify-between gap-4">
+            <span className="min-w-0 truncate type-body">{grant.recipientName ?? grant.recipientKey}</span>
+            <button
+              className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body disabled:opacity-40"
+              data-testid="may-autonomy-revoke"
+              disabled={!reachable || revoke.isPending}
+              onClick={() => revoke.mutate(grant.recipientKey)}
+              type="button"
+            >
+              Take back
+            </button>
+          </div>
+          <p className="type-provenance text-[var(--muted)]">
+            You allowed this {grantedOn(grant.grantedAt)} after sending {grant.evidence.sentUnedited} of its last {grant.evidence.considered}{" "}
+            replies unedited.
+          </p>
+        </div>
+      ))}
+      <MutationError error={revoke.error} />
+    </section>
+  );
+}
+
 const isOffer = (value: unknown): value is PromotionOffer =>
   typeof value === "object" && value !== null && typeof (value as PromotionOffer).topicId === "string" && typeof (value as PromotionOffer).cleanStreak === "number";
 
@@ -155,6 +219,7 @@ const isOffer = (value: unknown): value is PromotionOffer =>
 export function MayDo({ api }: { api: DuoApiConfig }) {
   const grid = useTrustGrid(api);
   const promotions = useTrustPromotions(api);
+  const autonomy = useAutonomyOffers(api);
   if (grid.isLoading) {
     return <RouteLoading variant="rows" />;
   }
@@ -163,15 +228,20 @@ export function MayDo({ api }: { api: DuoApiConfig }) {
   }
   const rows = Array.isArray(grid.data) ? grid.data : [];
   const offers = Array.isArray(promotions.data) ? promotions.data.filter(isOffer) : [];
+  const autonomyOffers = Array.isArray(autonomy.data) ? autonomy.data.filter(isAutonomyOffer) : [];
   return (
     <div className="flex max-w-2xl flex-col gap-4 p-6" data-testid="may-tab">
-      {offers.length > 0 && (
+      {(offers.length > 0 || autonomyOffers.length > 0) && (
         <div className="flex flex-col gap-3" data-testid="may-offers">
           {offers.map((offer) => (
             <OfferCard api={api} key={`${offer.topicId}/${offer.tier}`} offer={offer} />
           ))}
+          {autonomyOffers.map((offer) => (
+            <AutonomyOfferCard api={api} key={offer.recipientKey} offer={offer} />
+          ))}
         </div>
       )}
+      <AnswersByItself api={api} />
       {rows.length === 0 ? (
         <p className="type-body text-[var(--muted)]" data-testid="may-empty">
           Nothing earned yet. As your duo answers and you correct it, topics it handles well will show up here.
