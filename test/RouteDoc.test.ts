@@ -97,6 +97,8 @@ const SERVED: [method: string, path: string][] = [
   ["POST", "/mirror/pinned-answers"],
   ["POST", "/mirror/pinned-answers/:id/edit"],
   ["DELETE", "/mirror/pinned-answers/:id"],
+  // digital-duo#276 (duo#276): landed on origin/main's src/serve/server.ts.
+  ["GET", "/mirror/voice-trend"],
   // digital-duo#292 (duo#274): landed on origin/main's src/serve/server.ts.
   ["GET", "/workspace/rooms/:roomId/off-the-record"],
   ["POST", "/workspace/rooms/:roomId/off-the-record"],
@@ -127,6 +129,9 @@ const SERVED: [method: string, path: string][] = [
   ["GET", "/escalations/history"],
   ["GET", "/escalations/rate"],
   ["GET", "/audit"],
+  // digital-duo#267 (duo#267): landed on origin/main's src/serve/server.ts.
+  ["GET", "/mirror/public-answers"],
+  ["POST", "/mirror/public-answers/:id/correct"],
   ["GET", "/ws"],
 ];
 
