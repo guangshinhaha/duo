@@ -68,6 +68,7 @@ import type {
   TopicOption,
   PairedDevice,
   PasteImportSummary,
+  PinnedAnswer,
   Rule,
   RuleReviewListing,
   RuleWithEvidence,
@@ -125,6 +126,8 @@ export const queryKeys = {
   // the listing by prefix and so refreshes any open evidence with it.
   mirrorRule: (id: string) => ["mirror", "rules", id] as const,
   mirrorRefusals: ["mirror", "refusals"] as const,
+  // duo#275: the owner's pinned exact-wording answers.
+  mirrorPinnedAnswers: ["mirror", "pinned-answers"] as const,
   // #270: the away period and the topics it can add. (#269's ceiling has no
   // query key: it is policy-set, read nowhere by this client — see
   // profile/Ceiling.tsx.)
@@ -283,6 +286,68 @@ export function useMirrorRules(api: DuoApiConfig) {
 /** `GET /mirror/refusals` — what the owner's duo must never speak for them on, and why (#53). */
 export function useMirrorRefusals(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.mirrorRefusals, queryFn: () => apiRequest<RefusalsListing>(api, "/mirror/refusals") });
+}
+
+/** `GET /mirror/pinned-answers` (digital-duo duo#275) — every pinned answer, newest first, as the Rules tab lists them. */
+export function useMirrorPinnedAnswers(api: DuoApiConfig) {
+  return useQuery({
+    queryKey: queryKeys.mirrorPinnedAnswers,
+    queryFn: () => apiRequest<{ pinnedAnswers: PinnedAnswer[] }>(api, "/mirror/pinned-answers"),
+  });
+}
+
+/**
+ * duo#275: pins the owner's own message as the exact, canonical answer to a
+ * question/topic — `POST /mirror/pinned-answers`. `sourceLabel` is the
+ * message action's own context (e.g. "pinned from #general"), purely
+ * descriptive. Invalidates the listing (same shape as `useRuleAction`),
+ * rather than splicing the cache by hand, so the Rules tab and the message
+ * action that just created it always read the daemon's own listing back.
+ */
+export function useCreatePinnedAnswer(api: DuoApiConfig | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ pattern, answerText, sourceLabel }: { pattern: string; answerText: string; sourceLabel?: string | null }) =>
+      api
+        ? apiRequest<PinnedAnswer>(api, "/mirror/pinned-answers", { method: "POST", body: JSON.stringify({ pattern, answerText, sourceLabel }) })
+        : Promise.reject(new Error("No duo is paired to pin an answer with.")),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.mirrorPinnedAnswers });
+    },
+  });
+}
+
+/** `POST /mirror/pinned-answers/:id/edit` (duo#275) — edits the pattern and/or wording of an existing pin in place. */
+export function useEditPinnedAnswer(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, pattern, answerText }: { id: string; pattern?: string; answerText?: string }) =>
+      apiRequest<PinnedAnswer>(api, `/mirror/pinned-answers/${encodeURIComponent(id)}/edit`, {
+        method: "POST",
+        body: JSON.stringify({ pattern, answerText }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.mirrorPinnedAnswers });
+    },
+  });
+}
+
+/**
+ * `DELETE /mirror/pinned-answers/:id` (duo#275) — unpins an answer; the
+ * daemon-side route is idempotent, so removing one already gone is
+ * harmless. Invalidates rather than filtering the cache directly so the
+ * card's own "Unpinned." state (`PinnedAnswerCard`) has a listing to fold
+ * away from, the same `useLeaving` motion every other rule disposition
+ * here already uses.
+ */
+export function useDeletePinnedAnswer(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => apiRequest<{ deleted: true }>(api, `/mirror/pinned-answers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.mirrorPinnedAnswers });
+    },
+  });
 }
 
 /**

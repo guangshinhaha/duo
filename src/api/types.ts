@@ -15,7 +15,12 @@ export interface DraftSource {
   // "attachment" (digital-duo #190/#183): a file shared in the conversation
   // the question rode with; `id` is the workspace's own file reference and
   // `label` the daemon's filename/type/preview line — rendered as told.
-  kind: "rule" | "evidence" | "attachment";
+  // "pinned" (digital-duo duo#275): the owner's own exact wording, pinned to
+  // a question/topic pattern and quoted back verbatim — `id` is a
+  // `trust/pinned-answers.ts` row, removed from the Rules tab's Pinned
+  // answers section, never inline per-draft (`SourceRemoveButton` renders
+  // nothing for it, same as it already does for "attachment").
+  kind: "rule" | "evidence" | "attachment" | "pinned";
   id: string;
   label: string;
 }
@@ -579,6 +584,23 @@ export interface Refusal {
 export interface RefusalsListing {
   decided: boolean;
   refusals: Refusal[];
+}
+
+/**
+ * `GET/POST/DELETE /mirror/pinned-answers` (digital-duo duo#275): the
+ * owner's own exact wording, pinned to a question/topic `pattern` — quoted
+ * back verbatim whenever a question matches, outranking every standing
+ * order and every retrieved piece of evidence. `sourceLabel` is a short,
+ * purely descriptive note of where this came from (e.g. the chat the owner
+ * pinned it from) — null for one written with no particular source.
+ */
+export interface PinnedAnswer {
+  id: string;
+  pattern: string;
+  answerText: string;
+  createdAt: string;
+  updatedAt: string;
+  sourceLabel: string | null;
 }
 
 /**

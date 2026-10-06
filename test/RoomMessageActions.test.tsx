@@ -305,3 +305,102 @@ describe("#252 — touch: a long-press sheet, not a permanent row or a tap", () 
     }
   });
 });
+
+describe("duo#275 — \"Duo: always answer this way\" (the message action half of pinning exact wording)", () => {
+  it("shows the action only on your own message, and only when the shell handed down onPinAnswer", () => {
+    const own = render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$20", senderId: OWNER, body: "ten days a year" })} {...baseProps()} onPinAnswer={vi.fn()} />,
+    );
+    expect(screen.getByTestId("pin-answer-action")).toBeInTheDocument();
+    own.unmount();
+
+    render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$21", senderId: OTHER, body: "ten days a year" })} {...baseProps()} onPinAnswer={vi.fn()} />,
+    );
+    expect(screen.queryByTestId("pin-answer-action")).toBeNull();
+  });
+
+  it("is absent without onPinAnswer, even on your own message", () => {
+    render(<RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$22", senderId: OWNER, body: "ten days a year" })} {...baseProps()} />);
+    expect(screen.queryByTestId("pin-answer-action")).toBeNull();
+  });
+
+  it("is absent on a redacted message, a share, or a pending/failed echo of your own", () => {
+    render(
+      <RoomEntry
+        connection={fakeConnection()}
+        message={messageFor({ eventId: "$23", senderId: OWNER, body: "gone", redacted: true })}
+        {...baseProps()}
+        onPinAnswer={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("pin-answer-action")).toBeNull();
+    cleanup();
+
+    render(
+      <RoomEntry
+        connection={fakeConnection()}
+        message={messageFor({ eventId: "$24", senderId: OWNER, body: "", pending: true })}
+        {...baseProps()}
+        onPinAnswer={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("pin-answer-action")).toBeNull();
+  });
+
+  it("opens the dialog showing the exact wording, with the pattern blank when the message wasn't a reply", async () => {
+    render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$25", senderId: OWNER, body: "ten days a year" })} {...baseProps()} onPinAnswer={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByTestId("pin-answer-action"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("pin-answer-text").textContent).toBe("ten days a year");
+    expect(within(dialog).getByTestId("pin-answer-pattern-input")).toHaveValue("");
+  });
+
+  it("prefills the pattern from the question this message replied to", async () => {
+    const conversation: readonly RoomMessage[] = [messageFor({ eventId: "$q", senderId: OTHER, body: "how much vacation leave do I get?" })];
+    render(
+      <RoomEntry
+        connection={fakeConnection()}
+        message={messageFor({ eventId: "$26", senderId: OWNER, body: "ten days a year", replyToEventId: "$q" })}
+        {...baseProps()}
+        conversation={conversation}
+        onPinAnswer={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("pin-answer-action"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("pin-answer-pattern-input")).toHaveValue("how much vacation leave do I get?");
+  });
+
+  it("pins on submit, calling onPinAnswer with the typed pattern and the message's exact words, then confirms", async () => {
+    const onPinAnswer = vi.fn(async () => undefined);
+    render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$27", senderId: OWNER, body: "ten days a year" })} {...baseProps()} onPinAnswer={onPinAnswer} />,
+    );
+    fireEvent.click(screen.getByTestId("pin-answer-action"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByTestId("pin-answer-pattern-input"), { target: { value: "vacation leave" } });
+    fireEvent.click(within(dialog).getByTestId("pin-answer-submit"));
+
+    await screen.findByTestId("pin-answer-done");
+    expect(onPinAnswer).toHaveBeenCalledWith("vacation leave", "ten days a year");
+  });
+
+  it("shows an error, and stays open, when the daemon refuses the pin", async () => {
+    const onPinAnswer = vi.fn(async () => {
+      throw new Error("nope");
+    });
+    render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$28", senderId: OWNER, body: "ten days a year" })} {...baseProps()} onPinAnswer={onPinAnswer} />,
+    );
+    fireEvent.click(screen.getByTestId("pin-answer-action"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByTestId("pin-answer-pattern-input"), { target: { value: "vacation leave" } });
+    fireEvent.click(within(dialog).getByTestId("pin-answer-submit"));
+
+    await screen.findByTestId("pin-answer-error");
+    expect(screen.queryByTestId("pin-answer-done")).toBeNull();
+  });
+});

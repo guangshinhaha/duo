@@ -260,6 +260,7 @@ describe("Rules — your standing orders and where they came from", () => {
     stub({
       "/mirror/rules": { awaitingApproval: [rule("r1", "Prod exceptions: say no.")], weakSignals: [rule("r2", "weak")], inconsistent: [], approved: [rule("r3", "a"), rule("r4", "b")], rejected: [] },
       "/mirror/refusals": { decided: true, refusals: [{ heading: "Comp", reason: "Never speak for me on comp." }] },
+      "/mirror/pinned-answers": { pinnedAnswers: [] },
       "/review": [{ id: "c1", kind: "style", draftId: "d", question: "leave?", draftText: "Friday", sentText: "Friday, back Monday", status: "pending", createdAt: "2026-01-01T00:00:00.000Z", reviewedAt: null }],
     });
     const view = mount(<Rules api={api} />);
