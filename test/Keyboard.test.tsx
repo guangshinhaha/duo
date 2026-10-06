@@ -84,8 +84,8 @@ describe("#36 AC1 — a draft is decidable from the keyboard", () => {
 
     // Reachable without a pointer: real buttons, so Tab walks straight into them.
     const actions = [...tray.querySelectorAll("button")].map((button) => button.textContent);
-    // #258's shape chips sit under the draft, ahead of the decision.
-    expect(actions).toEqual(["Why?", "Shorter", "Warmer", "More formal", "More direct", "Send⏎", "EditE", "DismissX"]);
+    // #258's shape chips sit under the draft, ahead of the decision; #261's ▸ beside Send opens Send later.
+    expect(actions).toEqual(["Why?", "Shorter", "Warmer", "More formal", "More direct", "Send⏎", "▸", "EditE", "DismissX"]);
     // The key hints are a courtesy for sighted keyboard users; the accessible names stay plain.
     expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();

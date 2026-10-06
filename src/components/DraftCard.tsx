@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { DraftRecord } from "../api/types.js";
 import type { DuoApiConfig } from "../api/client.js";
 import { DuoMessage } from "./DuoMessage.js";
@@ -7,6 +8,7 @@ import { DeliveryStateLine } from "./DeliveryStateLine.js";
 import { EditDiff } from "./EditDiff.js";
 import { MutationError } from "./MutationError.js";
 import { ProvenanceLine } from "./ProvenanceLine.js";
+import { SendLaterMenu, SendWindow, scheduledWords } from "./SendControls.js";
 import { SourceList } from "./SourceList.js";
 import { StructuredText } from "./StructuredText.js";
 import { Timestamp } from "./Timestamp.js";
@@ -82,8 +84,15 @@ export function DraftCard({
     undoIgnore,
     copyState,
     copyDraft,
+    send,
+    sendingUntil,
+    undoSend,
+    scheduleSend,
+    sendLater,
   } = useDraftDecision(api, draft);
   const result = toDraftPipelineResult(draft);
+  // #261: Send later, for a reply — a self-asked draft's Keep reaches nobody, so there is nothing to time.
+  const [laterOpen, setLaterOpen] = useState(false);
 
   if (draft.escalated) {
     return (
@@ -182,7 +191,14 @@ export function DraftCard({
             deliver, so the escalated branch has no line to show. */}
         <DeliveryStateLine delivery={draft.delivery} />
         <SourceList sources={draft.sources} />
-        {ignoring ? (
+        {sendingUntil !== null ? (
+          // #260: the held Send — nothing posted until the countdown ends.
+          <SendWindow onUndo={undoSend} until={sendingUntil} />
+        ) : scheduleSend.isSuccess ? (
+          <p className="type-provenance text-[var(--muted)]" data-testid="scheduled-confirmation">
+            {scheduledWords(scheduleSend.data.sendAt)} Your duo sends it then, even if this app is closed.
+          </p>
+        ) : ignoring ? (
           // #24: the undo window. The discard has NOT been sent — the card
           // says so, because the difference between "held" and "sent" is
           // the whole point of the window. For a self-asked draft (#30)
@@ -198,17 +214,13 @@ export function DraftCard({
             </button>
           </div>
         ) : (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {editing ? (
             <>
               <button
                 className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
                 disabled={!editedText.trim() || recordOutcome.isPending || !reachable}
-                onClick={() =>
-                  editChanged
-                    ? recordOutcome.mutate({ draftId: draft.id, outcome: "edited", sentText: editedText.trim() })
-                    : recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })
-                }
+                onClick={() => (editChanged ? send({ draftId: draft.id, outcome: "edited", sentText: editedText.trim() }) : send({ draftId: draft.id, outcome: "sent" }))}
               >
                 {/* The label tells the truth the payload encodes: a change
                     sends an edit, anything else is just a Send — and for a
@@ -216,6 +228,15 @@ export function DraftCard({
                     stands as yours, nobody receives it. */}
                 {editChanged ? (selfAsked ? "Keep edited" : "Send edited") : selfAsked ? "Keep" : "Send"}
               </button>
+              {!selfAsked && (
+                <SendLaterMenu
+                  api={api}
+                  disabled={!editedText.trim() || recordOutcome.isPending || scheduleSend.isPending || !reachable}
+                  onOpenChange={setLaterOpen}
+                  onPick={sendLater}
+                  open={laterOpen}
+                />
+              )}
               <button
                 className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
                 onClick={() => {
@@ -234,10 +255,19 @@ export function DraftCard({
               <button
                 className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)] disabled:opacity-40"
                 disabled={recordOutcome.isPending || !reachable}
-                onClick={() => recordOutcome.mutate({ draftId: draft.id, outcome: "sent" })}
+                onClick={() => send({ draftId: draft.id, outcome: "sent" })}
               >
                 {selfAsked ? "Keep" : "Send"}
               </button>
+              {!selfAsked && (
+                <SendLaterMenu
+                  api={api}
+                  disabled={recordOutcome.isPending || scheduleSend.isPending || !reachable}
+                  onOpenChange={setLaterOpen}
+                  onPick={sendLater}
+                  open={laterOpen}
+                />
+              )}
               <button
                 ref={editButtonRef}
                 className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3"
@@ -264,6 +294,7 @@ export function DraftCard({
         </div>
         )}
         <MutationError error={recordOutcome.error} />
+        <MutationError error={scheduleSend.error} />
       </div>
     </div>
   );

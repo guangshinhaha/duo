@@ -59,6 +59,7 @@ describe("the index", () => {
     expect(links.map((link) => within(link).getAllByText(/./)[0]!.textContent)).toEqual([
       "Notifications",
       "Appearance",
+      "Sending",
       "Profile",
       "Devices",
       "Ask links",

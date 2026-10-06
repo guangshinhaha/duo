@@ -545,3 +545,9 @@ describe("#21 — the card shows delivery when a sent draft renders", () => {
     expect(screen.queryByTestId("delivery-state")).toBeNull();
   });
 });
+
+// #260: these tests predate the undo-send window and decide a draft the moment Send is tapped — the
+// window itself (on by default) is covered in UndoSend.test.tsx. Registered last, after any localStorage.clear().
+beforeEach(() => {
+  localStorage.setItem("duo.undo-send", "0");
+});

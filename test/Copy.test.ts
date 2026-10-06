@@ -159,7 +159,12 @@ describe("the app speaks in an owner's words (#149)", () => {
       }
     }
     // The exact stamps that remain are deliberate: the Activity detail's record line, the offline bar's "last seen at",
-    // and the retired old screens' (not scanned). Anything new here must be argued for.
-    expect(stamps.map((entry) => entry.split(":")[0]).sort()).toEqual(["src/components/OfflineBar.tsx", "src/profile/Activity.tsx"]);
+    // and the retired old screens' (not scanned), and #261's scheduled sends — a time something WILL go out is a
+    // promise of when, which "in 9 hours" would blur. Anything new here must be argued for.
+    expect([...new Set(stamps.map((entry) => entry.split(":")[0]))].sort()).toEqual([
+      "src/components/OfflineBar.tsx",
+      "src/components/SendControls.tsx",
+      "src/profile/Activity.tsx",
+    ]);
   });
 });

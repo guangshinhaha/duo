@@ -2,6 +2,7 @@ import type { DuoApiConfig } from "../api/client.js";
 import { useKnowledge } from "../api/queries.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { ScheduledSends } from "../components/ScheduledSends.js";
 import { corpusSentence, lastImportSentence } from "../profile/knowledgeWords.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 import { useWaitingItems } from "./waiting.js";
@@ -48,6 +49,7 @@ export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; con
           ) : null}
           <p className="type-provenance text-[var(--muted)]">⌘K searches what your duo knows.</p>
         </div>
+        <ScheduledSends api={api} />
       </div>
     );
   }
@@ -66,6 +68,7 @@ export function WaitingHome({ api, connection = null }: { api: DuoApiConfig; con
       >
         Start with the oldest
       </a>
+      <ScheduledSends api={api} />
     </div>
   );
 }

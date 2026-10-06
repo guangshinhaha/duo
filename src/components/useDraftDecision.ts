@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
-import { requestNeverAnswerRule, useAnswerEscalation, useRecordOutcome } from "../api/queries.js";
-import type { DismissReason, DraftRecord } from "../api/types.js";
+import { requestNeverAnswerRule, useAnswerEscalation, useRecordOutcome, useScheduleSend } from "../api/queries.js";
+import type { DismissReason, DraftRecord, SendLater } from "../api/types.js";
 import { useSyncStatus } from "../sync.js";
+import { readUndoSendSeconds } from "../undoSendPrefs.js";
 
 /**
  * #24: how long a clicked Ignore (now Dismiss) is held client-side before it
@@ -134,6 +135,45 @@ export function useDraftDecision(api: DuoApiConfig, draft: DraftRecord) {
     requestNeverAnswerRule(api, draft.id).finally(() => setNeverAnswerOffer("noted"));
   };
   const skipNeverAnswerOffer = () => setNeverAnswerOffer("hidden");
+  // #260: the undo window on a tapped Send — the same law as Dismiss's
+  // window above, for the decision that actually puts words in front of a
+  // colleague. Nothing is posted until the countdown ends, so Undo inside it
+  // means nothing reached the room and the draft is simply still waiting on
+  // you. Only a reply is held: a self-asked draft's Keep reaches nobody, so
+  // there is nothing to take back. The timer is a ref and survives unmount,
+  // as ignoreTimer does — walking away mid-countdown is not an undo.
+  const [sendingUntil, setSendingUntil] = useState<number | null>(null);
+  const sendTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const send = (vars: Parameters<typeof recordOutcome.mutate>[0]) => {
+    const seconds = selfAsked ? 0 : readUndoSendSeconds();
+    if (seconds === 0) {
+      recordOutcome.mutate(vars);
+      return;
+    }
+    setSendingUntil(Date.now() + seconds * 1000);
+    sendTimer.current = setTimeout(() => {
+      sendTimer.current = null;
+      setSendingUntil(null);
+      recordOutcome.mutate(vars);
+    }, seconds * 1000);
+  };
+  const undoSend = () => {
+    if (sendTimer.current !== null) {
+      clearTimeout(sendTimer.current);
+      sendTimer.current = null;
+    }
+    setSendingUntil(null);
+  };
+  // #261: send later — the daemon holds it, so it goes out even with this
+  // app closed. A changed edit is held as the edit, as Send edited would post it.
+  const scheduleSend = useScheduleSend(api);
+  const sendLater = (when: SendLater) => {
+    if (editing && editChanged) {
+      scheduleSend.mutate({ draftId: draft.id, outcome: "edited", sentText: editedText.trim(), when });
+    } else {
+      scheduleSend.mutate({ draftId: draft.id, outcome: "sent", when });
+    }
+  };
   // #26: copy is the one route to reuse a draft's text, and it is entirely
   // local — no daemon round-trip, so it stays available no matter the
   // daemon's health. The control confirms which of the two outcomes
@@ -169,6 +209,11 @@ export function useDraftDecision(api: DuoApiConfig, draft: DraftRecord) {
     neverAnswerOffer,
     confirmNeverAnswerRule,
     skipNeverAnswerOffer,
+    send,
+    sendingUntil,
+    undoSend,
+    scheduleSend,
+    sendLater,
     copyState,
     copyDraft,
   };

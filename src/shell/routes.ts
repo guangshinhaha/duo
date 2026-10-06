@@ -45,6 +45,7 @@ export type ProfileTab = (typeof PROFILE_TABS)[number];
 export const SETTINGS_SECTIONS = [
   { id: "notifications", label: "Notifications", about: "Do not disturb, quiet hours, and what was held back.", needsDuo: false },
   { id: "appearance", label: "Appearance", about: "Light or dark, and the keyboard shortcuts.", needsDuo: false },
+  { id: "sending", label: "Sending", about: "Time to undo a Send, and the working hours Send later uses.", needsDuo: false },
   { id: "profile", label: "Profile", about: "Your own name and picture in this workspace.", needsDuo: false },
   { id: "devices", label: "Devices", about: "The devices that can reach your duo. Pair another, or cut one off.", needsDuo: true },
   { id: "links", label: "Ask links", about: "Links that let a colleague ask your duo something.", needsDuo: true },

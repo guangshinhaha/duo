@@ -67,6 +67,9 @@ import type {
   SentEscalationDigest,
   SettableDraftOutcome,
   ShapeInstruction,
+  ScheduledSend,
+  SendLater,
+  WorkingHours,
 } from "./types.js";
 
 /**
@@ -93,6 +96,9 @@ export const queryKeys = {
   // reaches the feed without a new call site.
   draftsFeed: ["drafts", { limit: DRAFTS_PAGE_SIZE }] as const,
   draft: (id: string) => ["drafts", id] as const,
+  // #261: the sends the daemon is holding. Under the ["drafts"] root so every outcome mutation refreshes it too.
+  scheduledSends: ["drafts", { scheduled: true }] as const,
+  workingHours: ["settings", "working-hours"] as const,
   review: ["review"] as const,
   mirrorPortrait: ["mirror", "portrait"] as const,
   mirrorRules: ["mirror", "rules"] as const,
@@ -537,6 +543,63 @@ export function useUndoShape(api: DuoApiConfig) {
     onSuccess: (updated) => {
       replaceCachedDraft(queryClient, updated);
       queryClient.invalidateQueries({ queryKey: ["drafts"] });
+    },
+  });
+}
+
+/** #261: every send the daemon is holding for later, soonest first. */
+export function useScheduledSends(api: DuoApiConfig | null) {
+  return useQuery({
+    queryKey: queryKeys.scheduledSends,
+    queryFn: () => apiRequest<ScheduledSend[]>(api!, "/scheduled-sends"),
+    enabled: api !== null,
+    // A held send leaves this list on its own when it fires — re-read now and then so it does here too.
+    refetchInterval: 60_000,
+  });
+}
+
+/**
+ * #261: hands an approved draft to the daemon to send later. The daemon holds
+ * it — not this device — so it goes out even if this app is closed by then.
+ */
+export function useScheduleSend(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ draftId, outcome, sentText, when }: { draftId: string; outcome: "sent" | "edited"; sentText?: string; when: SendLater }) =>
+      apiRequest<ScheduledSend>(api, `/drafts/${draftId}/schedule`, { method: "POST", body: JSON.stringify({ outcome, sentText, ...when }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["drafts"] });
+    },
+  });
+}
+
+/** #261: takes a held send back before it fires; the draft returns to Waiting on you. */
+export function useCancelScheduledSend(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (draftId: string) => apiRequest<void>(api, `/drafts/${draftId}/schedule`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["drafts"] });
+    },
+  });
+}
+
+/** #261: the working hours "start of their working hours" resolves against, with when they next start. */
+export function useWorkingHours(api: DuoApiConfig | null) {
+  return useQuery({
+    queryKey: queryKeys.workingHours,
+    queryFn: () => apiRequest<WorkingHours>(api!, "/settings/working-hours"),
+    enabled: api !== null,
+  });
+}
+
+export function useSaveWorkingHours(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (hours: Omit<WorkingHours, "nextStart">) =>
+      apiRequest<WorkingHours>(api, "/settings/working-hours", { method: "PUT", body: JSON.stringify(hours) }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(queryKeys.workingHours, saved);
     },
   });
 }

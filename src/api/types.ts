@@ -174,6 +174,36 @@ export interface DraftShape {
 }
 
 /**
+ * #261: one send the daemon is holding for later (digital-duo
+ * `src/drafting/scheduled-sends.ts`, `GET /scheduled-sends`). The draft
+ * rides along so a Scheduled list can show what goes out without a second
+ * read; the draft itself stays undecided (`outcome: null`) until it fires.
+ */
+export interface ScheduledSend {
+  draftId: string;
+  outcome: "sent" | "edited";
+  sentText: string | null;
+  sendAt: string;
+  scheduledAt: string;
+  state: "scheduled" | "sent" | "cancelled" | "superseded" | "failed";
+  settledAt: string | null;
+  failureReason: string | null;
+  draft: DraftRecord;
+}
+
+/** #261: when to send it — an exact time, or the start of working hours, which the daemon resolves from its own setting. */
+export type SendLater = { sendAt: string } | { at: "working-hours" };
+
+/** #261: the duo's working-hours setting (`GET/PUT /settings/working-hours`) and when it next starts. */
+export interface WorkingHours {
+  start: string;
+  end: string;
+  timezone: string;
+  days: number[];
+  nextStart?: string;
+}
+
+/**
  * What `POST /drafts` actually returns — a discriminated union on `kind`,
  * mirroring `DraftPipelineResult` (`src/drafting/pipeline.ts`). `refused`
  * is what lets the UI tell "won't" from "can't" without parsing `reason`.

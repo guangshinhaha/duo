@@ -26,6 +26,7 @@ import { MutationError } from "../components/MutationError.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import { readUrlPreviewPref, writeUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { readFactCheckPref, writeFactCheckPref } from "../factCheckPrefs.js";
+import { SendingSettings } from "../components/SendingSettings.js";
 import {
   clearMissed,
   isDndActive,
@@ -378,6 +379,7 @@ export function Settings({
 
       </>
     ),
+    sending: <SendingSettings api={api} />,
     profile: connection ? (
       <WorkspaceProfile connection={connection} />
     ) : (
