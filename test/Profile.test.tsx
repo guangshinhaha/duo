@@ -115,7 +115,11 @@ describe("Portrait — who it thinks you are, in words", () => {
   });
 
   it("shows the sentences, where they came from, the numbers one tap away, and the rules waiting", async () => {
-    stub({ "/mirror/portrait": portrait(), "/mirror/rules": { awaitingApproval: [rule("r1", "x")], weakSignals: [], inconsistent: [], approved: [], rejected: [] } });
+    stub({
+      "/mirror/portrait": portrait(),
+      "/mirror/voice-trend": { bucketing: "week", buckets: [], tooThin: true, minimumSendsToCharacterize: 20, totalApprovedSends: 0 },
+      "/mirror/rules": { awaitingApproval: [rule("r1", "x")], weakSignals: [], inconsistent: [], approved: [], rejected: [] },
+    });
     mount(<Portrait api={api} />);
     // The figures are their own spans (so they can count up), but the sentence reads exactly as the daemon's counts say it.
     expect(await screen.findByTestId("portrait-sentences")).toHaveTextContent("You were asked about scheduling 73 times.");
@@ -127,7 +131,10 @@ describe("Portrait — who it thinks you are, in words", () => {
   });
 
   it("a thin history says so in words instead of dressing it up", async () => {
-    stub({ "/mirror/portrait": portrait({ tooThin: true, totalQuestions: 4 }) });
+    stub({
+      "/mirror/portrait": portrait({ tooThin: true, totalQuestions: 4 }),
+      "/mirror/voice-trend": { bucketing: "week", buckets: [], tooThin: true, minimumSendsToCharacterize: 20, totalApprovedSends: 0 },
+    });
     mount(<Portrait api={api} />);
     expect(await screen.findByTestId("portrait-thin")).toHaveTextContent("starts to get a picture of you at 10 questions, and it has 4");
     expect(screen.queryByTestId("portrait-sentences")).toBeNull();

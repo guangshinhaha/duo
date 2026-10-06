@@ -96,6 +96,14 @@ function stubMirrorResponses(
       if (url.includes("/mirror/pinned-answers")) {
         return new Response(JSON.stringify({ pinnedAnswers }), { status: 200 });
       }
+      // duo#276: the Portrait's voice-trend read, stubbed as "not enough
+      // data yet" here — its own states are covered by test/VoiceTrend.test.tsx.
+      if (url.includes("/mirror/voice-trend")) {
+        return new Response(
+          JSON.stringify({ bucketing: "week", buckets: [], tooThin: true, minimumSendsToCharacterize: 20, totalApprovedSends: 0 }),
+          { status: 200 },
+        );
+      }
       if (url.includes("/review")) {
         return new Response("[]", { status: 200 });
       }

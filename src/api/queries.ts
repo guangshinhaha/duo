@@ -58,6 +58,7 @@ import type {
   EmbedJobStatus,
   GridRow,
   InterruptionPortrait,
+  VoiceTrend,
   PendingT4Request,
   PendingT4RequestForJudgement,
   RecipientRef,
@@ -122,6 +123,9 @@ export const queryKeys = {
   autonomyGrants: ["trust", "autonomy", "grants"] as const,
   review: ["review"] as const,
   mirrorPortrait: ["mirror", "portrait"] as const,
+  // duo#276: bucketing is part of the key — switching week/month is a
+  // different query, not a refetch of the same one with different params.
+  mirrorVoiceTrend: (bucket: "week" | "month") => ["mirror", "voice-trend", bucket] as const,
   mirrorRules: ["mirror", "rules"] as const,
   // Under the ["mirror", "rules"] root on purpose: a disposition invalidates
   // the listing by prefix and so refreshes any open evidence with it.
@@ -281,6 +285,14 @@ export function useDecideCandidate(api: DuoApiConfig) {
 
 export function useMirrorPortrait(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.mirrorPortrait, queryFn: () => apiRequest<InterruptionPortrait>(api, "/mirror/portrait") });
+}
+
+/** `GET /mirror/voice-trend` (digital-duo duo#276): how closely recent drafts match the owner's own recent approved sends, bucketed over time. */
+export function useMirrorVoiceTrend(api: DuoApiConfig, bucket: "week" | "month" = "week") {
+  return useQuery({
+    queryKey: queryKeys.mirrorVoiceTrend(bucket),
+    queryFn: () => apiRequest<VoiceTrend>(api, `/mirror/voice-trend?bucket=${bucket}`),
+  });
 }
 
 export function useMirrorRules(api: DuoApiConfig) {

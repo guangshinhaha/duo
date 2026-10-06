@@ -425,6 +425,34 @@ export interface InterruptionPortrait {
   minimumQuestionsToCharacterize: number;
 }
 
+/** One of a voice-trend bucket's worst-scoring drafts (duo#276) — enough to link to the draft itself and show what the duo actually wrote. */
+export interface VoiceTrendExample {
+  draftId: string;
+  score: number;
+  snippet: string;
+}
+
+/** One period of `VoiceTrend` — field names match the daemon's own `VoiceTrendBucket` (`digital-duo src/derivation/voice-trend.ts`) byte for byte. */
+export interface VoiceTrendBucket {
+  periodStart: string;
+  periodEnd: string;
+  sampleSize: number;
+  /** Null when nothing in this bucket could be scored yet (no anchor established before it) — never a fabricated zero. */
+  score: number | null;
+  reanchored: boolean;
+  worstExamples: VoiceTrendExample[];
+}
+
+/** `GET /mirror/voice-trend` (digital-duo duo#276): how closely the duo's own drafts matched the owner's recent approved sends, over time. */
+export interface VoiceTrend {
+  bucketing: "week" | "month";
+  buckets: VoiceTrendBucket[];
+  /** True when there has never been enough approved history to establish even one anchor — show "not enough data yet", not an empty chart. */
+  tooThin: boolean;
+  minimumSendsToCharacterize: number;
+  totalApprovedSends: number;
+}
+
 /** One completed ingest run, as `GET /knowledge` reports it (digital-duo #175's `ImportRun`) — every count is a fact the run already kept. */
 export interface ImportRunSummary {
   runAt: string;
