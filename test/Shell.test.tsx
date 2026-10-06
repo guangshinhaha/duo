@@ -10,6 +10,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.js";
 import { stubDesktop } from "./desktop.js";
+import { inTauriShell, leaveTauriShell } from "./platformFakes.js";
 import type { DraftRecord } from "../src/api/types.js";
 
 /*
@@ -108,9 +109,12 @@ beforeEach(() => {
   plugin.onAction.mockClear();
   plugin.onAction.mockImplementation(async () => ({ unregister: () => {} }));
   window.location.hash = "";
+  // #320: this suite is the Mac app — getPlatform() picks the Tauri adapter.
+  inTauriShell();
 });
 
 afterEach(() => {
+  leaveTauriShell();
   vi.unstubAllGlobals();
   localStorage.clear();
   window.location.hash = "";
