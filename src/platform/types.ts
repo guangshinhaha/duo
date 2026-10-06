@@ -55,9 +55,10 @@ export interface Platform {
 
   /**
    * Subscribes, once per app, to notification clicks that arrive from
-   * outside the page (the macOS notification centre; later a service
-   * worker's `notificationclick`, #308) and routes each to its `hash`.
-   * Null where no such channel exists.
+   * outside the page (the macOS notification centre, or — #308 — a
+   * service worker's `notificationclick`, relayed here by `public/sw.js`
+   * posting `{ type: "duo-notification-click", hash }` to this page) and
+   * routes each to its `hash`. Null where no such channel exists.
    */
   wireNotificationClicks(): Promise<Unwire | null>;
 

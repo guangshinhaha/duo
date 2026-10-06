@@ -12,7 +12,7 @@ import { SyncStatusProvider } from "./sync.js";
 import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
 import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
-import { unsubscribeFromPush, wirePushNavigationMessages } from "./push.js";
+import { unsubscribeFromPush } from "./push.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
 import { shouldPersistQuery, useOrgOverview } from "./api/queries.js";
@@ -495,9 +495,12 @@ function AppShell() {
     announce("A draft is waiting on you.");
   });
 
-  // #25/#69: one subscription for the app's life — a clicked notification
-  // routes to what it was about, a draft or a conversation. Null outside
-  // the shell (nothing to click there), and the unmount unwire keeps a
+  // #25/#69/#308: one subscription for the app's life — a clicked
+  // notification routes to what it was about, a draft or a conversation.
+  // `getPlatform().wireNotificationClicks()` (`src/platform/`) is what this
+  // actually calls: the macOS notification centre on the Tauri side, and
+  // now (#308) `public/sw.js`'s own click messages on the web side — null
+  // wherever neither channel exists, and the unmount unwire keeps a
   // remount from double-firing.
   useEffect(() => {
     let unwire: (() => void) | null = null;
@@ -506,13 +509,6 @@ function AppShell() {
     });
     return () => unwire?.();
   }, []);
-
-  // #308: the web-push twin of the effect above — a click on a notification
-  // the service worker showed while this tab (or every tab) was closed
-  // posts a message here once one is open again, and this is what turns
-  // that message into the same hash navigation a live arrival's own click
-  // already does.
-  useEffect(() => wirePushNavigationMessages() ?? undefined, []);
 
   // #69: the interruption decision's ear — the same live arrivals every
   // surface hears, held for the connection's life. The decision itself is

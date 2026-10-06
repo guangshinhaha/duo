@@ -1,44 +1,30 @@
 import { apiRequest, type DuoApiConfig } from "./api/client.js";
 import { readDndPrefs, type DndPrefs } from "./notificationPrefs.js";
+import { getPlatform } from "./platform/index.js";
 
 /**
  * #308: web push — the delivery path that works while the app is fully
- * closed, which #221's `notifications.ts` (a live tab or the Tauri shell)
- * cannot reach. The daemon side already exists (digital-duo#251): a store
- * of subscriptions, VAPID keys, and `notifyDraftWaiting` sending each one
- * `{ draftId }` the moment a draft is written. This module is the other
- * end of that wire — subscribing, registering with the daemon's actual
- * routes (`src/serve/owner-routes.ts`), and unsubscribing — plus the
- * service worker at `public/sw.js` that receives the push itself.
+ * closed, which #221/#320's `notifications.ts`/`Platform.notify` (a live
+ * tab, or the Tauri shell's own native channel) cannot reach. The daemon
+ * side already exists (digital-duo#251): a store of subscriptions, VAPID
+ * keys, and `notifyDraftWaiting` sending each one `{ draftId }` the moment
+ * a draft is written. This module is the other end of that wire —
+ * subscribing, registering with the daemon's actual routes
+ * (`src/serve/owner-routes.ts`), and unsubscribing — plus the service
+ * worker at `public/sw.js` that receives the push itself and routes a
+ * click back through `getPlatform().wireNotificationClicks()`
+ * (`src/platform/web.ts`).
  *
- * Never meaningful inside the Tauri shell (`isTauriShell`): the Mac app
- * already gets a closed-app tap on the shoulder through the OS's own
- * native channel, which is what the Tauri plugin's notifications already
- * are even while the window is hidden — a second, browser-level push
- * subscription there would be the same arrival delivered twice by two
- * different systems.
+ * Never meaningful outside `getPlatform().kind === "web"`: the Tauri app
+ * (desktop or mobile) already gets a closed-app tap on the shoulder
+ * through the OS's own native channel, which is what the Tauri plugin's
+ * notifications already are even while the window is hidden — a second,
+ * browser-level push subscription there would be the same arrival
+ * delivered twice by two different systems, and there is no page to
+ * subscribe a `PushManager` on inside a native webview regardless.
  */
 
 const SERVICE_WORKER_URL = "/sw.js";
-
-/**
- * Whether this tab is running inside the Tauri shell — the same check
- * `notifications.ts` makes (`isTauriShell`), kept as its own tiny copy
- * here rather than an import from it: several existing tests fully
- * replace `notifications.js` with `vi.mock(..., () => ({ ... }))` (no
- * `importOriginal`), and this module is reached from `App.tsx`'s sign-out
- * path regardless of which surface a test is actually about — importing
- * a live export from a module other files routinely mock out whole would
- * make this module's own tests (and theirs) depend on every such mock
- * happening to list it.
- */
-function isTauriShell(): boolean {
-  try {
-    return "__TAURI_INTERNALS__" in window;
-  } catch {
-    return false;
-  }
-}
 
 export class PushUnsupportedError extends Error {
   constructor() {
@@ -56,7 +42,7 @@ export class PushPermissionDeniedError extends Error {
 
 /** Whether this runtime could ever subscribe — feature detection only, never whether permission has been granted (the caller handles that). */
 export function pushSupported(): boolean {
-  if (isTauriShell()) {
+  if (getPlatform().kind !== "web") {
     return false;
   }
   return (
@@ -226,27 +212,4 @@ export async function unsubscribeFromPush(api: DuoApiConfig | null): Promise<voi
     // Never let a failed unsubscribe interrupt the sign-out or settings
     // toggle that triggered it.
   }
-}
-
-/**
- * Wires the one message channel a service worker has back to an open page:
- * a notification click (`public/sw.js`'s `notificationclick` handler) posts
- * `{ type: "duo-notification-click", hash }` to a focused, already-open
- * window rather than navigating it directly — `client.navigate()` would
- * reload the whole SPA for what is, inside it, only a hash change. Returns
- * the unwire function, or `null` where there is no service worker to ever
- * hear from.
- */
-export function wirePushNavigationMessages(): (() => void) | null {
-  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
-    return null;
-  }
-  const handler = (event: MessageEvent): void => {
-    const data = event.data as { type?: unknown; hash?: unknown } | null;
-    if (data && data.type === "duo-notification-click" && typeof data.hash === "string") {
-      window.location.hash = data.hash;
-    }
-  };
-  navigator.serviceWorker.addEventListener("message", handler);
-  return () => navigator.serviceWorker.removeEventListener("message", handler);
 }

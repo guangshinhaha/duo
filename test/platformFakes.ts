@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import type { Platform, PlatformKind, ShareData } from "../src/platform/index.js";
 import type { TauriHost } from "../src/platform/tauriDesktop.js";
-import type { WebHost, WebNavigator, WebNotificationApi } from "../src/platform/web.js";
+import type { WebHost, WebNavigator, WebNotificationApi, WebServiceWorkerContainer } from "../src/platform/web.js";
 
 /*
  * #320: the fake-host pattern for anything behind src/platform/. Three tools,
@@ -72,11 +72,29 @@ export function fakeNotificationApi(permission: NotificationPermission = "defaul
   return { api: api as unknown as WebNotificationApi & { permission: NotificationPermission }, shown, requestPermission };
 }
 
+/**
+ * #308: a fake `ServiceWorkerContainer` — just enough to let
+ * `createWebPlatform`'s `wireNotificationClicks` subscribe and a test
+ * simulate `public/sw.js` posting a notification click, with no real
+ * service worker registered anywhere.
+ */
+export function fakeServiceWorkerContainer() {
+  const listeners = new Set<(event: { data: unknown }) => void>();
+  const container: WebServiceWorkerContainer = {
+    addEventListener: (_type, listener) => void listeners.add(listener),
+    removeEventListener: (_type, listener) => void listeners.delete(listener),
+  };
+  /** Simulates `public/sw.js` posting a notification click to this page. */
+  const postMessage = (data: unknown): void => listeners.forEach((listener) => listener({ data }));
+  return { container, postMessage, listenerCount: () => listeners.size };
+}
+
 export function fakeWebHost(overrides: Partial<WebHost> = {}) {
   const notifications = fakeNotificationApi();
   const storage = memoryStorage();
   const opened: Array<string | undefined> = [];
   const navigator: WebNavigator = {};
+  const serviceWorker = fakeServiceWorkerContainer();
   const host: WebHost = {
     notificationApi: () => notifications.api,
     attended: () => false,
@@ -84,9 +102,10 @@ export function fakeWebHost(overrides: Partial<WebHost> = {}) {
     storageArea: () => storage,
     navigator: () => navigator,
     matchMedia: undefined,
+    serviceWorker: () => serviceWorker.container,
     ...overrides,
   };
-  return { host, notifications, storage, opened, navigator };
+  return { host, notifications, storage, opened, navigator, serviceWorker };
 }
 
 export function fakeTauriHost(overrides: Partial<TauriHost> = {}) {

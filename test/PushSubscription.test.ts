@@ -1,13 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DuoApiConfig } from "../src/api/client.js";
-import {
-  PushPermissionDeniedError,
-  PushUnsupportedError,
-  pushSupported,
-  subscribeToPush,
-  unsubscribeFromPush,
-  wirePushNavigationMessages,
-} from "../src/push.js";
+import { PushPermissionDeniedError, PushUnsupportedError, pushSupported, subscribeToPush, unsubscribeFromPush } from "../src/push.js";
 
 /*
  * #308: the client half of digital-duo#251's web push. These tests exercise
@@ -239,36 +232,8 @@ describe("unsubscribeFromPush (#308) — the sign-out / settings-off path", () =
   });
 });
 
-describe("wirePushNavigationMessages (#308) — a notification click, routed once the app is open again", () => {
-  it("sets the hash from a service-worker message and unwires cleanly", () => {
-    const addEventListener = vi.fn();
-    const removeEventListener = vi.fn();
-    Object.defineProperty(navigator, "serviceWorker", { value: { addEventListener, removeEventListener }, configurable: true });
-
-    window.location.hash = "";
-    const unwire = wirePushNavigationMessages();
-    expect(unwire).not.toBeNull();
-    const [eventName, handler] = addEventListener.mock.calls[0]!;
-    expect(eventName).toBe("message");
-
-    handler({ data: { type: "duo-notification-click", hash: "#draft/abc" } });
-    expect(window.location.hash).toBe("#draft/abc");
-
-    unwire!();
-    expect(removeEventListener).toHaveBeenCalledWith("message", handler);
-  });
-
-  it("ignores a message that isn't its own", () => {
-    const addEventListener = vi.fn();
-    Object.defineProperty(navigator, "serviceWorker", { value: { addEventListener, removeEventListener: vi.fn() }, configurable: true });
-    window.location.hash = "#chats";
-    wirePushNavigationMessages();
-    const handler = addEventListener.mock.calls[0]![1];
-    handler({ data: { type: "something-else" } });
-    expect(window.location.hash).toBe("#chats");
-  });
-
-  it("returns null where there is no service worker to ever hear from", () => {
-    expect(wirePushNavigationMessages()).toBeNull();
-  });
-});
+// #308's notification-click routing itself — `public/sw.js` posting
+// `{ type: "duo-notification-click", hash }` to an open page — is now
+// `getPlatform().wireNotificationClicks()`'s own job (#320's seam
+// anticipated exactly this): see `test/platform.test.ts`'s "web adapter"
+// cases for that half.
