@@ -49,6 +49,19 @@ export interface FactCheckResult {
   readonly flag: FactCheckFlag | null;
 }
 
+/**
+ * `GET /knowledge/evidence/excluded` (duo#272, digital-duo#288): one past
+ * exchange the owner removed from a draft's "Used" list — reversible from
+ * the Knows tab. `label` is the record's own text, truncated, exactly as a
+ * draft source's own `label` is; `null` once the record itself is gone
+ * (deleted, or never imported), in which case the exclusion still holds.
+ */
+export interface ExcludedEvidence {
+  readonly recordId: string;
+  readonly excludedAt: string;
+  readonly label: string | null;
+}
+
 // Mirrors the daemon's own split (src/drafting/draft-log.ts):
 // SETTABLE_DRAFT_OUTCOMES is what this client may POST to
 // /drafts/:id/outcome; DRAFT_OUTCOMES adds "escalation_answered", which

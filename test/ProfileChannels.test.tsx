@@ -72,6 +72,10 @@ function stubDaemon(initial: ChannelSummary[], opts?: { muteStatus?: number; cha
       if (path === "/knowledge" && method === "GET") {
         return new Response(JSON.stringify(knowledge), { status: 200 });
       }
+      // duo#272 (digital-duo#288): the Knows tab's "Removed from citation" read — empty by default here, out of scope for this file's channel fixtures.
+      if (path === "/knowledge/evidence/excluded" && method === "GET") {
+        return new Response(JSON.stringify({ excluded: [] }), { status: 200 });
+      }
       if (path === "/channels" && method === "GET") {
         if (opts?.channelsPending) {
           return new Promise<Response>(() => undefined);
@@ -152,13 +156,17 @@ describe("#47 AC1 — configured channels list with the daemon's own strings", (
     expect(within(section).queryByRole("link", { name: /connect|authori[sz]e|add|set up/i })).toBeNull();
   });
 
-  it("asks the daemon for the knowledge and the channel list and nothing else on open", async () => {
+  it("asks the daemon for the knowledge, the excluded evidence, and the channel list — and nothing else — on open", async () => {
     const calls = stubDaemon([connected]);
     renderWithClient(<Knows api={api} />);
     await screen.findByTestId("channel");
-    expect(calls).toHaveLength(2);
+    // duo#272 (digital-duo#288): the Knows tab now also reads back what the
+    // owner has removed from citation, a third GET alongside the two this
+    // test already pinned.
+    await waitFor(() => expect(calls).toHaveLength(3));
     expect(calls).toContainEqual({ method: "GET", path: "/knowledge", body: undefined });
     expect(calls).toContainEqual({ method: "GET", path: "/channels", body: undefined });
+    expect(calls).toContainEqual({ method: "GET", path: "/knowledge/evidence/excluded", body: undefined });
   });
 });
 

@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Knows } from "../src/profile/Knows.js";
-import type { DuoKnowledge } from "../src/api/types.js";
+import type { DuoKnowledge, ExcludedEvidence } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
@@ -65,12 +65,18 @@ function knowledgeFor(over?: Partial<DuoKnowledge>): DuoKnowledge {
   };
 }
 
-function stubKnowledge(knowledge: DuoKnowledge) {
+function stubKnowledge(knowledge: DuoKnowledge, excluded: ExcludedEvidence[] = []) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       const path = String(url).replace("http://test", "");
-      return new Response(path === "/channels" ? "[]" : JSON.stringify(knowledge), { status: 200 });
+      if (path === "/channels") {
+        return new Response("[]", { status: 200 });
+      }
+      if (path === "/knowledge/evidence/excluded") {
+        return new Response(JSON.stringify({ excluded }), { status: 200 });
+      }
+      return new Response(JSON.stringify(knowledge), { status: 200 });
     }),
   );
 }
@@ -182,5 +188,87 @@ describe("#45 — the Knows tab says what your duo knows", () => {
     renderWithClient(<Knows api={api} />);
     await waitFor(() => expect(screen.getByTestId("knows-tab")).toBeInTheDocument());
     expect(screen.getByTestId("last-import").textContent).toMatch(/no import yet/i);
+  });
+});
+
+/*
+ * duo#272 (digital-duo#288): the reversible half of a draft's inline
+ * Remove. `GET /knowledge/evidence/excluded` is read back here, newest
+ * first, and a Restore undoes one through the daemon's idempotent
+ * `/knowledge/evidence/:recordId/restore` — AC3's "visible and reversible
+ * ... in Knows".
+ */
+describe("Knows tab — removed from citation (duo#272)", () => {
+  it("says plainly when nothing has been removed", async () => {
+    stubKnowledge(knowledgeFor());
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knows-removed-empty")).toBeInTheDocument());
+    expect(screen.queryByTestId("knows-removed-list")).toBeNull();
+  });
+
+  it("lists every excluded record, with its own label or an honest 'gone' reading", async () => {
+    stubKnowledge(knowledgeFor(), [
+      { recordId: "e1", excludedAt: "2026-09-20T00:00:00.000Z", label: "past exchange: refund policy" },
+      { recordId: "e2", excludedAt: "2026-09-19T00:00:00.000Z", label: null },
+    ]);
+    renderWithClient(<Knows api={api} />);
+    const rows = await waitFor(() => screen.getAllByTestId("knows-removed-row"));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("past exchange: refund policy");
+    expect(rows[1]).toHaveTextContent("This record no longer exists.");
+  });
+
+  it("restoring a row calls the daemon's restore route and the row leaves the list", async () => {
+    let excluded: ExcludedEvidence[] = [{ recordId: "e1", excludedAt: "2026-09-20T00:00:00.000Z", label: "past exchange: refund policy" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const path = String(url).replace("http://test", "");
+        if (path === "/channels") {
+          return new Response("[]", { status: 200 });
+        }
+        if (path === "/knowledge/evidence/e1/restore" && init?.method === "POST") {
+          excluded = [];
+          return new Response(JSON.stringify({ excluded: false }), { status: 200 });
+        }
+        if (path === "/knowledge/evidence/excluded") {
+          return new Response(JSON.stringify({ excluded }), { status: 200 });
+        }
+        return new Response(JSON.stringify(knowledgeFor()), { status: 200 });
+      }),
+    );
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knows-removed-row")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("knows-removed-restore"));
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith("http://test/knowledge/evidence/e1/restore", expect.objectContaining({ method: "POST" })),
+    );
+    await waitFor(() => expect(screen.getByTestId("knows-removed-empty")).toBeInTheDocument());
+  });
+
+  it("a refused restore keeps the row and shows the daemon's own error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const path = String(url).replace("http://test", "");
+        if (path === "/channels") {
+          return new Response("[]", { status: 200 });
+        }
+        if (path === "/knowledge/evidence/e1/restore" && init?.method === "POST") {
+          return new Response(JSON.stringify({ error: { code: "unauthorized", message: "Missing bearer token." } }), { status: 401 });
+        }
+        if (path === "/knowledge/evidence/excluded") {
+          return new Response(JSON.stringify({ excluded: [{ recordId: "e1", excludedAt: "2026-09-20T00:00:00.000Z", label: "past exchange: refund policy" }] }), {
+            status: 200,
+          });
+        }
+        return new Response(JSON.stringify(knowledgeFor()), { status: 200 });
+      }),
+    );
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knows-removed-row")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("knows-removed-restore"));
+    await waitFor(() => expect(screen.getByTestId("mutation-error")).toHaveTextContent("Missing bearer token."));
+    expect(screen.getByTestId("knows-removed-row")).toBeInTheDocument();
   });
 });

@@ -257,7 +257,7 @@ export function DraftTray({
             {others > 0 && <>Drew on {others} source{others === 1 ? "" : "s"}</>}
           </span>
         )}
-        <WhyButton draft={shown} />
+        <WhyButton api={api} draft={shown} />
       </div>
 
       {shapeable && (

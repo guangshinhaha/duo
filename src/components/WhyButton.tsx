@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import type { DuoApiConfig } from "../api/client.js";
 import type { DraftRecord } from "../api/types.js";
 import { WhyPanel } from "../shell/Inspector.js";
 import { useBackClosesSheet } from "../shell/sheetHistory.js";
@@ -27,7 +28,7 @@ function placeBeside(button: HTMLElement): CSSProperties {
     ? { position: "fixed", left, width, bottom: window.innerHeight - rect.top + GAP, maxHeight: above - GAP * 2 }
     : { position: "fixed", left, width, top: rect.bottom + GAP, maxHeight: below - GAP * 2 };
 }
-export function WhyButton({ draft }: { draft: DraftRecord }) {
+export function WhyButton({ api, draft }: { api?: DuoApiConfig; draft: DraftRecord }) {
   const desktop = useMediaQuery(DESKTOP_QUERY);
   const [open, setOpen] = useState(false);
   const [place, setPlace] = useState<CSSProperties>({});
@@ -92,7 +93,7 @@ export function WhyButton({ draft }: { draft: DraftRecord }) {
           style={place}
           tabIndex={-1}
         >
-          <WhyPanel draft={draft} />
+          <WhyPanel api={api} draft={draft} />
         </div>
       )}
       {!desktop && (
@@ -100,7 +101,7 @@ export function WhyButton({ draft }: { draft: DraftRecord }) {
           <DialogContent sheet className="top-auto! bottom-0 max-h-[85dvh] overflow-y-auto" data-testid="why-sheet">
             <DialogTitle className="sr-only">Why your duo wrote this</DialogTitle>
             <DialogDescription className="sr-only">How sure your duo is, the standing order and sources it used, and who asked.</DialogDescription>
-            <WhyPanel draft={draft} />
+            <WhyPanel api={api} draft={draft} />
             <DialogClose className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body" data-testid="why-close">
               Close
             </DialogClose>

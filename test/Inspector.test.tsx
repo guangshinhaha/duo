@@ -131,6 +131,100 @@ describe("WhyPanel — the reasons, in the daemon's own words", () => {
     mount(<WhyPanel draft={draft()} />);
     expect(screen.queryByTestId("why-recipient-adaptation")).toBeNull();
   });
+
+  it("with no api, shows the sources but offers no Remove — the same read-only reading as before #272", () => {
+    mount(<WhyPanel draft={draft()} />);
+    expect(screen.queryByTestId("source-remove")).toBeNull();
+  });
+});
+
+/*
+ * duo#272 (digital-duo#288): removing a bad rule or memory inline, from
+ * inside Why?. A standing order rejects through the same
+ * `/mirror/rules/:id/reject` the Rules tab's own Reject button calls; a
+ * past exchange excludes through the daemon's new
+ * `/knowledge/evidence/:recordId/exclude`. Either way the row stays —
+ * this is a record of what the draft already used — and only its own
+ * action settles into a confirmation; a failed call surfaces the daemon's
+ * own message rather than pretending the remove went through.
+ */
+describe("WhyPanel — removing a bad source inline (duo#272)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("offers Remove beside the standing order and the evidence it drew on", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    mount(<WhyPanel api={api} draft={draft()} />);
+    expect(screen.getAllByTestId("source-remove")).toHaveLength(2);
+  });
+
+  it("rejecting the standing order calls the Rules tab's own route and settles into a confirmation", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ id: "r1" }), { status: 200 })));
+    mount(<WhyPanel api={api} draft={draft()} />);
+    const [removeRule] = screen.getAllByTestId("source-remove");
+    fireEvent.click(removeRule!);
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith("http://test/mirror/rules/r1/reject", expect.objectContaining({ method: "POST" })),
+    );
+    expect(await screen.findAllByTestId("source-removed")).toHaveLength(1);
+    // The rule's own label and link stay — this reads what the draft used, not what is still true of the rule.
+    expect(screen.getByTestId("why-rule")).toHaveTextContent("Deploy access: point to the runbook");
+  });
+
+  it("excluding the evidence calls the daemon's new exclude route", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ excluded: true }), { status: 200 })));
+    mount(<WhyPanel api={api} draft={draft()} />);
+    const [, removeEvidence] = screen.getAllByTestId("source-remove");
+    fireEvent.click(removeEvidence!);
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith("http://test/knowledge/evidence/e1/exclude", expect.objectContaining({ method: "POST" })),
+    );
+    expect(await screen.findAllByTestId("source-removed")).toHaveLength(1);
+  });
+
+  it("a refused removal leaves the source in place with the daemon's own error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: { code: "conflict", message: "Already excluded by someone else." } }), { status: 409 })),
+    );
+    mount(<WhyPanel api={api} draft={draft()} />);
+    const [removeRule] = screen.getAllByTestId("source-remove");
+    fireEvent.click(removeRule!);
+    await waitFor(() => expect(screen.getByTestId("mutation-error")).toHaveTextContent("Already excluded by someone else."));
+    expect(screen.queryByTestId("source-removed")).toBeNull();
+  });
+
+  it("an attachment source gets no Remove — it names no persisted rule or record", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    mount(
+      <WhyPanel
+        api={api}
+        draft={draft({ sources: [{ kind: "attachment", id: "mxc://w/file1", label: "attachment notes.txt (text/plain): a" }] })}
+      />,
+    );
+    expect(screen.queryByTestId("source-remove")).toBeNull();
+  });
+});
+
+describe("DraftTray's Why popover — removing a source without leaving the popover (duo#272)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("offers Remove inside the open popover, bound to this draft's own api", async () => {
+    stubDesktop();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ excluded: true }), { status: 200 })));
+    mount(<DraftTray api={api} draft={draft()} />);
+    fireEvent.click(screen.getByTestId("tray-why"));
+    const popover = await screen.findByTestId("why-popover");
+    const [, removeEvidence] = within(popover).getAllByTestId("source-remove");
+    fireEvent.click(removeEvidence!);
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith("http://test/knowledge/evidence/e1/exclude", expect.objectContaining({ method: "POST" })),
+    );
+    expect(await within(popover).findByTestId("source-removed")).toBeInTheDocument();
+  });
 });
 
 describe("RoomInfo and DuoInfo — when nothing is waiting", () => {

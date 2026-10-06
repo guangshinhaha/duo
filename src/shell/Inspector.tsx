@@ -6,6 +6,7 @@ import { hairlineState, type HairlineState } from "../components/ConfidenceHairl
 import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { Mark } from "../components/Mark.js";
 import { ProvenanceLine } from "../components/ProvenanceLine.js";
+import { SourceRemoveButton } from "../components/SourceRemoveButton.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { duoUserIdFor, localpartOf } from "../workspace/identity.js";
 import type { RoomMemberRef, RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
@@ -46,8 +47,13 @@ function Field({ label, testId, children }: { label: string; testId: string; chi
  * channel exactly as sent — and none of it is a number the wire did not
  * carry. The same panel is the desktop's inspector column and the phone's
  * sheet, so the two cannot disagree.
+ *
+ * duo#272: `api`, when given, puts an inline Remove beside each rule and
+ * evidence row (`SourceRemoveButton` — attachments get none, they name no
+ * persisted thing to act on). Optional and defaulted to nothing so every
+ * existing read-only mount of this panel keeps rendering exactly as it did.
  */
-export function WhyPanel({ draft }: { draft: DraftRecord }) {
+export function WhyPanel({ draft, api }: { draft: DraftRecord; api?: DuoApiConfig }) {
   const state = hairlineState(toDraftPipelineResult(draft));
   const rules = draft.sources.filter((source) => source.kind === "rule");
   const drew = draft.sources.filter((source) => source.kind !== "rule");
@@ -64,10 +70,11 @@ export function WhyPanel({ draft }: { draft: DraftRecord }) {
           ) : (
             <ul className="flex flex-col gap-1">
               {rules.map((rule) => (
-                <li key={rule.id}>
+                <li className="flex items-center justify-between gap-2" key={rule.id}>
                   <a className="underline" data-testid="why-rule" href="#duo/profile/rules">
                     {rule.label}
                   </a>
+                  {api && <SourceRemoveButton api={api} source={rule} />}
                 </li>
               ))}
             </ul>
@@ -82,8 +89,8 @@ export function WhyPanel({ draft }: { draft: DraftRecord }) {
               <ul className="mt-1 flex flex-col gap-1">
                 {drew.map((source) => (
                   // The evidence itself stays on the owner's machine; the daemon's label is what this can say, in full, on tap.
-                  <li key={`${source.kind}:${source.id}`}>
-                    <details>
+                  <li className="flex items-center justify-between gap-2" key={`${source.kind}:${source.id}`}>
+                    <details className="min-w-0 flex-1">
                       <summary className="cursor-pointer truncate type-identifier text-[var(--faint)]" title={source.label}>
                         {source.label}
                       </summary>
@@ -91,6 +98,7 @@ export function WhyPanel({ draft }: { draft: DraftRecord }) {
                         {source.label}
                       </p>
                     </details>
+                    {api && <SourceRemoveButton api={api} source={source} />}
                   </li>
                 ))}
               </ul>
