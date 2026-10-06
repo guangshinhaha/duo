@@ -122,6 +122,9 @@ domain types.
 | `POST` | `/workspace/invites/:roomId/allow` | `RoomConsentEntry` — `{ always?: boolean }`; `always` also records a standing yes to the inviter, one-to-one conversations only, 400 otherwise (#315) | `workspace/service` |
 | `POST` | `/workspace/invites/:roomId/refuse` | 204 — the decline carries the daemon's fixed polite notice on the leave (#315) | `workspace/service` |
 | `POST` | `/workspace/rooms/:roomId/invite-owner` | `{ roomId, userId }` — the duo invites its own owner (by the id grammar, nobody else) into a conversation it is in, so they can answer a passed-on question there (#314) | `workspace/service` |
+| `GET` | `/workspace/rooms/:roomId/off-the-record` | `RoomOffTheRecord` — `{ roomId, offTheRecord: boolean, decidedAt: string \| null }`; whether this room is currently marked off the record (duo#274) | `workspace/off-the-record` |
+| `POST` | `/workspace/rooms/:roomId/off-the-record` | `RoomOffTheRecord` — marks the room and purges what it already taught (pending candidates and rules already derived from a draft in this room, rejected not deleted); idempotent (duo#274) | `workspace/off-the-record` |
+| `DELETE` | `/workspace/rooms/:roomId/off-the-record` | `RoomOffTheRecord & { wasOn: boolean }` — lifts the marker only; nothing already purged is restored (duo#274) | `workspace/off-the-record` |
 | `POST` | `/drafts/:id/shape` | `DraftRecord` — `{ instruction: "shorter" \| "warmer" \| "more_formal" \| "more_direct", alternative? }` regenerates that candidate over its own sources, logged as a shape (#258); no `draft-ready` push | `drafting/shape` |
 | `POST` | `/drafts/:id/shape/undo` | `DraftRecord` — `{ alternative? }` puts back the text the latest standing shape replaced; 409 when there is none (#258) | `drafting/draft-log` |
 | `POST` | `/drafts/:id/schedule` | `ScheduledSend` (201) — body `{ outcome?, sentText?, sendAt }` or `{ at: "working-hours" }`; the daemon holds it and fires it through the outcome seam at its time (#261) | `drafting/scheduled-sends` |
@@ -159,17 +162,17 @@ domain types.
 | `POST` | `/mirror/pinned-answers/:id/edit` | `PinnedAnswer` — edits `pattern` and/or `answerText` in place; 404 for an unknown id (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
 | `DELETE` | `/mirror/pinned-answers/:id` | `{ deleted: true }` — unpins; idempotent, a 200 even for an id already gone (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
 
-The six rows below (#269's never-answer writes and suggestion, and #270's away/topics routes) are this PR's proposed contract, not yet built in `digital-duo` as of this PR — checked against `origin/main`'s `src/serve/server.ts`, which exposes `GET /mirror/refusals` only, and has no `/away`, `/topics` or any owner-facing classification-ceiling route at all. The client is written against them now so the UI and its tests are ready; each write surfaces the daemon's error (`MutationError`) rather than crashing until the daemon side lands, same shape as every other mutation here. #269's classification ceiling has no corresponding route on purpose — see `profile/Ceiling.tsx`: digital-duo#48 makes the ceiling policy-set, not owner-set, so there is nothing for this client to read or write for it.
+The nine rows below (#269's never-answer writes and suggestion, and #270's away/topics routes) were proposed-but-unbuilt when duo PR #339 shipped the UI against them; digital-duo#287 (PR #293) has since landed them for real — confirmed against `origin/main`'s `src/serve/server.ts`. #269's classification ceiling has no corresponding route on purpose — see `profile/Ceiling.tsx`: digital-duo#48 makes the ceiling policy-set, not owner-set, so there is nothing for this client to read or write for it.
 
-| `POST` | `/mirror/refusals` | `RefusalsListing` (201) — body `{ rule }` (the owner's sentence; the subject is read off it and the sentence kept as the reason) or `{ subject, reason? }`; adding an existing subject edits it (#269, proposed — not yet in digital-duo) | `trust/refusals` |
-| `PUT` | `/mirror/refusals/:heading` | `RefusalsListing` — the same body; renames and rewords one rule; 404 for an unknown one, 400 renaming onto another's subject (#269, proposed) | `trust/refusals` |
-| `DELETE` | `/mirror/refusals/:heading` | `RefusalsListing` — removes one; removing the last leaves `decided: true` (#269, proposed) | `trust/refusals` |
-| `GET` | `/drafts/:id/never-answer-suggestion` | `NeverAnswerSuggestion` — starting words for a rule off a draft dismissed as "shouldn't answer"; records nothing (#259 → #269, proposed) | `trust/refusals` |
-| `GET` | `/topics` | `TopicOption[]` — the duo's topics, as an away period can add them (#270, proposed) | `derivation/topics` |
-| `GET` | `/away` | `AwayState` — the running period (ended by its end time on every read), the last ended one, the `statusLine` colleagues see, and the summary (so far, or the return summary until dismissed) (#270, proposed) | `trust/away` |
-| `PUT` | `/away` | `AwayState` — body `{ until, scope: "may_do" \| "may_do_and_topics", extraTopicIds? }`; starts or replaces the period; 400 for a past or over-long end, an unknown topic or one on the never-answer list (#270, proposed) | `trust/away` |
-| `DELETE` | `/away` | `AwayState` — back early; 409 when not away (#270, proposed) | `trust/away` |
-| `POST` | `/away/summary/dismiss` | `AwayState` — the return summary is put away (#270, proposed) | `trust/away` |
+| `POST` | `/mirror/refusals` | `RefusalsListing` (201) — body `{ rule }` (the owner's sentence; the subject is read off it and the sentence kept as the reason) or `{ subject, reason? }`; adding an existing subject edits it (#269, digital-duo#287) | `trust/refusals` |
+| `PUT` | `/mirror/refusals/:heading` | `RefusalsListing` — the same body; renames and rewords one rule; 404 for an unknown one, 400 renaming onto another's subject (#269, digital-duo#287) | `trust/refusals` |
+| `DELETE` | `/mirror/refusals/:heading` | `RefusalsListing` — removes one; removing the last leaves `decided: true` (#269, digital-duo#287) | `trust/refusals` |
+| `GET` | `/drafts/:id/never-answer-suggestion` | `NeverAnswerSuggestion` — starting words for a rule off a draft dismissed as "shouldn't answer"; records nothing (#259 → #269, digital-duo#287) | `trust/refusals` |
+| `GET` | `/topics` | `TopicOption[]` — the duo's topics, as an away period can add them (#270, digital-duo#287) | `derivation/topics` |
+| `GET` | `/away` | `AwayState` — the running period (ended by its end time on every read), the last ended one, the `statusLine` colleagues see, and the summary (so far, or the return summary until dismissed) (#270, digital-duo#287) | `trust/away` |
+| `PUT` | `/away` | `AwayState` — body `{ until, scope: "may_do" \| "may_do_and_topics", extraTopicIds? }`; starts or replaces the period; 400 for a past or over-long end, an unknown topic or one on the never-answer list (#270, digital-duo#287) | `trust/away` |
+| `DELETE` | `/away` | `AwayState` — back early; 409 when not away (#270, digital-duo#287) | `trust/away` |
+| `POST` | `/away/summary/dismiss` | `AwayState` — the return summary is put away (#270, digital-duo#287) | `trust/away` |
 | `GET` | `/trust/grid` | `GridRow[]` | `trust/grid` |
 | `GET` | `/actions/t4/pending` | `PendingT4RequestForJudgement[]` — the staged irreversible steps (#180) | `actions/t4-guard` |
 | `POST` | `/actions/t4/:id/confirm` | `PendingT4Request` — confirming is this route and only this route; the confirming device's id rides the attempt (#180) | `actions/t4-guard` |
