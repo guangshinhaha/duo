@@ -53,6 +53,22 @@ const knowledge = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 const audit = (id: string, askerRef: string, createdAt: string, over: Record<string, unknown> = {}) => ({ id, createdAt, question: `question from ${askerRef}`, askerRef, askerResolved: true, declined: false, answerText: "the answer", ...over });
+const publicAnswer = (id: string, askerRef: string, createdAt: string, over: Record<string, unknown> = {}) => ({
+  id,
+  createdAt,
+  question: `question from ${askerRef}`,
+  askerRef,
+  topicId: "topic-leave",
+  outcome: "answered",
+  text: "the answer",
+  draftId: `draft-${id}`,
+  correctsEntryId: null,
+  askLinkId: "link-1",
+  askerResolved: true,
+  clearanceApplied: "official_open",
+  sources: [],
+  ...over,
+});
 
 /** A daemon with each read the profile makes; POSTs recorded. */
 function stub(routes: Record<string, unknown>) {
@@ -292,18 +308,18 @@ describe("Activity — what it did, people first", () => {
   it("reads as a person would say it — who, what became of it, when — with the exact record one tap away", async () => {
     stub({
       "/audit": [
-        audit("a", "colleague:Rae", day(0)),
+        audit("a", "colleague:Rae", day(2)),
         audit("b", "colleague:Jun", day(1), { answerText: "The duo passed this one to the owner. You'll hear back from them directly." }),
-        audit("c", "stranger:link", day(2), { declined: true, answerText: "The duo won't answer that one." }),
+        audit("c", "stranger:link", day(0), { declined: true, answerText: "The duo won't answer that one." }),
       ],
     });
     mount(<Activity api={api} />);
     await screen.findByTestId("activity-list");
     const summaries = screen.getAllByTestId("activity-summary").map((el) => el.textContent);
-    // Newest first.
-    expect(summaries[0]).toBe("Someone with your link · refused — a boundary you set · " + relativeDay(day(2)));
+    // Newest first, by actual time — not by the order the daemon happened to list them in (#267: now a real sort, merged across two logs).
+    expect(summaries[0]).toBe("Someone with your link · refused — a boundary you set · Today");
     expect(summaries[1]).toBe("Jun · passed to you · Yesterday");
-    expect(summaries[2]).toBe("Rae · answered for you · Today");
+    expect(summaries[2]).toBe("Rae · answered for you · " + relativeDay(day(2)));
     // The default view has none of the daemon's asker references; the detail keeps them exact.
     expect(summaries.join(" ")).not.toMatch(CODES);
     const details = screen.getAllByTestId("activity-record");
@@ -337,5 +353,107 @@ describe("Activity — what it did, people first", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "unknown", message: "store locked" } }), { status: 500 })));
     mount(<Activity api={api} />);
     expect(await screen.findByText("store locked")).toBeInTheDocument();
+  });
+
+  it("merges the ask-link log in alongside the per-asker one, newest first across both, with its sources shown (duo#267 AC1)", async () => {
+    stub({
+      "/audit": [audit("a", "colleague:Rae", day(1))],
+      "/mirror/public-answers": [publicAnswer("p1", "stranger:link", day(0), { sources: [{ kind: "evidence", id: "r1", label: "vacation policy" }] })],
+    });
+    mount(<Activity api={api} />);
+    await screen.findByTestId("activity-list");
+    const summaries = screen.getAllByTestId("activity-summary").map((el) => el.textContent);
+    expect(summaries).toEqual(["Someone with your link · answered for you · Today", "Rae · answered for you · Yesterday"]);
+    expect(screen.getByTestId("activity-sources")).toHaveTextContent("Drew on vacation policy");
+  });
+
+  it("filters by person, outcome and date", async () => {
+    stub({
+      "/audit": [audit("a", "colleague:Rae", day(0))],
+      "/mirror/public-answers": [publicAnswer("p1", "colleague:Jun", day(10), { outcome: "declined_refused", text: "The duo won't answer that one." })],
+    });
+    mount(<Activity api={api} />);
+    await screen.findByTestId("activity-list");
+    expect(screen.getAllByTestId("activity-entry")).toHaveLength(2);
+
+    fireEvent.change(screen.getByTestId("activity-filter-person"), { target: { value: "Rae" } });
+    expect(screen.getAllByTestId("activity-entry")).toHaveLength(1);
+    expect(screen.getByTestId("activity-summary")).toHaveTextContent("Rae");
+    fireEvent.change(screen.getByTestId("activity-filter-person"), { target: { value: "all" } });
+
+    fireEvent.change(screen.getByTestId("activity-filter-outcome"), { target: { value: "refused" } });
+    expect(screen.getAllByTestId("activity-entry")).toHaveLength(1);
+    expect(screen.getByTestId("activity-summary")).toHaveTextContent("refused");
+    fireEvent.change(screen.getByTestId("activity-filter-outcome"), { target: { value: "all" } });
+
+    fireEvent.change(screen.getByTestId("activity-filter-date"), { target: { value: "today" } });
+    expect(screen.getAllByTestId("activity-entry")).toHaveLength(1);
+    expect(screen.getByTestId("activity-summary")).toHaveTextContent("Rae");
+
+    fireEvent.change(screen.getByTestId("activity-filter-person"), { target: { value: "Jun" } });
+    expect(await screen.findByTestId("activity-filtered-empty")).toBeInTheDocument();
+  });
+
+  it("exports exactly the filtered rows as CSV, in the words actually recorded (duo#267 AC4)", async () => {
+    stub({ "/audit": [audit("a", "colleague:Rae", day(0), { answerText: "Five days, split, as needed." })] });
+    let captured: Blob | undefined;
+    Object.assign(URL, {
+      createObjectURL: (blob: Blob) => {
+        captured = blob;
+        return "blob:mock";
+      },
+      revokeObjectURL: () => {},
+    });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    mount(<Activity api={api} />);
+    await screen.findByTestId("activity-list");
+    fireEvent.click(screen.getByTestId("activity-export-csv"));
+    expect(clickSpy).toHaveBeenCalledOnce();
+    expect(captured).toBeDefined();
+    const text = await captured!.text();
+    expect(text.split("\n")[0]).toBe("Date,Person,Outcome,Question,Answer,Sources");
+    expect(text).toContain("Rae");
+    expect(text).toContain("Five days, split, as needed.");
+    clickSpy.mockRestore();
+  });
+
+  it("'That was wrong' sends a correction over HTTP, in the owner's own words (duo#267 AC2/AC3)", async () => {
+    const { posts } = stub({
+      "/mirror/public-answers": [publicAnswer("p1", "colleague:Rae", day(0))],
+      "POST /mirror/public-answers/p1/correct": {
+        correctionEntryId: "p2",
+        originalEntryId: "p1",
+        correctedTopicId: "topic-leave",
+        text: "Correction to an earlier answer: it's actually ten days.",
+        postedInThread: true,
+        demotion: { topicId: "topic-leave", tier: "T0", fromLevel: "auto", toLevel: "approve", demoted: true },
+        notifiedAskerRefs: ["colleague:Rae"],
+      },
+    });
+    mount(<Activity api={api} />);
+    await screen.findByTestId("activity-list");
+    fireEvent.click(screen.getByTestId("activity-that-was-wrong"));
+    fireEvent.change(screen.getByTestId("activity-correction-text"), { target: { value: "It's actually ten days." } });
+    fireEvent.click(screen.getByTestId("activity-correction-send"));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]!.url).toContain("/mirror/public-answers/p1/correct");
+    expect(posts[0]!.body).toEqual({ correctedText: "It's actually ten days.", threadStillExists: undefined });
+    // The form closes once sent — nothing left to confirm.
+    await waitFor(() => expect(screen.queryByTestId("activity-correction-form")).toBeNull());
+  });
+
+  it("a correction already sent is shown nested under the original, never as its own row, and offers no second 'That was wrong'", async () => {
+    stub({
+      "/mirror/public-answers": [
+        publicAnswer("p1", "colleague:Rae", day(1)),
+        publicAnswer("p2", "colleague:Rae", day(0), { outcome: "corrected", correctsEntryId: "p1", text: "Correction: it's ten days." }),
+      ],
+    });
+    mount(<Activity api={api} />);
+    await screen.findByTestId("activity-list");
+    // One row, not two — the correction is nested, not a second exchange.
+    expect(screen.getAllByTestId("activity-entry")).toHaveLength(1);
+    expect(screen.getByTestId("activity-correction-sent")).toHaveTextContent("Correction: it's ten days.");
+    expect(screen.queryByTestId("activity-that-was-wrong")).toBeNull();
   });
 });

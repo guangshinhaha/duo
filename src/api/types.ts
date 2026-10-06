@@ -742,6 +742,54 @@ export interface AuditEntry {
 }
 
 /**
+ * `GET /mirror/public-answers` (digital-duo#267): every public-answer-log
+ * entry — a colleague's question through an ask link, and what became of
+ * it. Mirrors digital-duo's `src/permissions/public-answer-log.ts`
+ * `PublicAnswerLogEntry` plus `sources`, which the route resolves on read
+ * from the T1 draft that produced the answer (`draftId`) rather than the
+ * log storing them twice — the Activity tab's own "every answer, with its
+ * sources" requirement (#267 AC1).
+ */
+export const PUBLIC_ANSWER_LOG_OUTCOMES = ["answered", "passed_on", "declined_refused", "corrected"] as const;
+export type PublicAnswerLogOutcome = (typeof PUBLIC_ANSWER_LOG_OUTCOMES)[number];
+
+export interface PublicAnswerLogEntry {
+  id: string;
+  createdAt: string;
+  question: string;
+  askerRef: string;
+  topicId: string | null;
+  outcome: PublicAnswerLogOutcome;
+  text: string;
+  draftId: string;
+  correctsEntryId: string | null;
+  askLinkId: string | null;
+  askerResolved: boolean | null;
+  clearanceApplied: ClassificationLevel;
+  sources: DraftSource[];
+}
+
+/**
+ * `POST /mirror/public-answers/:id/correct` (digital-duo#267): "That was
+ * wrong" — what correcting a logged public answer actually does, verbatim
+ * from digital-duo's `src/permissions/public-correction.ts`
+ * `CorrectPublicAnswerResult`. `demotion` is `undefined` only when the
+ * original entry never resolved a topic at all; `demoted` is false when
+ * the cell was already at the floor ("ask") — the correction is still
+ * recorded either way (#267 AC3).
+ */
+export interface CorrectPublicAnswerResult {
+  correctionEntryId: string;
+  originalEntryId: string;
+  correctedTopicId: string | null;
+  text: string;
+  postedInThread: boolean;
+  threadGoneNotice: string | undefined;
+  demotion: { topicId: string; tier: TrustTier; fromLevel: AutonomyLevel; toLevel: AutonomyLevel; demoted: boolean } | undefined;
+  notifiedAskerRefs: string[];
+}
+
+/**
  * One paired device as `GET /devices` and `POST /devices/:id/revoke` answer
  * it (digital-duo #177) — the daemon's own `DeviceToken` shape, which has no
  * token or hash field, so a credential cannot ride this type. `revokedAt` is
