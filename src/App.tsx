@@ -10,6 +10,7 @@ import { useDraftReadySocket } from "./api/ws.js";
 import { markDraftArrived } from "./arrivals.js";
 import { SyncStatusProvider } from "./sync.js";
 import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
+import { DuoRequestWatcher } from "./components/DuoRequests.js";
 import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
 import { unsubscribeFromPush } from "./push.js";
@@ -300,7 +301,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
         <Room
           at={route.at}
           connection={shell.connection}
-          drafts={shell.api ? <RoomDrafts api={shell.api} key={route.chat} roomId={route.chat} /> : null}
+          drafts={shell.api ? <RoomDrafts api={shell.api} connection={shell.connection} key={route.chat} roomId={route.chat} /> : null}
           onFactCheck={shell.onFactCheck}
           onRewrite={shell.onRewrite}
           roomId={route.chat}
@@ -892,6 +893,7 @@ function AppShell() {
           them); a new one notifies and announces here. It holds no way to
           confirm anything. */}
       {api && <ConfirmationWatcher api={api} onArrived={() => announce("An action is waiting for your confirmation.")} />}
+      {api && <DuoRequestWatcher api={api} />}
       {/* #46: over the screen, never instead of it — the main surface stays
           mounted underneath while search is open. */}
       {api && <SearchOverlay api={api} onClose={() => setSearchOpen(false)} open={searchOpen} />}

@@ -4,6 +4,8 @@ import { useDraft } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
 import { DraftCard } from "../components/DraftCard.js";
 import { MutationError } from "../components/MutationError.js";
+import { EscalationCard, isColleagueEscalation } from "../components/EscalationCard.js";
+import { useHeldRooms } from "../shell/waiting.js";
 import { bridgedHref, bridgedIdOf } from "../shell/bridged.js";
 import { isOwnTurn, useConversationLink } from "../workspace/drafts.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
@@ -28,6 +30,7 @@ export function Draft({
 }) {
   const draft = useDraft(api, draftId);
   const conversationLink = useConversationLink(connection);
+  const heldRooms = useHeldRooms(connection);
 
   // Deciding on this page returns to the queue — the draft is dealt with
   // and Review is what's next. But an ALREADY-decided draft linked
@@ -100,7 +103,12 @@ export function Draft({
       {/* #39: the page's h1 — the card's question is content, not the
           page's name; the address names the page. */}
       <h1 className="type-heading sr-only">Draft</h1>
-      <DraftCard api={api} draft={draft.data} conversationHref={conversationLink(draft.data.provenance)} />
+      {/* #314: a colleague's passed-on question is answered as yourself, in their conversation. */}
+      {isColleagueEscalation(draft.data) && draft.data.outcome === null ? (
+        <EscalationCard api={api} connection={connection} draft={draft.data} rooms={heldRooms} />
+      ) : (
+        <DraftCard api={api} draft={draft.data} conversationHref={conversationLink(draft.data.provenance)} />
+      )}
     </div>
   );
 }

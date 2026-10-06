@@ -5,6 +5,9 @@ import { DeliveryStateLine } from "./DeliveryStateLine.js";
 import { Collapse, useLeaving } from "./Collapse.js";
 import { DraftTray } from "./DraftTray.js";
 import { useStickToEnd } from "../shell/stickToEnd.js";
+import { useHeldRooms } from "../shell/waiting.js";
+import type { WorkspaceConnection } from "../workspace/matrix.js";
+import { EscalationCard, isColleagueEscalation } from "./EscalationCard.js";
 
 /**
  * #68, re-shaped by the chat-first move (#142): the drafts of one
@@ -29,8 +32,9 @@ import { useStickToEnd } from "../shell/stickToEnd.js";
 /** How long "Delivered." stays at the end of a conversation after the send it confirms. */
 const DELIVERED_NEWS_MS = 5 * 60_000;
 
-export function RoomDrafts({ api, roomId }: { api: DuoApiConfig; roomId: string }) {
+export function RoomDrafts({ api, roomId, connection = null }: { api: DuoApiConfig; roomId: string; connection?: WorkspaceConnection | null }) {
   const pending = usePendingDrafts(api);
+  const rooms = useHeldRooms(connection);
   const feed = useDraftsFeed(api);
 
   const waitingNow = (pending.data ?? []).filter((draft) => conversationOf(draft.provenance)?.roomId === roomId);
@@ -72,7 +76,13 @@ export function RoomDrafts({ api, roomId }: { api: DuoApiConfig; roomId: string 
           ))}
           {waiting.map(({ item: draft, leaving }, index) => (
             <Collapse key={draft.id} leaving={leaving}>
-              <DraftTray api={api} draft={draft} keyboard={index === firstLive} />
+              {/* #314: a colleague's question your duo passed to you is answered as
+                  yourself, in this conversation — the duo can't post your words. */}
+              {isColleagueEscalation(draft) ? (
+                <EscalationCard api={api} connection={connection} draft={draft} rooms={rooms} />
+              ) : (
+                <DraftTray api={api} draft={draft} keyboard={index === firstLive} />
+              )}
             </Collapse>
           ))}
         </section>

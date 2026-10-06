@@ -48,6 +48,7 @@ import type {
   DraftPipelineResult,
   DraftRecord,
   DuoKnowledge,
+  DuoRequest,
   FactCheckResult,
   RewriteInstruction,
   RewriteResult,
@@ -160,6 +161,8 @@ export const queryKeys = {
   // digital-duo #279 (issue #262): keyed by recipient id, so resetting one
   // person's learned tone never invalidates another's.
   voiceAdaptation: (personId: string) => ["people", personId, "voice-adaptation"] as const,
+  // #315: colleagues' held requests to talk to the duo.
+  duoRequests: ["workspace-requests"] as const,
 };
 
 /** `null` (a member with no duo paired) reads nothing: the query stays idle, and its data is `undefined`. */
@@ -475,6 +478,7 @@ export function useRecordOutcome(api: DuoApiConfig) {
       sentText,
       dismissReason,
       alternative,
+      ownerDelivered,
     }: {
       draftId: string;
       outcome: SettableDraftOutcome;
@@ -482,7 +486,13 @@ export function useRecordOutcome(api: DuoApiConfig) {
       /** #259: an optional, one-tap reason for a "discarded" outcome — the daemon refuses it alongside any other outcome. */
       dismissReason?: DismissReason;
       alternative?: number;
-    }) => apiRequest(api, `/drafts/${draftId}/outcome`, { method: "POST", body: JSON.stringify({ outcome, sentText, dismissReason, alternative }) }),
+      /** #314: the owner already posted the text themselves, in the conversation — the daemon records it delivered. */
+      ownerDelivered?: boolean;
+    }) =>
+      apiRequest(api, `/drafts/${draftId}/outcome`, {
+        method: "POST",
+        body: JSON.stringify({ outcome, sentText, dismissReason, alternative, ...(ownerDelivered ? { ownerDelivered: true } : {}) }),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["drafts"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.review });
@@ -723,6 +733,53 @@ export function useAnswerEscalation(api: DuoApiConfig) {
       queryClient.invalidateQueries({ queryKey: ["drafts"] });
     },
   });
+}
+
+/** #315: how often the held requests are re-read — polled, like confirmations, because the notification this feeds is for an owner not looking. */
+export const DUO_REQUESTS_POLL_MS = 30_000;
+
+/**
+ * #315: colleagues' requests to talk to your duo — the invitations the
+ * daemon holds until you decide (digital-duo #192, `GET /workspace/invites`).
+ */
+export function useDuoRequests(api: DuoApiConfig | null) {
+  return useQuery({
+    queryKey: queryKeys.duoRequests,
+    // A daemon with no workspace answers an empty list; anything without one reads as none, never as an error.
+    queryFn: async () => {
+      const answer = await apiRequest<{ invites?: unknown } | undefined>(api!, "/workspace/invites");
+      return Array.isArray(answer?.invites) ? (answer.invites as DuoRequest[]) : [];
+    },
+    enabled: api !== null,
+    refetchInterval: DUO_REQUESTS_POLL_MS,
+    refetchIntervalInBackground: true,
+  });
+}
+
+/** #315: Allow / Allow and always allow / Decline — the owner's decision on one request. */
+export function useDecideDuoRequest(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ roomId, decision }: { roomId: string; decision: "allow" | "always" | "decline" }) =>
+      decision === "decline"
+        ? apiRequest<void>(api, `/workspace/invites/${encodeURIComponent(roomId)}/refuse`, { method: "POST" })
+        : apiRequest(api, `/workspace/invites/${encodeURIComponent(roomId)}/allow`, {
+            method: "POST",
+            body: JSON.stringify({ always: decision === "always" }),
+          }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.duoRequests });
+    },
+  });
+}
+
+/**
+ * #314: brings the owner into a conversation their duo is in, so they can
+ * answer a question it passed to them there, as themselves — the daemon's
+ * duo invites its own owner, and nobody else.
+ */
+export function inviteOwnerInto(api: DuoApiConfig, roomId: string): Promise<{ roomId: string; userId: string }> {
+  return apiRequest(api, `/workspace/rooms/${encodeURIComponent(roomId)}/invite-owner`, { method: "POST" });
 }
 
 export function useRuleAction(api: DuoApiConfig) {

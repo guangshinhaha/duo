@@ -13,6 +13,7 @@ import { NewConversationDialog } from "../components/NewConversationDialog.js";
 import { NewRoomDialog } from "../components/NewRoomDialog.js";
 import { InviteToRoomDialog } from "../components/InviteToRoomDialog.js";
 import { PendingInvites } from "../components/PendingInvites.js";
+import { DuoRequests } from "../components/DuoRequests.js";
 import { NoDuoPanel } from "../components/NoDuoPanel.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -848,6 +849,8 @@ export function ChatList({
           <>
             {/* #214: a room invite isn't a conversation yet — it reads above the list it would otherwise just sit inside, unopenable. */}
             {connection && <PendingInvites connection={connection} />}
+            {/* #315: a colleague's first message to your duo waits for your OK, right here. */}
+            {api && <DuoRequests api={api} />}
             {api ? (
               <>
                 <DuoRow active={duoActive} api={api} waiting={duoWaiting} />
