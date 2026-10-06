@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DuoApiConfig } from "../src/api/client.js";
-import type { InterruptionPortrait, RefusalsListing, Rule, RuleReviewListing } from "../src/api/types.js";
+import type { InterruptionPortrait, PinnedAnswer, RefusalsListing, Rule, RuleReviewListing } from "../src/api/types.js";
 import { Portrait } from "../src/profile/Portrait.js";
 import { RefusalsSection } from "../src/profile/Refusals.js";
 import { Rules } from "../src/profile/Rules.js";
@@ -75,7 +75,12 @@ const refusals: RefusalsListing = {
   ],
 };
 
-function stubMirrorResponses(p: InterruptionPortrait, l: RuleReviewListing, r: RefusalsListing = refusals) {
+function stubMirrorResponses(
+  p: InterruptionPortrait,
+  l: RuleReviewListing,
+  r: RefusalsListing = refusals,
+  pinnedAnswers: readonly PinnedAnswer[] = [],
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
@@ -84,6 +89,12 @@ function stubMirrorResponses(p: InterruptionPortrait, l: RuleReviewListing, r: R
       }
       if (url.includes("/mirror/refusals")) {
         return new Response(JSON.stringify(r), { status: 200 });
+      }
+      // duo#275: checked before the bare "/mirror/rules" catch-all below —
+      // "/mirror/pinned-answers" would otherwise fall through to it and come
+      // back shaped like a RuleReviewListing instead of `{ pinnedAnswers }`.
+      if (url.includes("/mirror/pinned-answers")) {
+        return new Response(JSON.stringify({ pinnedAnswers }), { status: 200 });
       }
       if (url.includes("/review")) {
         return new Response("[]", { status: 200 });
@@ -225,6 +236,89 @@ describe("Rules tab — the buckets, and no authoring here (AR-18)", () => {
       expect(screen.queryByTestId("refusals")).toBeNull();
       expect(screen.getByTestId("rules-never-answer-pointer")).toHaveTextContent("May do");
     });
+  });
+});
+
+function pinnedAnswerFor(id: string, over?: Partial<PinnedAnswer>): PinnedAnswer {
+  return {
+    id,
+    pattern: "vacation leave",
+    answerText: "Ten days a year.",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    sourceLabel: null,
+    ...over,
+  };
+}
+
+describe("Rules tab — Pinned answers (duo#275): the owner's own overrides, read first", () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders an honest empty state with none pinned yet", async () => {
+    stubMirrorResponses(portrait, listing, refusals, []);
+    renderWithClient(<Rules api={api} />);
+    await waitFor(() => expect(screen.getByTestId("bucket-pinnedAnswers")).toBeInTheDocument());
+    expect(screen.getByTestId("bucket-pinnedAnswers")).toHaveTextContent("Pinned answers (0)");
+    expect(screen.getByTestId("bucket-pinnedAnswers")).toHaveTextContent("Nothing pinned yet.");
+  });
+
+  it("lists a pinned answer as the owner's own words (OwnerMessage), with its pattern and no free-text inputs by default", async () => {
+    stubMirrorResponses(portrait, listing, refusals, [pinnedAnswerFor("pin1")]);
+    renderWithClient(<Rules api={api} />);
+    await waitFor(() => expect(screen.getByTestId("pinned-answer-card")).toBeInTheDocument());
+    expect(screen.getByTestId("pinned-answer-card")).toHaveTextContent("Pinned to: vacation leave");
+    expect(screen.getByTestId("pinned-answer-card")).toHaveTextContent("Ten days a year.");
+    // The owner's own words — OwnerMessage's "You" attribution, never DuoMessage's.
+    expect(screen.getByTestId("pinned-answer-card").querySelector('[data-testid="owner-message"]')).not.toBeNull();
+    expect(screen.getByTestId("pinned-answer-card").querySelector('[data-testid="duo-message"]')).toBeNull();
+    expect(screen.getByTestId("pinned-answer-card").querySelectorAll("input, textarea")).toHaveLength(0);
+  });
+
+  it("shows the sourceLabel when the daemon recorded one, and omits it when null", async () => {
+    stubMirrorResponses(portrait, listing, refusals, [pinnedAnswerFor("pin1", { sourceLabel: "pinned from #general" })]);
+    renderWithClient(<Rules api={api} />);
+    await waitFor(() => expect(screen.getByTestId("pinned-answer-source")).toHaveTextContent("pinned from #general"));
+
+    cleanup();
+    stubMirrorResponses(portrait, listing, refusals, [pinnedAnswerFor("pin2", { sourceLabel: null })]);
+    renderWithClient(<Rules api={api} />);
+    await waitFor(() => expect(screen.getByTestId("pinned-answer-card")).toBeInTheDocument());
+    expect(screen.queryByTestId("pinned-answer-source")).toBeNull();
+  });
+
+  it("Edit opens an editable form prefilled with the current pattern and wording", async () => {
+    stubMirrorResponses(portrait, listing, refusals, [pinnedAnswerFor("pin1")]);
+    renderWithClient(<Rules api={api} />);
+    await waitFor(() => expect(screen.getByTestId("pinned-answer-card")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("pinned-answer-edit"));
+    expect(await screen.findByTestId("pinned-answer-pattern-input")).toHaveValue("vacation leave");
+    expect(screen.getByTestId("pinned-answer-text-input")).toHaveValue("Ten days a year.");
+  });
+
+  it("Unpin calls the daemon's delete route and settles to a confirmation", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "DELETE") {
+          calls.push(url);
+          return new Response(JSON.stringify({ deleted: true }), { status: 200 });
+        }
+        if (url.includes("/mirror/portrait")) return new Response(JSON.stringify(portrait), { status: 200 });
+        if (url.includes("/mirror/refusals")) return new Response(JSON.stringify(refusals), { status: 200 });
+        if (url.includes("/mirror/pinned-answers")) return new Response(JSON.stringify({ pinnedAnswers: [pinnedAnswerFor("pin1")] }), { status: 200 });
+        if (url.includes("/review")) return new Response("[]", { status: 200 });
+        return new Response(JSON.stringify(listing), { status: 200 });
+      }),
+    );
+    renderWithClient(<Rules api={api} />);
+    await waitFor(() => expect(screen.getByTestId("pinned-answer-remove")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("pinned-answer-remove"));
+    await waitFor(() => expect(calls.some((url) => url.includes("/mirror/pinned-answers/pin1"))).toBe(true));
+    await screen.findByTestId("pinned-answer-removed");
   });
 });
 

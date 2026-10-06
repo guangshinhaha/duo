@@ -88,6 +88,11 @@ const SERVED: [method: string, path: string][] = [
   ["GET", "/mirror/rules"],
   ["GET", "/mirror/rules/:id"],
   ["GET", "/mirror/refusals"],
+  // digital-duo duo#275 (duo#275): landed on origin/main's src/serve/server.ts.
+  ["GET", "/mirror/pinned-answers"],
+  ["POST", "/mirror/pinned-answers"],
+  ["POST", "/mirror/pinned-answers/:id/edit"],
+  ["DELETE", "/mirror/pinned-answers/:id"],
   // This list is the SERVED inventory — what the daemon actually exposes,
   // transcribed from its server.ts. #269/#270's never-answer writes, the
   // suggestion route and all of /topics and /away are this client's own

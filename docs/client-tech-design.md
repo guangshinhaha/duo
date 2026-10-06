@@ -154,6 +154,10 @@ domain types.
 | `GET` | `/mirror/rules/:id` | `RuleWithEvidence` — the rule with the supporting evidence exchanges behind it | `derivation/rule-review` |
 | `POST` | `/mirror/rules/:id/:action` | `Rule` | `derivation/rule-review` |
 | `GET` | `/mirror/refusals` | `{ decided: boolean, refusals: Refusal[] }` — pure `duo/refusals.md` file state; `decided: false` is a 200 (#182). Since #269 these are the profile's never-answer rules, written from May do; confirm-none stays terminal-only | `trust/refusals` |
+| `GET` | `/mirror/pinned-answers` | `{ pinnedAnswers: PinnedAnswer[] }` — the owner's own exact-wording overrides, newest first (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
+| `POST` | `/mirror/pinned-answers` | `PinnedAnswer` — pins a message as the exact answer to a question/topic `pattern`; `sourceLabel` optional (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
+| `POST` | `/mirror/pinned-answers/:id/edit` | `PinnedAnswer` — edits `pattern` and/or `answerText` in place; 404 for an unknown id (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
+| `DELETE` | `/mirror/pinned-answers/:id` | `{ deleted: true }` — unpins; idempotent, a 200 even for an id already gone (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
 
 The six rows below (#269's never-answer writes and suggestion, and #270's away/topics routes) are this PR's proposed contract, not yet built in `digital-duo` as of this PR — checked against `origin/main`'s `src/serve/server.ts`, which exposes `GET /mirror/refusals` only, and has no `/away`, `/topics` or any owner-facing classification-ceiling route at all. The client is written against them now so the UI and its tests are ready; each write surfaces the daemon's error (`MutationError`) rather than crashing until the daemon side lands, same shape as every other mutation here. #269's classification ceiling has no corresponding route on purpose — see `profile/Ceiling.tsx`: digital-duo#48 makes the ceiling policy-set, not owner-set, so there is nothing for this client to read or write for it.
 

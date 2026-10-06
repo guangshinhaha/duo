@@ -1,7 +1,8 @@
 import type { DuoApiConfig } from "../api/client.js";
-import { useMirrorRules, useReview } from "../api/queries.js";
-import type { CorrectionCandidate, Rule, RuleReviewListing } from "../api/types.js";
+import { useMirrorPinnedAnswers, useMirrorRules, useReview } from "../api/queries.js";
+import type { CorrectionCandidate, PinnedAnswer, Rule, RuleReviewListing } from "../api/types.js";
 import { Collapse, useLeaving } from "../components/Collapse.js";
+import { PinnedAnswerCard } from "../components/PinnedAnswerCard.js";
 import { RuleCard, type RuleBucket } from "../components/RuleCard.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -52,6 +53,37 @@ function Bucket({ api, listing, bucket }: { api: DuoApiConfig; listing: RuleRevi
   );
 }
 
+/**
+ * duo#275: "pin exact wording — always answer this way." A pinned answer
+ * outranks every standing order below, so it reads first in the tab — the
+ * owner's own explicit override, not one more derived rule in the pile.
+ * Creating one lives on the message itself ("Duo: always answer this way",
+ * `Room.tsx`'s own action); this section is where it's reviewed, edited
+ * and removed, same as every other rule here.
+ */
+function PinnedAnswersSection({ api, pinnedAnswers }: { api: DuoApiConfig; pinnedAnswers: PinnedAnswer[] }) {
+  const rows = useLeaving(pinnedAnswers, (pinned) => pinned.id, HOLD_DECIDED_MS);
+  return (
+    <section className="shape-container flex flex-col gap-2 p-4" data-testid="bucket-pinnedAnswers">
+      <h2 className="type-heading">Pinned answers ({pinnedAnswers.length})</h2>
+      <p className="type-provenance text-[var(--muted)]">
+        Exact wording you've pinned to a question — your duo quotes it word for word, before anything else it knows.
+      </p>
+      {rows.length === 0 ? (
+        <p className="type-provenance text-[var(--faint)]">Nothing pinned yet.</p>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {rows.map(({ item: pinned, leaving }) => (
+            <Collapse key={pinned.id} leaving={leaving}>
+              <PinnedAnswerCard api={api} pinned={pinned} />
+            </Collapse>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 const isCandidate = (value: unknown): value is CorrectionCandidate =>
   typeof value === "object" && value !== null && typeof (value as CorrectionCandidate).id === "string" && typeof (value as CorrectionCandidate).sentText === "string";
 
@@ -68,6 +100,7 @@ const isCandidate = (value: unknown): value is CorrectionCandidate =>
 export function Rules({ api }: { api: DuoApiConfig }) {
   const rules = useMirrorRules(api);
   const review = useReview(api);
+  const pinnedAnswers = useMirrorPinnedAnswers(api);
   const candidatesNow = Array.isArray(review.data) ? review.data.filter(isCandidate) : [];
   const candidates = useLeaving(candidatesNow, (candidate) => candidate.id, HOLD_DECIDED_MS);
   if (rules.isLoading) {
@@ -84,6 +117,11 @@ export function Rules({ api }: { api: DuoApiConfig }) {
           {listing.approved?.length ?? 0} in use · {listing.awaitingApproval?.length ?? 0} waiting for you · {listing.rejected?.length ?? 0} set aside
         </p>
       )}
+      {/* duo#275: the owner's own overrides read first — ahead of standing
+          orders and edits, because a pinned answer outranks both. Loads
+          independently of `rules` and degrades to nothing rather than
+          blocking the rest of the tab on a second request. */}
+      {Array.isArray(pinnedAnswers.data?.pinnedAnswers) && <PinnedAnswersSection api={api} pinnedAnswers={pinnedAnswers.data!.pinnedAnswers} />}
       {candidates.length > 0 && (
         <section className="shape-container flex flex-col gap-3 p-4" data-testid="rules-from-edits">
           <h2 className="type-heading">From your edits ({candidates.length})</h2>

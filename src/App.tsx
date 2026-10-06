@@ -16,7 +16,7 @@ import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js"
 import { unsubscribeFromPush } from "./push.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
-import { shouldPersistQuery, useFactCheck, useOrgOverview, useRewriteText } from "./api/queries.js";
+import { shouldPersistQuery, useCreatePinnedAnswer, useFactCheck, useOrgOverview, useRewriteText } from "./api/queries.js";
 import type { DraftRecord, RewriteInstruction } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Admin } from "./routes/Admin.js";
@@ -263,6 +263,8 @@ interface SurfaceContext {
    */
   onRewrite?: (text: string, instruction: RewriteInstruction) => Promise<string>;
   onFactCheck?: (text: string, threadContext: string | null) => Promise<{ claim: string; concern: string; sourceLabel: string } | null>;
+  /** duo#275: "Duo: always answer this way" — same reasoning as `onRewrite`/`onFactCheck` above. */
+  onPinAnswer?: (pattern: string, answerText: string) => Promise<unknown>;
 }
 
 /** Settings: the index of its sections, or one section alone (#148). */
@@ -303,6 +305,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
           connection={shell.connection}
           drafts={shell.api ? <RoomDrafts api={shell.api} connection={shell.connection} key={route.chat} roomId={route.chat} /> : null}
           onFactCheck={shell.onFactCheck}
+          onPinAnswer={shell.onPinAnswer}
           onRewrite={shell.onRewrite}
           roomId={route.chat}
         />
@@ -435,6 +438,15 @@ function AppShell() {
         factCheckMutation
           .mutateAsync({ text, threadContext })
           .then((result) => (result.flag ? { claim: result.flag.claim, concern: result.flag.concern, sourceLabel: result.flag.source.label } : null))
+    : undefined;
+  // duo#275: same reasoning as onRewrite/onFactCheck above — owned here,
+  // not in Room.tsx, which sits on the share path and may never import
+  // `src/api/*`. Always mounted (the hook itself degrades to a rejected
+  // promise with no `api`), so the bound function below is only ever
+  // handed down when there's actually a duo to call.
+  const createPinnedAnswerMutation = useCreatePinnedAnswer(api);
+  const onPinAnswer = api
+    ? (pattern: string, answerText: string) => createPinnedAnswerMutation.mutateAsync({ pattern, answerText })
     : undefined;
   // The public front door: a signed-out visitor who arrives at the bare
   // root of a hosted build sees the landing page, not the sign-in card.
@@ -945,6 +957,7 @@ function AppShell() {
           admin,
           onRewrite,
           onFactCheck,
+          onPinAnswer,
         })}
         route={route}
         session={activeSession}

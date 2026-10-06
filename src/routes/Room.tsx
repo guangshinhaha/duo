@@ -33,6 +33,7 @@ import { messagePermalink, roomHref, threadHref } from "../workspace/links.js";
 import { firstLinkOf } from "../workspace/linkPreview.js";
 import { readUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
+import { PinAnswerDialog } from "../components/PinAnswerDialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
 
 /**
@@ -290,6 +291,7 @@ export function Room({
   drafts = null,
   onRewrite,
   onFactCheck,
+  onPinAnswer,
 }: {
   connection: WorkspaceConnection | null;
   roomId: string;
@@ -313,6 +315,8 @@ export function Room({
   onRewrite?: (text: string, instruction: RewriteInstruction) => Promise<string>;
   /** #264: same reasoning as `onRewrite` — a plain callback, never the daemon client itself. */
   onFactCheck?: (text: string, threadContext: string | null) => Promise<{ claim: string; concern: string; sourceLabel: string } | null>;
+  /** duo#275: pins one of the owner's own messages as the exact answer to a question/topic — same reasoning as `onRewrite`/`onFactCheck`. `undefined` (no paired duo) hides the message action entirely. */
+  onPinAnswer?: (pattern: string, answerText: string) => Promise<unknown>;
 }) {
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -777,6 +781,7 @@ export function Room({
                         onReply={at === undefined ? setReplyTarget : undefined}
                         onJumpToReply={jumpToMessage}
                         onActiveChange={setRowActive}
+                        onPinAnswer={onPinAnswer}
                       />
                     </>
                   );
@@ -1120,6 +1125,7 @@ export function RoomEntry({
   onReply,
   onJumpToReply,
   onActiveChange,
+  onPinAnswer,
 }: {
   message: RoomMessage;
   /** Arrived while the room was open: it rises in. History never animates. */
@@ -1145,8 +1151,11 @@ export function RoomEntry({
    * edit half-typed.
    */
   onActiveChange?: (eventId: string, active: boolean) => void;
+  /** duo#275: "Duo: always answer this way" — plain callback, see `Room`'s own doc comment on this prop. `undefined` hides the action. */
+  onPinAnswer?: (pattern: string, answerText: string) => Promise<unknown>;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.body);
   const [busy, setBusy] = useState(false);
@@ -1167,7 +1176,7 @@ export function RoomEntry({
   const [menuOpen, setMenuOpen] = useState(false);
   const touchPrimary = useTouchPrimary();
   const own = message.senderId === connection.userId;
-  const active = editing || pickerOpen || busy || menuOpen;
+  const active = editing || pickerOpen || busy || menuOpen || pinDialogOpen;
   const toolbarVisible = active || hovering || focusWithin;
   useEffect(() => {
     onActiveChange?.(message.eventId, active);
@@ -1245,6 +1254,12 @@ export function RoomEntry({
         ]
       : []),
     ...(own && !message.redacted ? [{ key: "delete", label: "Delete", disabled: busy, onClick: () => onDelete(message) }] : []),
+    // duo#275: pinning what the owner already sent — never a pending/failed
+    // echo (nothing stable to quote yet), never a share (there is no exact
+    // wording to pin), never a redacted row (the words are gone).
+    ...(own && !message.redacted && !message.pending && !message.failed && message.file === undefined && onPinAnswer
+      ? [{ key: "pin-answer", label: "Duo: always answer this way", disabled: busy, testId: "pin-answer-action", onClick: () => setPinDialogOpen(true) }]
+      : []),
   ];
 
   const messageBody = (
@@ -1418,6 +1433,21 @@ export function RoomEntry({
         <p className="type-body text-[var(--refused)]" data-testid="room-message-error">
           {error}
         </p>
+      )}
+      {onPinAnswer && (
+        <PinAnswerDialog
+          answerText={message.body}
+          // Prefilled from the question this message replied to, when
+          // there was one and this device's own copy of the conversation
+          // still holds it — otherwise blank, and the owner names the
+          // topic themselves.
+          defaultPattern={
+            message.replyToEventId ? (conversation.find((candidate) => candidate.eventId === message.replyToEventId)?.body ?? "") : ""
+          }
+          onOpenChange={setPinDialogOpen}
+          onPin={onPinAnswer}
+          open={pinDialogOpen}
+        />
       )}
     </div>
   );

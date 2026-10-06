@@ -67,6 +67,9 @@ function stubDaemon(candidates: CorrectionCandidate[]) {
     if (path === "/mirror/refusals") {
       return Promise.resolve(new Response(JSON.stringify({ decided: true, refusals: [] }), { status: 200 }));
     }
+    if (path === "/mirror/pinned-answers") {
+      return Promise.resolve(new Response(JSON.stringify({ pinnedAnswers: [] }), { status: 200 }));
+    }
     if (path === "/review") {
       counts.review += 1;
       return Promise.resolve(new Response(JSON.stringify(pending()), { status: 200 }));

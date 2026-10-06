@@ -18,12 +18,16 @@ import { MutationError } from "./MutationError.js";
  * tabs, not a second undo bolted onto every draft that ever cited it.
  *
  * Renders nothing for an `"attachment"` source: it names no persisted rule
- * or record this route can act on.
+ * or record this route can act on. Renders nothing for a `"pinned"` source
+ * either (duo#275): unpinning is a Rules-tab action (Pinned answers), the
+ * same "removal lives where the owner reviews the whole list" reasoning
+ * that already keeps rule rejection and evidence exclusion out of a
+ * one-off inline control here.
  */
 export function SourceRemoveButton({ api, source }: { api: DuoApiConfig; source: DraftSource }) {
   const ruleAction = useRuleAction(api);
   const excludeEvidence = useExcludeEvidence(api);
-  if (source.kind === "attachment") {
+  if (source.kind === "attachment" || source.kind === "pinned") {
     return null;
   }
   const isRule = source.kind === "rule";
