@@ -68,6 +68,23 @@ export interface ExcludedEvidence {
 }
 
 /**
+ * `GET /knowledge/sources` (duo#278): every source the corpus has records
+ * under, or had before the owner excluded it — the Privacy settings
+ * page's per-source switch, one level up from `ExcludedEvidence`'s
+ * per-record undo. `source` is the daemon's own string ("claude-export",
+ * "paste", "connector"), rendered verbatim, same discipline as
+ * `DuoKnowledge["records"]["bySource"]`'s keys — this client keeps no
+ * registry to translate them through. `excludedAt` is `null` exactly when
+ * `excluded` is `false`.
+ */
+export interface SourceControl {
+  readonly source: string;
+  readonly recordCount: number;
+  readonly excluded: boolean;
+  readonly excludedAt: string | null;
+}
+
+/**
  * `GET /workspace/rooms/:roomId/off-the-record` (duo#274): the owner's
  * "don't learn from this conversation" marker for one room. `decidedAt` is
  * `null` exactly when `offTheRecord` is `false`. `POST` to mark it also

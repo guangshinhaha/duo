@@ -56,6 +56,7 @@ import type {
   RoomOffTheRecord,
   RewriteInstruction,
   RewriteResult,
+  SourceControl,
   EscalationUrgencyRate,
   EmbedJobStatus,
   GridRow,
@@ -192,6 +193,10 @@ export const queryKeys = {
   // exclusion is made or undone, so invalidating one must never imply the
   // other reads stale.
   excludedEvidence: ["knowledge", "evidence", "excluded"] as const,
+  // duo#278: the Privacy settings page's per-source switch, under the
+  // ["knowledge"] root so a Knows-tab refresh of bySource and this stay
+  // conceptually together even though they're separate queries.
+  sourceControls: ["knowledge", "sources"] as const,
   // duo#274: keyed by room, so marking one conversation off the record
   // never invalidates another's read.
   roomOffTheRecord: (roomId: string) => ["workspace", "rooms", roomId, "off-the-record"] as const,
@@ -1037,6 +1042,48 @@ export function useRestoreEvidence(api: DuoApiConfig) {
       apiRequest<{ excluded: false }>(api, `/knowledge/evidence/${encodeURIComponent(recordId)}/restore`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.excludedEvidence });
+    },
+  });
+}
+
+/**
+ * duo#278: the Privacy settings page's per-source switch — `GET
+ * /knowledge/sources`, every source the corpus has records under (or had,
+ * before the owner excluded it), with a count and whether it's currently
+ * excluded. Read-only; the two mutations below are what writes it.
+ */
+export function useSourceControls(api: DuoApiConfig) {
+  return useQuery({
+    queryKey: queryKeys.sourceControls,
+    queryFn: () => apiRequest<{ sources: SourceControl[] }>(api, "/knowledge/sources"),
+  });
+}
+
+/**
+ * `POST /knowledge/sources/:source/exclude` (duo#278): turning a whole
+ * source off — the owner's "stop using my Claude export" rather than one
+ * bad record at a time (`useExcludeEvidence`, above). Idempotent on the
+ * daemon's side, and reversible from the same screen (`useRestoreSource`).
+ */
+export function useExcludeSource(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ source }: { source: string }) =>
+      apiRequest<{ excluded: true }>(api, `/knowledge/sources/${encodeURIComponent(source)}/exclude`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sourceControls });
+    },
+  });
+}
+
+/** `POST /knowledge/sources/:source/restore` (duo#278) — the Privacy page's undo for `useExcludeSource`. */
+export function useRestoreSource(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ source }: { source: string }) =>
+      apiRequest<{ excluded: false }>(api, `/knowledge/sources/${encodeURIComponent(source)}/restore`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sourceControls });
     },
   });
 }

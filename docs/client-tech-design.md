@@ -153,6 +153,9 @@ domain types.
 | `POST` | `/knowledge/evidence/:recordId/exclude` | `{ excluded: true }` — a retrieved past exchange the owner removed inline from a draft's or sent answer's Used list; idempotent, and stops the record being cited in any future draft without touching the draft already shown (duo#272, digital-duo#288) | `drafting/evidence-exclusions` |
 | `POST` | `/knowledge/evidence/:recordId/restore` | `{ excluded: false }` — undoes an exclusion, same idempotent shape as a rule's approve/reject; offered from the Knows tab's "Removed from citation" (duo#272, digital-duo#288) | `drafting/evidence-exclusions` |
 | `GET` | `/knowledge/evidence/excluded` | `{ excluded: ExcludedEvidence[] }` — every exclusion, newest first; each row's `label` is the record's own text truncated, or `null` once the record itself is gone (the exclusion still holds) (duo#272, digital-duo#288) | `drafting/evidence-exclusions` |
+| `GET` | `/knowledge/sources` | `{ sources: SourceControl[] }` — every source the corpus has records under, or had before the owner excluded it, each with a record count and whether it's currently excluded; the Privacy settings page's per-source switch (duo#278, digital-duo#278) | `drafting/source-exclusions` |
+| `POST` | `/knowledge/sources/:source/exclude` | `{ excluded: true }` — turns a whole source off: stops every record under it being cited in any future draft, without deleting a single record; idempotent, reversible (duo#278, digital-duo#278) | `drafting/source-exclusions` |
+| `POST` | `/knowledge/sources/:source/restore` | `{ excluded: false }` — undoes a source exclusion, same idempotent shape as the evidence-exclusion routes above (duo#278, digital-duo#278) | `drafting/source-exclusions` |
 | `GET` | `/mirror/rules` | `RuleReviewListing` | `derivation/rule-review` |
 | `GET` | `/mirror/rules/:id` | `RuleWithEvidence` — the rule with the supporting evidence exchanges behind it | `derivation/rule-review` |
 | `POST` | `/mirror/rules/:id/:action` | `Rule` | `derivation/rule-review` |
@@ -161,6 +164,9 @@ domain types.
 | `POST` | `/mirror/pinned-answers` | `PinnedAnswer` — pins a message as the exact answer to a question/topic `pattern`; `sourceLabel` optional (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
 | `POST` | `/mirror/pinned-answers/:id/edit` | `PinnedAnswer` — edits `pattern` and/or `answerText` in place; 404 for an unknown id (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
 | `DELETE` | `/mirror/pinned-answers/:id` | `{ deleted: true }` — unpins; idempotent, a 200 even for an id already gone (duo#275, digital-duo duo#275) | `trust/pinned-answers` |
+| `GET` | `/workspace/rooms/:roomId/off-the-record` | `RoomOffTheRecord` — whether this room is currently marked "don't learn from this conversation" (duo#274) | `workspace/off-the-record` |
+| `POST` | `/workspace/rooms/:roomId/off-the-record` | `RoomOffTheRecord` — marks the room off the record and purges what it already taught (duo#274) | `workspace/off-the-record` |
+| `DELETE` | `/workspace/rooms/:roomId/off-the-record` | `RoomOffTheRecord & { wasOn: boolean }` — lifts the marker; nothing already purged is un-purged (duo#274) | `workspace/off-the-record` |
 
 The nine rows below (#269's never-answer writes and suggestion, and #270's away/topics routes) were proposed-but-unbuilt when duo PR #339 shipped the UI against them; digital-duo#287 (PR #293) has since landed them for real — confirmed against `origin/main`'s `src/serve/server.ts`. #269's classification ceiling has no corresponding route on purpose — see `profile/Ceiling.tsx`: digital-duo#48 makes the ceiling policy-set, not owner-set, so there is nothing for this client to read or write for it.
 

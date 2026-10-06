@@ -47,6 +47,7 @@ export const SETTINGS_SECTIONS = [
   { id: "appearance", label: "Appearance", about: "Light or dark, and the keyboard shortcuts.", needsDuo: false },
   { id: "sending", label: "Sending", about: "Time to undo a Send, and the working hours Send later uses.", needsDuo: false },
   { id: "profile", label: "Profile", about: "Your own name and picture in this workspace.", needsDuo: false },
+  { id: "privacy", label: "Privacy & data", about: "Where your data goes, in plain words, and a switch for each source.", needsDuo: true },
   { id: "devices", label: "Devices", about: "The devices that can reach your duo. Pair another, or cut one off.", needsDuo: true },
   { id: "links", label: "Ask links", about: "Links that let a colleague ask your duo something.", needsDuo: true },
   { id: "claude", label: "Connect to Claude", about: "Use your duo from claude.ai.", needsDuo: true },
