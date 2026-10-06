@@ -69,6 +69,8 @@ vi.mock("matrix-js-sdk", () => ({
 
 import { ClientEvent, createClient, EventStatus, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent } from "matrix-js-sdk";
 import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
+import { enqueuePendingMessage, outboxKeyOf, pendingMessagesInOrder } from "../src/workspace/outbox.js";
+import { workspaceCacheName } from "../src/workspace/cache.js";
 import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
 
 const SESSION = {
@@ -179,6 +181,7 @@ type FakeClient = MatrixClient & {
   getRooms: ReturnType<typeof vi.fn>;
   getVisibleRooms: ReturnType<typeof vi.fn>;
   getRoom: ReturnType<typeof vi.fn>;
+  makeTxnId: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   login: ReturnType<typeof vi.fn>;
   getAccountData: ReturnType<typeof vi.fn>;
@@ -221,6 +224,11 @@ type FakeClient = MatrixClient & {
 function fakeClient(
   over: { rooms?: Room[]; directRoomIds?: string[]; mutedRoomIds?: string[] } = {},
 ): FakeClient {
+  // #289: a distinct txnId per send, the same shape the real SDK's own
+  // `makeTxnId()` promises (a fresh value each call) — nothing here needs
+  // it to look like the real format, only to be stable for one call and
+  // different from the last.
+  let txnSeq = 0;
   const client = {
     userId: SESSION.userId,
     getUserId: () => SESSION.userId,
@@ -232,6 +240,7 @@ function fakeClient(
     getRooms: vi.fn(() => over.rooms ?? [fakeRoom()]),
     getVisibleRooms: vi.fn(() => over.rooms ?? [fakeRoom()]),
     getRoom: vi.fn(() => over.rooms?.[0] ?? fakeRoom()),
+    makeTxnId: vi.fn(() => `m${++txnSeq}.local`),
     sendMessage: vi.fn(() => Promise.resolve()),
     login: vi.fn(() => Promise.resolve({ access_token: "syt_workspace_token", user_id: "@ana:workspace.example", device_id: "YGBNAUIOMK" })),
     getAccountData: vi.fn((eventType: string) =>
@@ -435,6 +444,11 @@ async function connectPrepared(client: FakeClient) {
 
 beforeEach(() => {
   vi.mocked(createClient).mockReset();
+  // #289: `send()` now writes to `localStorage` (the outbox) before every
+  // call to `client.sendMessage` — cleared per test so a queued-but-not-
+  // yet-dequeued entry from one test's fixture can never leak into the
+  // next test's reading of it.
+  localStorage.clear();
 });
 
 describe("the seam's persistence contract (#62 AC4)", () => {
@@ -710,13 +724,20 @@ describe("the projection from Matrix events to room messages", () => {
     // #216: every text send now also carries a markdown-derived
     // formatted_body, mentions or not — a plain sentence is still its own
     // (trivial) formatting.
-    expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
-      msgtype: MsgType.Text,
-      body: "thanks all",
-      format: "org.matrix.custom.html",
-      formatted_body: "<p>thanks all</p>\n",
-      "m.mentions": { user_ids: [] },
-    });
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      "!project-x:workspace.example",
+      {
+        msgtype: MsgType.Text,
+        body: "thanks all",
+        format: "org.matrix.custom.html",
+        formatted_body: "<p>thanks all</p>\n",
+        "m.mentions": { user_ids: [] },
+      },
+      // #289: this seam's own txnId (`client.makeTxnId()`) — what lets a
+      // queued, unsent copy of this send be addressed by the same id the
+      // pending event it becomes carries.
+      expect.any(String),
+    );
 
     const arrivals: string[] = [];
     connection.subscribe((roomId) => arrivals.push(roomId));
@@ -801,18 +822,22 @@ describe("the projection from Matrix events to room messages", () => {
       { userId: "@duo-carol:workspace.example", label: "The Refund Bot" },
     ]);
 
-    expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
-      msgtype: MsgType.Text,
-      body: "@carol's duo what's our refund policy?",
-      format: "org.matrix.custom.html",
-      // A duo's anchor text is the grammar's — "@carol's duo" from
-      // @duo-carol — never the caller's claim, so every reader's pill
-      // names the duo, not a name the sender chose. #216: wrapped in a
-      // paragraph and its apostrophe entity-encoded — markdown's own doing,
-      // on top of the anchor the mention wire always built.
-      formatted_body: "<p><a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol&#39;s duo</a> what&#39;s our refund policy?</p>\n",
-      "m.mentions": { user_ids: ["@duo-carol:workspace.example"] },
-    });
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      "!project-x:workspace.example",
+      {
+        msgtype: MsgType.Text,
+        body: "@carol's duo what's our refund policy?",
+        format: "org.matrix.custom.html",
+        // A duo's anchor text is the grammar's — "@carol's duo" from
+        // @duo-carol — never the caller's claim, so every reader's pill
+        // names the duo, not a name the sender chose. #216: wrapped in a
+        // paragraph and its apostrophe entity-encoded — markdown's own doing,
+        // on top of the anchor the mention wire always built.
+        formatted_body: "<p><a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol&#39;s duo</a> what&#39;s our refund policy?</p>\n",
+        "m.mentions": { user_ids: ["@duo-carol:workspace.example"] },
+      },
+      expect.any(String),
+    );
     // The mention-less half of the wire contract is pinned by the send
     // above: m.mentions always rides, empty when nothing is addressed.
   });
@@ -832,16 +857,20 @@ describe("the pills half of the mention wire (#65)", () => {
       { userId: "@carol:workspace.example", label: "Carol" },
     ]);
 
-    expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
-      msgtype: MsgType.Text,
-      body: "@Carol, @carol's duo — what's our refund policy?",
-      format: "org.matrix.custom.html",
-      // #216: same paragraph wrap and apostrophe-encoding as above.
-      formatted_body:
-        '<p><a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>, ' +
-        "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol&#39;s duo</a> — what&#39;s our refund policy?</p>\n",
-      "m.mentions": { user_ids: ["@carol:workspace.example", "@duo-carol:workspace.example"] },
-    });
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      "!project-x:workspace.example",
+      {
+        msgtype: MsgType.Text,
+        body: "@Carol, @carol's duo — what's our refund policy?",
+        format: "org.matrix.custom.html",
+        // #216: same paragraph wrap and apostrophe-encoding as above.
+        formatted_body:
+          '<p><a href="https://matrix.to/#/@carol:workspace.example">@Carol</a>, ' +
+          "<a href=\"https://matrix.to/#/@duo-carol:workspace.example\">@carol&#39;s duo</a> — what&#39;s our refund policy?</p>\n",
+        "m.mentions": { user_ids: ["@carol:workspace.example", "@duo-carol:workspace.example"] },
+      },
+      expect.any(String),
+    );
   });
 
   it("projects formatted_body anchors into parts — a duo's label structural even when the sender lied, a mismatch plain", async () => {
@@ -1021,14 +1050,18 @@ describe("#215 — a reply outside a thread", () => {
 
     await connection.send("!project-x:workspace.example", "yes, 30 days", [], "$1000");
 
-    expect(client.sendMessage).toHaveBeenCalledWith("!project-x:workspace.example", {
-      msgtype: MsgType.Text,
-      body: "yes, 30 days",
-      format: "org.matrix.custom.html",
-      formatted_body: "<p>yes, 30 days</p>\n",
-      "m.mentions": { user_ids: [] },
-      "m.relates_to": { "m.in_reply_to": { event_id: "$1000" } },
-    });
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      "!project-x:workspace.example",
+      {
+        msgtype: MsgType.Text,
+        body: "yes, 30 days",
+        format: "org.matrix.custom.html",
+        formatted_body: "<p>yes, 30 days</p>\n",
+        "m.mentions": { user_ids: [] },
+        "m.relates_to": { "m.in_reply_to": { event_id: "$1000" } },
+      },
+      expect.any(String),
+    );
   });
 
   it("a reply carries no relation at all when no target is given — the ordinary send stays ordinary", async () => {
@@ -2424,11 +2457,12 @@ describe("the timeline projection the message surface reads (#64)", () => {
  * this client invents.
  */
 describe("the local-echo projection (#209)", () => {
-  /** A pending event the way matrix-js-sdk's own local echo shapes one: a temporary `~room:txn` id and a live `status`. */
-  function pendingEvent(shape: { id: string; sender: string; body: string; status: string; ts?: number }): MatrixEvent {
+  /** A pending event the way matrix-js-sdk's own local echo shapes one: a temporary `~room:txn` id, a live `status`, and (#289) the txnId `client.makeTxnId()` minted for it — undefined unless a test needs to pin the outbox record it maps to. */
+  function pendingEvent(shape: { id: string; sender: string; body: string; status: string; ts?: number; txnId?: string }): MatrixEvent {
     return {
       ...fakeEvent({ type: "m.room.message", sender: shape.sender, msgtype: "m.text", body: shape.body, ts: shape.ts ?? 9_000_000 }),
       getId: () => shape.id,
+      getTxnId: () => shape.txnId,
       status: shape.status,
     } as unknown as MatrixEvent;
   }
@@ -2552,6 +2586,66 @@ describe("the local-echo projection (#209)", () => {
 
     connection.cancel("!project-x:workspace.example", "~!project-x:workspace.example:txn5");
     expect(client.cancelPendingEvent).toHaveBeenCalledWith(pending);
+  });
+
+  it("retry dequeues the outbox record once the SAME send is confirmed — no duplicate on the next launch", async () => {
+    const pending = pendingEvent({
+      id: "~!project-x:workspace.example:txn9",
+      sender: "@ana:workspace.example",
+      body: "offline",
+      status: EventStatus.NOT_SENT,
+      txnId: "txn9",
+    });
+    const room = summaryRoom({
+      roomId: "!project-x:workspace.example",
+      name: "project-x",
+      joinRule: "invite",
+      members: [{ userId: "@ana:workspace.example", name: "ana" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+      pendingEvents: [pending],
+    });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    // Queued as though an earlier `send()` attempt put it here — the same
+    // key a pending event's `getTxnId()` of "txn9" resolves to.
+    await enqueuePendingMessage(SESSION, { localId: outboxKeyOf("txn9"), roomId: "!project-x:workspace.example", body: "offline", mentions: [], replyToEventId: null });
+
+    await connection.retry("!project-x:workspace.example", "~!project-x:workspace.example:txn9");
+
+    expect(await pendingMessagesInOrder(SESSION)).toEqual([]);
+  });
+
+  it("cancel dequeues the outbox record too — a member's own 'forget it' must not resend on the next launch", async () => {
+    const pending = pendingEvent({
+      id: "~!project-x:workspace.example:txn10",
+      sender: "@ana:workspace.example",
+      body: "offline",
+      status: EventStatus.NOT_SENT,
+      txnId: "txn10",
+    });
+    const room = summaryRoom({
+      roomId: "!project-x:workspace.example",
+      name: "project-x",
+      joinRule: "invite",
+      members: [{ userId: "@ana:workspace.example", name: "ana" }],
+      notificationCount: 0,
+      highlightCount: 0,
+      events: [],
+      pendingEvents: [pending],
+    });
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    await enqueuePendingMessage(SESSION, { localId: outboxKeyOf("txn10"), roomId: "!project-x:workspace.example", body: "offline", mentions: [], replyToEventId: null });
+
+    // `cancel` stays synchronous (its own contract) and fire-and-forgets
+    // the dequeue, so the write lands a tick or two after this call returns.
+    connection.cancel("!project-x:workspace.example", "~!project-x:workspace.example:txn10");
+
+    await vi.waitFor(async () => expect(await pendingMessagesInOrder(SESSION)).toEqual([]));
   });
 
   it("subscribe fires on this device's own local-echo status changes too — room news, no arrival", async () => {
@@ -3365,6 +3459,105 @@ describe("the profile wire (#224)", () => {
     // A connection drop between the upload and the account write is said as one, not a stack trace.
     client.setAvatarUrl.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     await expect(connection.setAvatarUrl(staged)).rejects.toThrow("couldn't reach the workspace");
+  });
+});
+
+/**
+ * #289: matrix-js-sdk's own pending-event queue (#209) lives in memory
+ * only — confirmed by the persistence contract above (no store, no session
+ * store, no web storage at the SDK layer). A message still `SENDING`/
+ * `NOT_SENT` when the page reloads is gone from there entirely, which is
+ * the actual gap this issue closes: a device-local record
+ * (`src/workspace/outbox.ts`), written before the homeserver is even
+ * asked and replayed, in order, the next time `connect()` succeeds.
+ */
+describe("#289 — a queued send survives a reload", () => {
+  it("queues the send before the homeserver answers, and dequeues it once sent", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    let resolveSend: () => void = () => undefined;
+    client.sendMessage.mockReturnValueOnce(new Promise<void>((resolve) => (resolveSend = resolve)));
+
+    const sent = connection.send("!project-x:workspace.example", "hold on");
+    // Still in flight: the record is already there, exactly what a reload
+    // landing right now would need to resend it. `send()` awaits the
+    // enqueue before even starting the request, so this is never a race.
+    await vi.waitFor(async () =>
+      expect(await pendingMessagesInOrder(SESSION)).toEqual([
+        expect.objectContaining({ roomId: "!project-x:workspace.example", body: "hold on", replyToEventId: null }),
+      ]),
+    );
+
+    resolveSend();
+    await sent;
+
+    // Confirmed: nothing left to resend, and nothing to duplicate on the next launch.
+    expect(await pendingMessagesInOrder(SESSION)).toEqual([]);
+  });
+
+  it("a send that fails (offline) stays queued — ready for the next launch, not just a failed row for this one", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    client.sendMessage.mockRejectedValueOnce(new Error("NetworkError"));
+
+    await expect(connection.send("!project-x:workspace.example", "offline words")).rejects.toThrow("NetworkError");
+
+    expect(await pendingMessagesInOrder(SESSION)).toEqual([
+      expect.objectContaining({ roomId: "!project-x:workspace.example", body: "offline words" }),
+    ]);
+  });
+
+  it("replays everything queued from a previous session once connect() succeeds, oldest first", async () => {
+    // Written to storage out of chronological order on purpose — replay
+    // must sort by composedAt, not by storage order. Written directly
+    // (matching outbox.ts's own key, `storageKeyFor`) rather than through
+    // `enqueuePendingMessage`, which always stamps `Date.now()` and so
+    // can't itself produce two entries out of chronological order.
+    localStorage.setItem(
+      `duo.workspace-outbox|${workspaceCacheName(SESSION)}`,
+      JSON.stringify([
+        { localId: "outbox:old-2", roomId: "!project-x:workspace.example", body: "second", mentions: [], replyToEventId: null, composedAt: 2_000 },
+        { localId: "outbox:old-1", roomId: "!project-x:workspace.example", body: "first", mentions: [], replyToEventId: null, composedAt: 1_000 },
+      ]),
+    );
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+
+    await connectPrepared(client);
+
+    await vi.waitFor(() => expect(client.sendMessage).toHaveBeenCalledTimes(2));
+    const bodies = client.sendMessage.mock.calls.map(([, content]) => (content as { body: string }).body);
+    expect(bodies).toEqual(["first", "second"]);
+    // Both confirmed (the fake resolves every send) — nothing left queued.
+    await vi.waitFor(async () => expect(await pendingMessagesInOrder(SESSION)).toEqual([]));
+  });
+
+  it("a message that already sent before the reload is never replayed — no duplicate", async () => {
+    // Nothing queued: the previous session's `send()` dequeued it the
+    // moment the homeserver confirmed it, before the reload ever happened.
+    expect(await pendingMessagesInOrder(SESSION)).toEqual([]);
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+
+    await connectPrepared(client);
+
+    expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("a room this account can no longer reach is dropped from the outbox rather than retried forever", async () => {
+    await enqueuePendingMessage(SESSION, { localId: "outbox:gone-1", roomId: "!left:workspace.example", body: "anyone there?", mentions: [], replyToEventId: null });
+    const client = fakeClient();
+    // This account isn't (or is no longer) in the queued room at all —
+    // nothing for a resend to land into.
+    client.getRoom.mockReturnValue(undefined as unknown as Room);
+    vi.mocked(createClient).mockReturnValue(client);
+
+    await connectPrepared(client);
+
+    await vi.waitFor(async () => expect(await pendingMessagesInOrder(SESSION)).toEqual([]));
+    expect(client.sendMessage).not.toHaveBeenCalled();
   });
 });
 
