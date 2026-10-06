@@ -1,5 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RoomEntry } from "../src/routes/Room.js";
 import type { RoomMessage, WorkspaceConnection } from "../src/workspace/matrix.js";
 
@@ -402,5 +402,79 @@ describe("duo#275 — \"Duo: always answer this way\" (the message action half o
 
     await screen.findByTestId("pin-answer-error");
     expect(screen.queryByTestId("pin-answer-done")).toBeNull();
+  });
+});
+
+describe("#291 — react with any emoji, not just six", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("the quick six's \"+\" opens a full picker, and picking an emoji from it reacts with exactly that emoji", async () => {
+    const connection = fakeConnection();
+    render(<RoomEntry connection={connection} message={messageFor({ eventId: "$30", senderId: OTHER, body: "well said" })} {...baseProps()} />);
+    const row = screen.getByTestId("room-message");
+    fireEvent.click(within(row).getByRole("button", { name: "React" }));
+    fireEvent.click(within(row).getByTestId("reaction-picker-more"));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByTestId("emoji-picker-search"), { target: { value: "party popper" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "party popper" }));
+
+    expect(connection.react).toHaveBeenCalledWith("!project-x:workspace.example", "$30", "🎉");
+    // Both the full picker and the quick six close behind the pick.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(within(row).queryByTestId("reaction-picker")).toBeNull();
+    // Let `run()`'s already-resolved promise settle inside `act` before the test ends.
+    await waitFor(() => expect(within(row).getByRole("button", { name: "React" })).not.toBeDisabled());
+  });
+
+  it("a pick from the full picker becomes next time's \"recently used\", most recent first", async () => {
+    const connection = fakeConnection();
+    render(<RoomEntry connection={connection} message={messageFor({ eventId: "$31", senderId: OTHER, body: "again" })} {...baseProps()} />);
+    const row = screen.getByTestId("room-message");
+    fireEvent.click(within(row).getByRole("button", { name: "React" }));
+    fireEvent.click(within(row).getByTestId("reaction-picker-more"));
+    let dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByTestId("emoji-picker-search"), { target: { value: "fire" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "fire" }));
+
+    // The pick's `run()` disables "React" until its (already-resolved) promise
+    // settles — wait for that before asking the row to open again.
+    await waitFor(() => expect(within(row).getByRole("button", { name: "React" })).not.toBeDisabled());
+
+    // Reopen: the fire pick now leads the recents row, with no search typed.
+    fireEvent.click(within(row).getByRole("button", { name: "React" }));
+    fireEvent.click(within(row).getByTestId("reaction-picker-more"));
+    dialog = await screen.findByRole("dialog");
+    const recents = within(dialog).getByTestId("emoji-picker-recents");
+    expect(within(recents).getAllByTestId("emoji-picker-option")[0]?.textContent).toBe("🔥");
+  });
+
+  it("is a popover on a pointer device and a bottom sheet on touch — the same `sheet` rule every other phone dialog in this app follows", async () => {
+    const connection = fakeConnection();
+    const { unmount } = render(
+      <RoomEntry connection={connection} message={messageFor({ eventId: "$32", senderId: OTHER, body: "sheet or popover" })} {...baseProps()} />,
+    );
+    const row = screen.getByTestId("room-message");
+    fireEvent.click(within(row).getByRole("button", { name: "React" }));
+    fireEvent.click(within(row).getByTestId("reaction-picker-more"));
+    let dialog = await screen.findByRole("dialog");
+    expect(dialog.className).not.toContain("motion-sheet");
+    unmount();
+    cleanup();
+
+    stubTouchPrimary();
+    render(<RoomEntry connection={connection} message={messageFor({ eventId: "$33", senderId: OTHER, body: "sheet or popover" })} {...baseProps()} />);
+    const touchRow = screen.getByTestId("room-message");
+    fireEvent.keyDown(within(touchRow).getByRole("button", { name: "Message actions" }), { key: "Enter" });
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "React" }));
+    fireEvent.click(within(touchRow).getByTestId("reaction-picker-more"));
+    dialog = await screen.findByRole("dialog");
+    expect(dialog.className).toContain("motion-sheet");
   });
 });
