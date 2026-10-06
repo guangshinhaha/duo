@@ -32,6 +32,8 @@ import type {
   AskLinkRow,
   AuditEntry,
   ClaudeImportSummary,
+  CorrectPublicAnswerResult,
+  PublicAnswerLogEntry,
   DeriveJobStatus,
   GrantOutcome,
   MintedAskLink,
@@ -136,6 +138,8 @@ export const queryKeys = {
   topics: ["topics"] as const,
   trustGrid: ["trust", "grid"] as const,
   audit: ["audit"] as const,
+  // #267: every answer given through an ask link — a correction invalidates this, not ["audit"] (that's the CLI per-asker log, a different table).
+  mirrorPublicAnswers: ["mirror", "public-answers"] as const,
   // #52: the staged irreversible steps awaiting the owner's confirmation.
   t4Pending: ["actions", "t4", "pending"] as const,
   knowledge: ["knowledge"] as const,
@@ -543,6 +547,42 @@ export function useTrustGrid(api: DuoApiConfig) {
 
 export function useAudit(api: DuoApiConfig) {
   return useQuery({ queryKey: queryKeys.audit, queryFn: () => apiRequest<AuditEntry[]>(api, "/audit") });
+}
+
+/**
+ * #267: every answer your duo gave a colleague through an ask link — the
+ * other half of "everything your duo said on your behalf," alongside
+ * `useAudit`'s CLI per-asker log. Each entry already carries its sources
+ * (the daemon resolves them from the T1 draft on read), so the Activity
+ * tab needs no second request per row.
+ */
+export function usePublicAnswers(api: DuoApiConfig) {
+  return useQuery({
+    queryKey: queryKeys.mirrorPublicAnswers,
+    queryFn: () => apiRequest<PublicAnswerLogEntry[]>(api, "/mirror/public-answers"),
+  });
+}
+
+/**
+ * #267: "That was wrong" — posts a correction linked to the original
+ * exchange (in its own thread, when one still exists) and drops that
+ * topic's T0 autonomy immediately (`docs/concept.md` §6: "demote fast").
+ * Invalidates the public-answers log (the correction is a new row there)
+ * and the trust grid (the demotion moved a cell).
+ */
+export function useCorrectPublicAnswer(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ entryId, correctedText, threadStillExists }: { entryId: string; correctedText: string; threadStillExists?: boolean }) =>
+      apiRequest<CorrectPublicAnswerResult>(api, `/mirror/public-answers/${encodeURIComponent(entryId)}/correct`, {
+        method: "POST",
+        body: JSON.stringify({ correctedText, threadStillExists }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.mirrorPublicAnswers });
+      queryClient.invalidateQueries({ queryKey: queryKeys.trustGrid });
+    },
+  });
 }
 
 /**
