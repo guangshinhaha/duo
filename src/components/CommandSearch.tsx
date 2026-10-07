@@ -8,7 +8,8 @@ import { PersonProfile } from "./PersonProfile.js";
 import { directoryEntryLabel, duoOwnerUserIdOf, isDuoUserId } from "../workspace/identity.js";
 import { roomHref } from "../workspace/links.js";
 import { EMPTY_SEARCH_FILTERS, parseSearchQuery, type SearchFilters } from "../workspace/searchQuery.js";
-import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
+import type { NotificationMode, RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
+import { readRecentActionIds, recordRecentAction } from "../commandPaletteRecents.js";
 
 /** How long to wait, after the member stops typing, before asking the directory — long enough that every keystroke doesn't cost a request, short enough to still feel instant. */
 const PEOPLE_DEBOUNCE_MS = 150;
@@ -16,8 +17,19 @@ const PEOPLE_DEBOUNCE_MS = 150;
 /** What the one search box found, by its own id — a person, else a duo's id reads a conversation's recipient the same door. */
 type PersonHit = { readonly userId: string; readonly name: string };
 
-/** One row of the listbox: a conversation, a person, or the hand-off to the full message search. */
-type Item = { readonly kind: "room"; readonly room: RoomSummary } | { readonly kind: "person"; readonly person: PersonHit } | { readonly kind: "messages" };
+/** duo#302: one thing the palette can DO, not find — a global verb ("New conversation") or one scoped to whichever conversation is open ("Mark … as read"). `run` is the whole dispatch: every action reuses an existing callback (`ChatList.tsx`'s own `markRead`/`setMode`, the same functions its "more" panel already calls), never a parallel mechanism. */
+export interface PaletteAction {
+  readonly id: string;
+  readonly label: string;
+  readonly run: () => void;
+}
+
+/** One row of the listbox: a conversation, a person, an action, or the hand-off to the full message search. */
+type Item =
+  | { readonly kind: "room"; readonly room: RoomSummary }
+  | { readonly kind: "action"; readonly action: PaletteAction }
+  | { readonly kind: "person"; readonly person: PersonHit }
+  | { readonly kind: "messages" };
 
 /**
  * #207: one search box that finds people, conversations and messages, with
@@ -38,6 +50,26 @@ type Item = { readonly kind: "room"; readonly room: RoomSummary } | { readonly k
  * A grouped combobox (WAI-ARIA listbox pattern): the input keeps focus,
  * `aria-activedescendant` says which suggestion is current, and ↑/↓/Enter/Esc
  * move and choose without a mouse.
+ *
+ * duo#302 adds a fourth section, **Actions**, between Conversations and
+ * People — things the palette DOES rather than finds: "New conversation",
+ * "Ask my duo", "Open settings" always, and (only with a conversation open)
+ * "Mark … as read"/"Mute …" for that one. Every action calls straight into
+ * a callback this app already has elsewhere (`ChatList.tsx`'s own
+ * `markRead`/`setMode`, the same functions its "more" panel buttons call) —
+ * never a second copy of that logic. Matched by a plain case-insensitive
+ * substring on the label, shown always (even with an empty query, so the
+ * palette has something to offer the moment it opens), and ordered with
+ * whatever was run most recently first (`commandPaletteRecents.ts`).
+ *
+ * Inserting a new section between two existing ones is exactly the kind of
+ * change #301/#302's own process note warns about ("a real production
+ * incident happened tonight from a shared-dispatch-path change") — the
+ * indices every section's row and every keyboard test depends on
+ * (`optionId`, `activeIndex`, "ArrowUp wraps to the last suggestion") are
+ * recomputed from each section's own length below, never hand-counted, so
+ * adding Actions shifts People's and the message hand-off's positions
+ * without changing what reaching them by keyboard or click still does.
  */
 export function CommandSearch({
   api = null,
@@ -45,6 +77,10 @@ export function CommandSearch({
   rooms,
   titleOf,
   onStartedConversation,
+  onNewConversation,
+  activeRoom = null,
+  onMarkRead,
+  onSetNotificationMode,
   children,
 }: {
   /** #262: handed straight through to the person profile this search can open — lets it read and reset that person's learned-tone adaptation. */
@@ -55,6 +91,14 @@ export function CommandSearch({
   titleOf: (room: RoomSummary) => string;
   /** A direct conversation was opened (started, or reused) from a person's suggestion or their profile — the caller navigates to it. */
   onStartedConversation: (roomId: string) => void;
+  /** duo#302: the global "New conversation" action — omitted, the action isn't offered (there's always somewhere this should come from; it's optional only so a caller with nowhere to put the dialog isn't forced to stub one). */
+  onNewConversation?: () => void;
+  /** duo#302: whichever conversation is open right now, if any — gates the conversation-scoped actions ("Mark … as read", "Mute …"); `null` (nothing open, or the caller doesn't track this) simply omits them. */
+  activeRoom?: RoomSummary | null;
+  /** duo#302: the exact function `ChatList.tsx`'s own "Mark as read" button already calls — reused, not re-implemented. */
+  onMarkRead?: (room: RoomSummary) => void;
+  /** duo#302: the exact function `ChatList.tsx`'s own notification `<select>` already calls. */
+  onSetNotificationMode?: (room: RoomSummary, mode: NotificationMode) => void;
   children: ReactNode;
 }) {
   const [query, setQuery] = useState("");
@@ -164,8 +208,64 @@ export function CommandSearch({
     [peopleMatches, directPartnerIds, ownerIdsFound],
   );
 
+  // duo#302: bumped after `recordRecentAction` so the ordering below (which
+  // reads `readRecentActionIds()` directly — there's nowhere else that
+  // state lives) recomputes once the palette has just run something,
+  // without this component owning a second copy of the recent list itself.
+  const [recentTick, setRecentTick] = useState(0);
+
+  // duo#302: the global verbs, always on offer, plus — only with a
+  // conversation open — the two this app already has a callback for.
+  // Fuzzy-ish: a plain case-insensitive substring on the label, the same
+  // matching strength `findRooms`/`searchPeople`'s own callers already
+  // accept from this box.
+  const allActions: readonly PaletteAction[] = useMemo(() => {
+    const list: PaletteAction[] = [];
+    if (onNewConversation) {
+      list.push({ id: "new-conversation", label: "New conversation", run: onNewConversation });
+    }
+    list.push({ id: "ask-my-duo", label: "Ask my duo", run: () => { window.location.hash = "#duo"; } });
+    list.push({ id: "open-settings", label: "Open settings", run: () => { window.location.hash = "#settings"; } });
+    if (activeRoom) {
+      const title = titleOf(activeRoom);
+      if (onMarkRead) {
+        list.push({ id: "mark-read", label: `Mark ${title} as read`, run: () => onMarkRead(activeRoom) });
+      }
+      if (onSetNotificationMode) {
+        list.push(
+          activeRoom.muted
+            ? { id: "unmute", label: `Unmute ${title}`, run: () => onSetNotificationMode(activeRoom, "all") }
+            : { id: "mute", label: `Mute ${title}`, run: () => onSetNotificationMode(activeRoom, "nothing") },
+        );
+      }
+    }
+    return list;
+  }, [onNewConversation, activeRoom, onMarkRead, onSetNotificationMode, titleOf]);
+
+  const filteredActions: readonly PaletteAction[] = useMemo(() => {
+    const lower = trimmed.toLowerCase();
+    const matching = lower === "" ? allActions : allActions.filter((action) => action.label.toLowerCase().includes(lower));
+    const recentIds = readRecentActionIds();
+    const byId = new Map(matching.map((action) => [action.id, action] as const));
+    const recentFirst: PaletteAction[] = [];
+    for (const id of recentIds) {
+      const action = byId.get(id);
+      if (action) {
+        recentFirst.push(action);
+        byId.delete(id);
+      }
+    }
+    return [...recentFirst, ...matching.filter((action) => byId.has(action.id))];
+    // `recentTick` isn't read — it's the deliberate signal to recompute
+    // once the palette has just run something, the same "re-derive from an
+    // outside store on a tick" shape `watchSections`'s callers use.
+  }, [allActions, trimmed, recentTick]);
+
   const items: readonly Item[] = useMemo(() => {
     const list: Item[] = roomMatches.map((room) => ({ kind: "room", room }) as const);
+    for (const action of filteredActions) {
+      list.push({ kind: "action", action });
+    }
     if (trimmed !== "") {
       for (const person of visiblePeople) {
         list.push({ kind: "person", person });
@@ -173,7 +273,7 @@ export function CommandSearch({
       list.push({ kind: "messages" });
     }
     return list;
-  }, [roomMatches, visiblePeople, trimmed]);
+  }, [roomMatches, filteredActions, visiblePeople, trimmed]);
 
   // The highlighted suggestion always lands somewhere sensible: on the
   // first row when the list just appeared or changed shape, nowhere when
@@ -196,6 +296,10 @@ export function CommandSearch({
       window.location.hash = roomHref(item.room.roomId);
     } else if (item.kind === "person") {
       setSelectedPerson(item.person);
+    } else if (item.kind === "action") {
+      item.action.run();
+      recordRecentAction(item.action.id);
+      setRecentTick((tick) => tick + 1);
     } else {
       const parsed = parseSearchQuery(trimmed);
       setMessageFilters(parsed.filters);
@@ -300,6 +404,37 @@ export function CommandSearch({
               </ul>
             </li>
           )}
+          {/* duo#302: always offered, query or not — a global verb list
+              plus (only with a conversation open) the two reused from
+              `ChatList.tsx`. Sits between Conversations and People; its own
+              length is folded into every index after it below, never
+              hand-counted. */}
+          {filteredActions.length > 0 && (
+            <li role="presentation">
+              <p className="type-provenance uppercase text-[var(--faint)]" data-testid="command-search-section-actions">
+                Actions
+              </p>
+              <ul aria-label="Actions" className="mt-1 flex flex-col gap-1" role="group">
+                {filteredActions.map((action, actionIndex) => {
+                  const index = roomMatches.length + actionIndex;
+                  return (
+                    <li
+                      aria-selected={index === activeIndex}
+                      className={`min-h-11 cursor-pointer rounded-[var(--r-sm)] px-3 py-2 type-body text-[var(--text)] ${index === activeIndex ? "bg-[var(--surface-2)]" : ""}`}
+                      data-testid="command-search-action"
+                      id={optionId(index)}
+                      key={action.id}
+                      onClick={() => activate({ kind: "action", action })}
+                      onMouseDown={keepFocus}
+                      role="option"
+                    >
+                      {action.label}
+                    </li>
+                  );
+                })}
+              </ul>
+            </li>
+          )}
           {trimmed !== "" && (visiblePeople.length > 0 || peopleLoading) && (
             <li role="presentation">
               <p className="type-provenance uppercase text-[var(--faint)]" data-testid="command-search-section-people">
@@ -307,7 +442,7 @@ export function CommandSearch({
               </p>
               <ul aria-label="People" className="mt-1 flex flex-col gap-1" role="group">
                 {visiblePeople.map((person, personIndex) => {
-                  const index = roomMatches.length + personIndex;
+                  const index = roomMatches.length + filteredActions.length + personIndex;
                   return (
                     <li
                       aria-selected={index === activeIndex}

@@ -50,6 +50,7 @@ import { mergeRegister } from "@lexical/utils";
 import { $applyFactCheckMark, $clearFactCheckMarks, FactCheckNode } from "./FactCheckNode.js";
 import { $createMentionNode, MentionNode } from "./MentionNode.js";
 import { mentionOffer, mentionTokenBeforeCaret, type MentionCandidate } from "./mentionOffer.js";
+import { slashCommandOffer, slashCommandTokenBeforeCaret, type SlashCommand } from "./slashCommandOffer.js";
 import { $composedMessage, type ComposedMessage } from "./serialize.js";
 import { enterSends } from "./enterSends.js";
 
@@ -67,6 +68,15 @@ import { enterSends } from "./enterSends.js";
  * - **Mentions** (#65/#216): an "@" opens the typeahead over the room's
  *   members — #65's own candidates and matching, now with ↑/↓/Enter/Tab as
  *   well as a click — and a pick lands as a `MentionNode` token.
+ * - **Slash commands** (duo#301): a "/" at the very start of an otherwise
+ *   empty message opens a second typeahead, over `SLASH_COMMANDS`
+ *   (`slashCommandOffer.ts`). A pick calls `onSlashCommandPick` and empties
+ *   the editor — a command is dispatched, never left behind as text, the
+ *   same way a mention pick lands a token rather than nothing. Typing a
+ *   full command and pressing Enter without ever opening the menu reaches
+ *   the same dispatch, from the host's own submit handler (`Room.tsx`),
+ *   which also owns the one case this plugin never sees: a "/"-shaped word
+ *   nobody recognises, sent as plain text only after the member confirms.
  * - **Markdown** (#216): in `markdown` mode the live shortcuts style
  *   `**bold**`, `*italic*`, `~~struck~~`, `` `code` `` and `- `/`1. ` lists
  *   as they're typed; `serialize.ts` writes the same markdown back out for
@@ -476,6 +486,80 @@ function MentionsPlugin({ candidates, menuParent }: { candidates: readonly Menti
   );
 }
 
+class SlashCommandOption extends MenuOption {
+  readonly command: SlashCommand;
+  constructor(command: SlashCommand) {
+    super(command.id);
+    this.command = command;
+  }
+}
+
+/** duo#301 on the same typeahead plugin #65 uses: the offer, its matching, and a pick calling straight out to the host rather than landing a node (a command is dispatched, not written). */
+function SlashCommandsPlugin({ menuParent, onPick }: { menuParent: HTMLElement; onPick: (command: SlashCommand) => void }) {
+  const [fragment, setFragment] = useState<string | null>(null);
+  const options = useMemo(() => (fragment === null ? [] : slashCommandOffer(fragment).map((command) => new SlashCommandOption(command))), [fragment]);
+  const triggerFn = useCallback((text: string): MenuTextMatch | null => {
+    const token = slashCommandTokenBeforeCaret(text);
+    return token === null ? null : { leadOffset: token.leadOffset, matchingString: token.fragment, replaceableString: token.token };
+  }, []);
+  const onSelectOption = useCallback(
+    (option: SlashCommandOption, _nodeToReplace: TextNode | null, closeMenu: () => void) => {
+      // The pick dispatches — it is the host's job to empty the editor
+      // (`editorRef.current.clear()`, the same call a send makes), never
+      // this plugin's: a command is dispatched whole, the opposite of a
+      // mention's pick, which keeps its token as part of the text.
+      closeMenu();
+      onPick(option.command);
+    },
+    [onPick],
+  );
+
+  return (
+    <LexicalTypeaheadMenuPlugin<SlashCommandOption>
+      commandPriority={COMMAND_PRIORITY_NORMAL}
+      anchorClassName="static! h-auto! w-auto!"
+      parent={menuParent}
+      options={options}
+      triggerFn={triggerFn}
+      onQueryChange={setFragment}
+      onSelectOption={onSelectOption}
+      menuRenderFn={(anchorElementRef, { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex }) =>
+        anchorElementRef.current && options.length > 0
+          ? createPortal(
+              <div className="mt-2 flex flex-col gap-1" data-testid="slash-command-offer">
+                {options.map((option, index) => (
+                  <button
+                    aria-selected={selectedIndex === index}
+                    className={`inline-flex min-h-11 items-center gap-2 self-start rounded-[var(--r-sm)] border bg-[var(--surface-2)] px-2 type-body ${
+                      selectedIndex === index ? "border-[var(--accent)]" : "border-[var(--edge)]"
+                    }`}
+                    data-testid="slash-command-option"
+                    id={`typeahead-item-${index}`}
+                    key={option.key}
+                    ref={option.setRefElement}
+                    role="option"
+                    tabIndex={-1}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setHighlightedIndex(index)}
+                    onClick={() => {
+                      setHighlightedIndex(index);
+                      selectOptionAndCleanUp(option);
+                    }}
+                  >
+                    <span className="type-identifier text-[var(--text)]">{option.command.command}</span>
+                    <span className="type-provenance text-[var(--muted)]">{option.command.description}</span>
+                  </button>
+                ))}
+              </div>,
+              anchorElementRef.current,
+            )
+          : null
+      }
+    />
+  );
+}
+
 export function ChatEditor({
   ariaLabel,
   placeholder,
@@ -485,6 +569,7 @@ export function ChatEditor({
   onSubmit,
   onFiles,
   mentionCandidates,
+  onSlashCommandPick,
   editorRef,
   className = "",
   testId,
@@ -502,6 +587,8 @@ export function ChatEditor({
   onFiles?: (files: File[]) => void;
   /** Who an "@" can offer (#65) — omitted, no typeahead at all. */
   mentionCandidates?: readonly MentionCandidate[];
+  /** duo#301: a "/" at the start of the message offers the slash commands — omitted, no typeahead at all (same shape as `mentionCandidates`). */
+  onSlashCommandPick?: (command: SlashCommand) => void;
   editorRef?: Ref<ChatEditorHandle>;
   className?: string;
   testId?: string;
@@ -557,6 +644,7 @@ export function ChatEditor({
       <ChangePlugin onChange={onTextChange} />
       <HandlePlugin handleRef={editorRef} />
       {mentionCandidates !== undefined && menuParent !== null && <MentionsPlugin candidates={mentionCandidates} menuParent={menuParent} />}
+      {onSlashCommandPick !== undefined && menuParent !== null && <SlashCommandsPlugin menuParent={menuParent} onPick={onSlashCommandPick} />}
     </LexicalComposer>
   );
 }

@@ -217,6 +217,78 @@ describe("#248/#65 — the mention typeahead", () => {
   });
 });
 
+describe("duo#301 — the slash-command typeahead", () => {
+  it("'/' alone offers all five commands, with their descriptions, only at the very start of the message", async () => {
+    const onSlashCommandPick = vi.fn();
+    const { field } = renderEditor({ onSlashCommandPick });
+    typeInto(field, "/");
+    const offer = await screen.findByTestId("slash-command-offer");
+    expect(offer.querySelectorAll('[data-testid="slash-command-option"]')).toHaveLength(5);
+    expect(screen.getAllByTestId("slash-command-option").map((o) => o.textContent)).toEqual([
+      "/duoOpen Your duo",
+      "/summarizeCatch up on this conversation",
+      "/laterSave words for later",
+      "/remindSave words with a reminder",
+      "/pollRun a poll — coming soon",
+    ]);
+  });
+
+  it("typing narrows to a prefix of the command's own id", async () => {
+    const { field } = renderEditor({ onSlashCommandPick: vi.fn() });
+    typeInto(field, "/su");
+    await vi.waitFor(() => expect(screen.getAllByTestId("slash-command-option").map((o) => o.textContent)).toEqual(["/summarizeCatch up on this conversation"]));
+  });
+
+  it("a '/' anywhere but the very start of the message is never offered", () => {
+    renderEditor({ onSlashCommandPick: vi.fn() });
+    typeInto(screen.getByLabelText("Message test"), "hi /du");
+    expect(screen.queryByTestId("slash-command-offer")).toBeNull();
+  });
+
+  it("a click dispatches — the offer calls onSlashCommandPick with the command, never onSubmit", async () => {
+    const onSlashCommandPick = vi.fn();
+    const { field, onSubmit } = renderEditor({ onSlashCommandPick });
+    typeInto(field, "/du");
+    fireEvent.click(await screen.findByText("Open Your duo"));
+    expect(onSlashCommandPick).toHaveBeenCalledTimes(1);
+    expect(onSlashCommandPick.mock.calls[0]![0]).toMatchObject({ id: "duo", command: "/duo" });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("slash-command-offer")).toBeNull();
+  });
+
+  it("Enter with the offer open picks instead of sending; arrows move the pick", async () => {
+    const onSlashCommandPick = vi.fn();
+    const { field, onSubmit } = renderEditor({ onSlashCommandPick });
+    typeInto(field, "/");
+    await screen.findByTestId("slash-command-offer");
+    act(() => {
+      fireEvent.keyDown(field, { key: "ArrowDown", code: "ArrowDown", keyCode: 40 });
+    });
+    pressEnter(field);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onSlashCommandPick).toHaveBeenCalledTimes(1);
+    expect(onSlashCommandPick.mock.calls[0]![0]).toMatchObject({ id: "summarize" });
+  });
+
+  it("no match, no offer — and Enter sends", () => {
+    const onSlashCommandPick = vi.fn();
+    const { field, onSubmit } = renderEditor({ onSlashCommandPick });
+    typeInto(field, "/zz");
+    expect(screen.queryByTestId("slash-command-offer")).toBeNull();
+    pressEnter(field);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSlashCommandPick).not.toHaveBeenCalled();
+  });
+
+  it("omitted entirely, '/' is just a character — no typeahead, no plugin mounted", () => {
+    const { field, onSubmit } = renderEditor();
+    typeInto(field, "/");
+    expect(screen.queryByTestId("slash-command-offer")).toBeNull();
+    pressEnter(field);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("#248/#217 — paste", () => {
   it("a pasted file goes to onFiles, never into the editor", () => {
     const { field, onFiles } = renderEditor();
