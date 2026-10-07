@@ -4087,3 +4087,94 @@ describe("the seam stays the SDK's only door", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("duo#299: Later — the account-data door", () => {
+  it("later() reads this account's own `duo.later.items`, filtering out a shape that isn't one", async () => {
+    const saved = {
+      id: "l1",
+      kind: "message",
+      roomId: "!r:workspace.example",
+      eventId: "$1",
+      senderId: "@bose:workspace.example",
+      senderName: "Bose",
+      preview: "Ship it Friday",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      remindAt: null,
+      done: false,
+      firedAt: null,
+    };
+    const client = fakeClient();
+    client.getAccountData.mockImplementation((type: string) =>
+      type === "duo.later.items" ? { getContent: () => ({ items: [saved, { not: "a later item" }] }) } : undefined,
+    );
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.later!()).toEqual([saved]);
+  });
+
+  it("later() with nothing ever saved reads as an empty list, never a throw", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.later!()).toEqual([]);
+  });
+
+  it("setLater() writes the whole set back to `duo.later.items`", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const items = [
+      {
+        id: "l1",
+        kind: "note" as const,
+        roomId: "!r:workspace.example",
+        eventId: null,
+        senderId: null,
+        senderName: null,
+        preview: "a reply I wasn't ready to send",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        remindAt: "2026-10-02T09:00:00.000Z",
+        done: false,
+        firedAt: null,
+      },
+    ];
+    await connection.setLater!(items);
+    expect(client.setAccountData).toHaveBeenCalledWith("duo.later.items", { items });
+  });
+
+  it("subscribeLater hears another device's write, and the unsubscribe stops it", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const saved = {
+      id: "l1",
+      kind: "note",
+      roomId: "!r:workspace.example",
+      eventId: null,
+      senderId: null,
+      senderName: null,
+      preview: "a reply I wasn't ready to send",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      remindAt: null,
+      done: false,
+      firedAt: null,
+    };
+    const seen: unknown[] = [];
+    const unsubscribe = connection.subscribeLater!((items) => seen.push(items));
+    const [, listener] = client.on.mock.calls.find((call) => call[0] === ClientEvent.AccountData)!;
+
+    // A write from this device, or another one syncing in — the seam reads
+    // the event's own content, not a second account-data fetch.
+    listener({ getType: () => "duo.later.items", getContent: () => ({ items: [saved] }) } as unknown as MatrixEvent);
+    // An unrelated account-data event (another feature's own type) is not news here.
+    listener({ getType: () => "m.direct", getContent: () => ({}) } as unknown as MatrixEvent);
+
+    expect(seen).toEqual([[saved]]);
+    unsubscribe();
+    expect(client.off).toHaveBeenCalledWith(ClientEvent.AccountData, listener);
+  });
+});

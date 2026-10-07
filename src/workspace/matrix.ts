@@ -292,6 +292,40 @@ export interface ChannelSummary {
 }
 
 /**
+ * duo#299: something the owner saved for later — a message someone sent (or
+ * they sent), or the words they were writing in a composer when they chose
+ * not to send them yet. Held as this account's own data
+ * (`duo.later.items`, below), the same door `duo.sidebar.sections` already
+ * stands behind, so a save made on one device — and a reminder fired, or a
+ * snooze, or marking it done — reads the same on every other. `preview` is a
+ * snapshot taken at save time, never re-fetched: a message can be edited or
+ * redacted after it's saved, and the point of Later is what the owner saw
+ * when they saved it, not whatever the room says now.
+ */
+export interface LaterItem {
+  readonly id: string;
+  /** `"message"` for something someone sent (this account included); `"note"` for unsent composer text the owner chose to save instead of sending. */
+  readonly kind: "message" | "note";
+  /** The conversation this was saved from — always present, since there is always a room the composer or the message belonged to. */
+  readonly roomId: string;
+  /** The event this is a snapshot of. Null for a `"note"`: there is no event, only the words. */
+  readonly eventId: string | null;
+  /** Who sent the saved message. Null for a `"note"` (the owner's own unsent words) and for a message from before this field existed. */
+  readonly senderId: string | null;
+  /** The sender's display name, snapshotted alongside `senderId` — rendering a raw user id where a name belongs reads as a bug, not as "unknown". Null exactly where `senderId` is. */
+  readonly senderName: string | null;
+  /** The snapshot itself — the message's body, or the composer's text, at save time. */
+  readonly preview: string;
+  readonly createdAt: string;
+  /** When to remind the owner, or null for no reminder — just a saved item sitting in the list. */
+  readonly remindAt: string | null;
+  /** The owner marked this one done — it stays in the record, filtered out of the default view. */
+  readonly done: boolean;
+  /** Set once a reminder has been shown for this item, so a second device open at the same time (or a missed poll catching up) never shows it twice. Null until it fires, and irrelevant once `remindAt` is null. */
+  readonly firedAt: string | null;
+}
+
+/**
  * #296: a folder the owner made in their own sidebar — a project, a team,
  * whatever grouping matches how they work. Held as this account's own data
  * (`duo.sidebar.sections`, below), never this device's opinion, so a folder
@@ -1053,6 +1087,29 @@ export interface WorkspaceConnection {
    * reasoning as `sendTyping`.
    */
   subscribeSections?(handler: (sections: readonly ChatSection[]) => void): () => void;
+  /**
+   * duo#299: everything the owner has saved for later, read from this
+   * account's data (`duo.later.items`) — the same record every signed-in
+   * device reads, so a save made on one device, with its reminder, shows
+   * the same way on every other. Empty where the account has never saved
+   * one. Optional, same reasoning as `sendTyping`.
+   */
+  later?(): Promise<readonly LaterItem[]>;
+  /**
+   * Replaces the whole set in one write — the same read-modify-write shape
+   * `setSections` already takes here, for the same reason: Later is edited
+   * one item at a time (saved, snoozed, marked done), rarely all at once,
+   * and the last write any device made winning is race-free enough for
+   * that.
+   */
+  setLater?(items: readonly LaterItem[]): Promise<void>;
+  /**
+   * Hears the owner's saved items change on another device — a save, a
+   * snooze, a reminder another device already fired — so nothing here
+   * needs to poll this account's data to notice one. Fires with the next
+   * read's answer, not a diff. Optional, same reasoning as `sendTyping`.
+   */
+  subscribeLater?(handler: (items: readonly LaterItem[]) => void): () => void;
   /** Stops the connection. Idempotent. */
   stop(): Promise<void>;
 }
@@ -1960,6 +2017,50 @@ function readChatSections(client: MatrixClient): readonly ChatSection[] {
   try {
     const content = client.getAccountData(CHAT_SECTIONS_ACCOUNT_DATA_TYPE)?.getContent() as { sections?: unknown } | undefined;
     return Array.isArray(content?.sections) ? content.sections.filter(isChatSection) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** duo#299: this account's own saved-for-later items — the event type under which `later()`/`setLater()` read and write `duo.later.items`, the same account-data door `duo.sidebar.sections` already stands behind. */
+const LATER_ACCOUNT_DATA_TYPE = "duo.later.items";
+
+/**
+ * One saved item, read back off the wire as defensively as every other
+ * account-data read in this seam (`isChatSection` above): a shape from
+ * before this field existed, or written by some other client entirely,
+ * reads as "not a saved item" rather than crashing the list.
+ */
+function isLaterItem(value: unknown): value is LaterItem {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const { id, kind, roomId, eventId, senderId, senderName, preview, createdAt, remindAt, done, firedAt } = value as Record<string, unknown>;
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    (kind === "message" || kind === "note") &&
+    typeof roomId === "string" &&
+    roomId.length > 0 &&
+    (eventId === null || typeof eventId === "string") &&
+    (senderId === null || typeof senderId === "string") &&
+    // #296-era rows never had `senderName` — read as "no name" rather than
+    // rejecting the whole item, the same "a shape from before this field
+    // existed reads as absent, not invalid" stance `isChatSection` takes.
+    (senderName === undefined || senderName === null || typeof senderName === "string") &&
+    typeof preview === "string" &&
+    typeof createdAt === "string" &&
+    (remindAt === null || typeof remindAt === "string") &&
+    typeof done === "boolean" &&
+    (firedAt === null || typeof firedAt === "string")
+  );
+}
+
+/** This account's saved items, as `duo.later.items` currently holds them — never thrown for a reader to catch, the same stance every other account-data read here takes. */
+function readLaterItems(client: MatrixClient): readonly LaterItem[] {
+  try {
+    const content = client.getAccountData(LATER_ACCOUNT_DATA_TYPE)?.getContent() as { items?: unknown } | undefined;
+    return Array.isArray(content?.items) ? content.items.filter(isLaterItem) : [];
   } catch {
     return [];
   }
@@ -3479,6 +3580,23 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         }
         const content = event.getContent() as { sections?: unknown } | undefined;
         handler(Array.isArray(content?.sections) ? content.sections.filter(isChatSection) : []);
+      };
+      client.on(ClientEvent.AccountData, listener);
+      return () => {
+        client.off(ClientEvent.AccountData, listener);
+      };
+    },
+    later: async () => readLaterItems(client),
+    setLater: async (items) => {
+      await client.setAccountData(LATER_ACCOUNT_DATA_TYPE, { items });
+    },
+    subscribeLater: (handler) => {
+      const listener = (event: MatrixEvent): void => {
+        if (event.getType() !== LATER_ACCOUNT_DATA_TYPE) {
+          return;
+        }
+        const content = event.getContent() as { items?: unknown } | undefined;
+        handler(Array.isArray(content?.items) ? content.items.filter(isLaterItem) : []);
       };
       client.on(ClientEvent.AccountData, listener);
       return () => {

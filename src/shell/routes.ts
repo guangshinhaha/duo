@@ -24,6 +24,7 @@ export const NAMED_ROUTES = [
   "mentions",
   "duo",
   "confirmations",
+  "later",
   "settings",
   "onboarding",
   "admin",
