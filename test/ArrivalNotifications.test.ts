@@ -18,8 +18,12 @@ vi.mock("../src/notifications.js", async (importOriginal) => {
 
 import { postNotification } from "../src/notifications.js";
 import { dispatchArrival } from "../src/App.js";
+import { writeNotificationCategoryPrefs } from "../src/notificationCategoryPrefs.js";
+import { resetNotificationBatches } from "../src/notificationDispatch.js";
 
 const postNotificationMock = vi.mocked(postNotification);
+
+const ALL_IMMEDIATE = { draftsReady: "immediate", passedOn: "immediate", mentions: "immediate", directMessages: "immediate" } as const;
 
 const ME = "@me:workspace.example";
 const ROOM_ID = "!project-x:workspace.example";
@@ -103,6 +107,67 @@ describe("dispatchArrival — the per-room notification level a browser notifica
   it("does nothing for room news with no arrival (an edit or a reaction)", async () => {
     const connection = connectionWith([room({ notifications: "all" })]);
     await dispatchArrival(connection, ROOM_ID, undefined);
+    expect(postNotificationMock).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * #309: on top of the per-room mode above, a mention or a direct message
+ * is also one of the four categories Settings exposes. Default
+ * (immediate) changes nothing — covered by every case above, which all
+ * run with no category preference written.
+ */
+describe("dispatchArrival — the mentions and direct-messages categories (#309)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    window.location.hash = "";
+    postNotificationMock.mockClear();
+  });
+  afterEach(() => {
+    resetNotificationBatches();
+    localStorage.clear();
+    window.location.hash = "";
+  });
+
+  it("a mention is never sent when the mentions category is off, even in an 'all' room", async () => {
+    writeNotificationCategoryPrefs({ ...ALL_IMMEDIATE, mentions: "off" });
+    const connection = connectionWith([room({ notifications: "all" })]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ mentionsMe: true }));
+    expect(postNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("a non-mention message in an 'all' room still notifies when the mentions category is off — it isn't a mention", async () => {
+    writeNotificationCategoryPrefs({ ...ALL_IMMEDIATE, mentions: "off" });
+    const connection = connectionWith([room({ notifications: "all" })]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ mentionsMe: false }));
+    expect(postNotificationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a direct message is never sent when the direct-messages category is off", async () => {
+    writeNotificationCategoryPrefs({ ...ALL_IMMEDIATE, directMessages: "off" });
+    const connection = connectionWith([room({ kind: "direct", notifications: "all" })]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ mentionsMe: false }));
+    expect(postNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("a mention inside a direct conversation obeys the mentions setting, not the direct-messages one", async () => {
+    writeNotificationCategoryPrefs({ ...ALL_IMMEDIATE, directMessages: "off", mentions: "immediate" });
+    const connection = connectionWith([room({ kind: "direct", notifications: "all" })]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ mentionsMe: true }));
+    expect(postNotificationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the duo answering on the owner's behalf is neither category, and is unaffected by either setting", async () => {
+    writeNotificationCategoryPrefs({ ...ALL_IMMEDIATE, mentions: "off", directMessages: "off" });
+    const connection = connectionWith([room({ kind: "direct", notifications: "all" })]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ senderId: "@duo-me:workspace.example" }));
+    expect(postNotificationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("batched queues a direct message instead of posting it immediately", async () => {
+    writeNotificationCategoryPrefs({ ...ALL_IMMEDIATE, directMessages: "batched" });
+    const connection = connectionWith([room({ kind: "direct", notifications: "all" })]);
+    await dispatchArrival(connection, ROOM_ID, arrival());
     expect(postNotificationMock).not.toHaveBeenCalled();
   });
 });

@@ -21,6 +21,7 @@ import type { PendingT4RequestForJudgement, RegisteredAction } from "../src/api/
 // half is pinned in notifications.test.ts.
 vi.mock("../src/notifications.js", () => ({
   draftArrivalBody: vi.fn(() => null),
+  draftArrivalCategory: vi.fn(() => "draftsReady"),
   notifyDraftReady: vi.fn(),
   notifyConfirmationWaiting: vi.fn(),
   postNotification: vi.fn(),

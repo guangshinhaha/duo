@@ -32,6 +32,7 @@ vi.mock("../src/notifications.js", () => ({
   // half matters, so the arrivals classify as plain drafts (null) and the
   // side-effect verbs are inert.
   draftArrivalBody: vi.fn(() => null),
+  draftArrivalCategory: vi.fn(() => "draftsReady"),
   notifyDraftReady: vi.fn(),
   postNotification: vi.fn(),
   wireNotificationClicks: vi.fn(() => Promise.resolve(() => {})),

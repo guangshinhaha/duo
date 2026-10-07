@@ -7,6 +7,7 @@ import { Connect } from "../src/routes/Connect.js";
 // The shell's notification side effects are Tauri's, not this file's.
 vi.mock("../src/notifications.js", () => ({
   draftArrivalBody: vi.fn(() => null),
+  draftArrivalCategory: vi.fn(() => "draftsReady"),
   notifyDraftReady: vi.fn(),
   postNotification: vi.fn(),
   wireNotificationClicks: vi.fn(() => Promise.resolve(() => {})),
