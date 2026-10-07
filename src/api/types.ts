@@ -79,6 +79,61 @@ export interface SearchAnswerHit {
 
 export type SearchAnswerResult = { readonly kind: "answered"; readonly text: string; readonly citedIds: readonly string[] } | { readonly kind: "no_answer" };
 
+// `POST /compose/catch-up` (duo#280/#281, digital-duo#279): summarizes a
+// client-supplied window of unread messages — one mechanism behind both
+// the busy-room catch-up card and the sidebar's one-line gist. Mirrors
+// digital-duo's `src/drafting/catch-up.ts`. `index` in a bullet is the
+// position in the REQUEST's own `messages` array (never a daemon-side id —
+// the daemon never sees an event id), which the client resolves back to a
+// real message to link each bullet to its source (#280 AC "every bullet
+// links to its source message").
+export interface CatchUpMessageInput {
+  readonly from: string;
+  readonly text: string;
+}
+
+export interface CatchUpBullet {
+  readonly index: number;
+  readonly text: string;
+}
+
+export interface CatchUpResult {
+  readonly bullets: readonly CatchUpBullet[];
+  readonly oneLine: string;
+}
+
+// `GET /daily-brief` (duo#282, digital-duo#279): what's waiting, what was
+// passed on, and what the duo handled on its own, over a window. Mirrors
+// digital-duo's `src/duo/daily-brief.ts`.
+export interface DailyBriefWaitingItem {
+  readonly draftId: string;
+  readonly question: string;
+  readonly createdAt: string;
+}
+
+export interface DailyBriefPassedOnItem {
+  readonly draftId: string;
+  readonly question: string;
+  readonly escalationReason: string | null;
+  readonly createdAt: string;
+}
+
+export interface DailyBriefHandledItem {
+  readonly id: string;
+  readonly question: string;
+  readonly askerRef: string;
+  readonly createdAt: string;
+}
+
+export interface DailyBrief {
+  readonly since: string;
+  readonly generatedAt: string;
+  readonly waitingOnYou: readonly DailyBriefWaitingItem[];
+  readonly passedOn: readonly DailyBriefPassedOnItem[];
+  readonly handledByDuo: readonly DailyBriefHandledItem[];
+  readonly allClear: boolean;
+}
+
 /**
  * `GET /knowledge/evidence/excluded` (duo#272, digital-duo#288): one past
  * exchange the owner removed from a draft's "Used" list — reversible from

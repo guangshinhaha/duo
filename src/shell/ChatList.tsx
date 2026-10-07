@@ -21,6 +21,8 @@ import { HostedWorkspaceStatus } from "../components/HostedWorkspaceStatus.js";
 import { isHostedAccess, useWorkspaceAccess } from "../workspace/access.js";
 import { plainPreview } from "../workspace/duoAnswer.js";
 import { roomHref } from "../workspace/links.js";
+import { readCatchUpEnabled } from "../catchUpPrefs.js";
+import { oneLineUnreadSummary } from "../unreadSummary.js";
 import type { ChatSection, NotificationMode, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
 import type { Route } from "./routes.js";
 import { latestMessageDuoLabel, roomTitle, soleDuoLabel } from "./roomTitle.js";
@@ -745,6 +747,11 @@ export function ChatList({
       // `directRoomIdsOf`'s DM record either way.
       const avatarKind: "duo" | "person" | "group" = sole ? "duo" : room.kind === "direct" ? "person" : "group";
       const more = openMore === room.roomId;
+      // duo#281: the sidebar's own one-line gist — never shown over a
+      // draft tray preview (`waitingByRoom` already takes priority below),
+      // never below the member's own "Summaries" setting, and null below
+      // #281's own unread threshold (see unreadSummary.ts).
+      const summary = readCatchUpEnabled() ? oneLineUnreadSummary(room) : null;
       return (
         <Row
           active={activeRoom === room.roomId}
@@ -802,6 +809,14 @@ export function ChatList({
                 <DraftLine state={waitingByRoom.get(room.roomId)!.state} />
                 {waitingWords(waitingByRoom.get(room.roomId)!)}
               </>
+            ) : summary !== null ? (
+              // duo#281: replaces the ordinary preview line when present
+              // (the issue's own "How") — the "✦" marker is the label, not
+              // decoration: AC "clearly labelled as a summary, not a message".
+              <span data-testid="room-unread-summary">
+                <span aria-hidden="true">✦ Summary: </span>
+                {summary}
+              </span>
             ) : (
               <>
                 {/* #247: the preview attributes the latest word to the
