@@ -9,6 +9,7 @@ import {
   type UseQueryOptions,
 } from "@tanstack/react-query";
 import { apiRequest, type DuoApiConfig } from "./client.js";
+import { streamDraft } from "./draftStream.js";
 import { pushSubscriptionStatus, subscribeToPush, unsubscribeFromPush } from "../push.js";
 import {
   createInvite,
@@ -657,6 +658,42 @@ export function useCreateDraft(api: DuoApiConfig) {
         body: JSON.stringify(input),
         signal: controllerRef.current.signal,
         timeoutMs: ASK_TIMEOUT_MS,
+      });
+    },
+    onSettled: () => {
+      controllerRef.current = null;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["drafts"] });
+    },
+  });
+  const cancel = useCallback(() => {
+    controllerRef.current?.abort();
+  }, []);
+  return { mutation, cancel };
+}
+
+/**
+ * duo#304: "your duo's answers appear as they're written" — the streamed
+ * sibling of `useCreateDraft` above, for self-chat's composer alone
+ * (`Duo.tsx`'s `Composer` is this hook's one caller, just as it was
+ * `useCreateDraft`'s). Same request shape, same `["drafts"]` invalidation
+ * on success; the one addition is `onChunk`, called with each revealed
+ * piece of text in order as `POST /drafts/stream` sends it, so the caller
+ * can render the answer incrementally instead of waiting for the final
+ * `DraftPipelineResult` this mutation still resolves with either way.
+ */
+export function useCreateDraftStream(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  const controllerRef = useRef<AbortController | null>(null);
+  const mutation = useMutation({
+    mutationFn: (input: { question: string; threadContext?: string | null; recipient?: RecipientRef; onChunk?: (text: string) => void }) => {
+      controllerRef.current = new AbortController();
+      const { onChunk, ...body } = input;
+      return streamDraft(api, body, {
+        signal: controllerRef.current.signal,
+        timeoutMs: ASK_TIMEOUT_MS,
+        onChunk,
       });
     },
     onSettled: () => {

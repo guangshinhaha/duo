@@ -7,6 +7,7 @@ import { writeComposerBuffer } from "../src/composerBuffer.js";
 import type { DraftRecord } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import { setComposer } from "./composerHelpers.js";
+import { sseDraftResponse } from "./sseHelpers.js";
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
 
@@ -46,8 +47,8 @@ function draftFor(n: number, thread: string | null, question?: string): DraftRec
 /**
  * A fetch stub speaking the merged GET /drafts paging contract (duo #29,
  * digital-duo #203): with `limit`, a newest-first window under the exclusive
- * `before` ceiling; without it, the plain ascending list. POST /drafts
- * appends (the composer's flow), which is how a test adds drafts
+ * `before` ceiling; without it, the plain ascending list. POST /drafts/stream
+ * appends (duo#304, the composer's flow), which is how a test adds drafts
  * mid-walk. Records every GET URL so tests can pin which window was asked
  * for and when.
  */
@@ -55,11 +56,11 @@ function stubPagedDaemon(all: DraftRecord[]) {
   const gets: string[] = [];
   const fetchMock = vi.fn((url: string | URL, init?: RequestInit): Promise<Response> => {
     const href = String(url);
-    if (init?.method === "POST" && href.endsWith("/drafts")) {
+    if (init?.method === "POST" && href.endsWith("/drafts/stream")) {
       const body = JSON.parse(init.body as string) as { question: string; threadContext?: string | null };
       const created = draftFor(all.length, body.threadContext ?? null, body.question);
       all.push(created);
-      return Promise.resolve(new Response(JSON.stringify({ kind: "draft", draftId: created.id }), { status: 201 }));
+      return Promise.resolve(sseDraftResponse({ kind: "draft", draftId: created.id, text: created.draftText, sources: created.sources, confidence: { score: 0.8, passesThreshold: true, threshold: 0.55 } }));
     }
     // Only the drafts feed is being walked here: the training cards' own reads
     // (corrections, rules, offers, the digest) are answered empty and not counted.

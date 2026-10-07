@@ -68,6 +68,8 @@ const SERVED: [method: string, path: string][] = [
   ["GET", "/drafts"],
   ["GET", "/drafts/:id"],
   ["POST", "/drafts"],
+  // duo#304: self-chat's streamed sibling of POST /drafts (SSE).
+  ["POST", "/drafts/stream"],
   ["POST", "/compose/rewrite"],
   ["POST", "/compose/fact-check"],
   // digital-duo duo#283: landed on origin/main's src/serve/server.ts.

@@ -6,6 +6,7 @@ import { writeComposerBuffer } from "../src/composerBuffer.js";
 import type { DraftRecord } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import { composerText, setComposer } from "./composerHelpers.js";
+import { sseDraftResponse } from "./sseHelpers.js";
 
 /*
  * Your duo, as a chat (#144): one continuous conversation — what you asked
@@ -218,15 +219,12 @@ describe("Duo — asking (issue #8)", () => {
     let posts = 0;
     let list = drafts;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (init?.method === "POST" && url.endsWith("/drafts")) {
+      if (init?.method === "POST" && url.endsWith("/drafts/stream")) {
         posts += 1;
         const body = JSON.parse(init.body as string) as { question: string; threadContext: string | null };
         const created = draftFor("new", { question: body.question, threadContext: body.threadContext, createdAt: "2026-01-06T00:00:00.000Z" });
         list = [...list, created];
-        return new Response(
-          JSON.stringify({ kind: "draft", draftId: "new", text: created.draftText, sources: created.sources, confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } }),
-          { status: 201 },
-        );
+        return sseDraftResponse({ kind: "draft", draftId: "new", text: created.draftText, sources: created.sources, confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } });
       }
       return pagedResponse(String(url), list);
     });
@@ -251,7 +249,7 @@ describe("Duo — asking (issue #8)", () => {
 
   it("keeps the typed question and shows the failure when the submit fails", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (init?.method === "POST" && url.endsWith("/drafts")) {
+      if (init?.method === "POST" && url.endsWith("/drafts/stream")) {
         return new Response(JSON.stringify({ error: { code: "unknown", message: "store locked" } }), { status: 500 });
       }
       return pagedResponse(String(url), drafts);
@@ -271,7 +269,7 @@ describe("Duo — asking (issue #8)", () => {
   it("disables submission for whitespace-only questions and while a submit is in flight", async () => {
     let resolvePost!: (value: Response) => void;
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (init?.method === "POST" && url.endsWith("/drafts")) {
+      if (init?.method === "POST" && url.endsWith("/drafts/stream")) {
         return new Promise<Response>((resolve) => {
           resolvePost = resolve;
         });
@@ -299,7 +297,99 @@ describe("Duo — asking (issue #8)", () => {
     await waitFor(() => expect(submit).toBeDisabled());
     expect(submit).toHaveTextContent("Asking…");
 
-    resolvePost(new Response(JSON.stringify({ kind: "draft", draftId: "x", text: "t", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } }), { status: 201 }));
+    resolvePost(sseDraftResponse({ kind: "draft", draftId: "x", text: "t", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } }));
     await waitFor(() => expect(screen.getByTestId("composer-submit")).toHaveTextContent("Ask"));
+  });
+
+  it("duo#304: renders the answer incrementally as it streams, then the real turn replaces the live bubble", async () => {
+    const encoder = new TextEncoder();
+    let list = drafts;
+    // Manually gated, rather than timer-paced: each `gate.next()` releases
+    // exactly one more frame, so the test controls the pacing instead of
+    // racing real (or fake) timers against `waitFor`.
+    let releaseNext: (() => void) | undefined;
+    const gate = () => new Promise<void>((resolve) => (releaseNext = resolve));
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.endsWith("/drafts/stream")) {
+        const body = JSON.parse(init.body as string) as { question: string };
+        const created = draftFor("streamed", { question: body.question, draftText: "Five days per quarter.", createdAt: "2026-01-07T00:00:00.000Z" });
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(encoder.encode(`event: chunk\ndata: ${JSON.stringify({ text: "Five " })}\n\n`));
+            await gate();
+            controller.enqueue(encoder.encode(`event: chunk\ndata: ${JSON.stringify({ text: "days " })}\n\n`));
+            await gate();
+            controller.enqueue(encoder.encode(`event: chunk\ndata: ${JSON.stringify({ text: "per quarter." })}\n\n`));
+            const done = {
+              kind: "draft",
+              draftId: "streamed",
+              text: created.draftText,
+              sources: [],
+              confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 },
+            };
+            controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify(done)}\n\n`));
+            controller.close();
+            list = [...list, created];
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return pagedResponse(String(url), list);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await screen.findByTestId("thread-group");
+    setComposer(screen.getByLabelText("Question for your duo"), "how much leave");
+    fireEvent.click(screen.getByTestId("composer-submit"));
+
+    // The live bubble shows up with the first chunk already in it...
+    await waitFor(() => expect(screen.getByTestId("duo-stream-answer")).toHaveTextContent("Five"));
+    expect(screen.getByTestId("duo-stream-answer")).not.toHaveTextContent("per quarter.");
+
+    // ...grows as each further chunk is released...
+    releaseNext?.();
+    await waitFor(() => expect(screen.getByTestId("duo-stream-answer")).toHaveTextContent("Five days"));
+    expect(screen.getByTestId("duo-stream-answer")).not.toHaveTextContent("per quarter.");
+
+    // ...and once it finishes, the full text reads somewhere in the
+    // transcript — either still the live bubble, or the real turn that
+    // replaced it.
+    releaseNext?.();
+    await waitFor(() => expect(screen.getByText("Five days per quarter.")).toBeInTheDocument());
+  });
+
+  it("duo#304: Stop ends the reveal but keeps what already streamed in", async () => {
+    const encoder = new TextEncoder();
+    let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.endsWith("/drafts/stream")) {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controllerRef = controller;
+            controller.enqueue(encoder.encode(`event: chunk\ndata: ${JSON.stringify({ text: "Five " })}\n\n`));
+            // Deliberately never closes — Stop is what ends this, not the server.
+          },
+        });
+        init?.signal?.addEventListener("abort", () => controllerRef?.error(new DOMException("The operation was aborted.", "AbortError")));
+        return Promise.resolve(new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }));
+      }
+      return pagedResponse(String(url), drafts);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await screen.findByTestId("thread-group");
+    setComposer(screen.getByLabelText("Question for your duo"), "how much leave");
+    fireEvent.click(screen.getByTestId("composer-submit"));
+
+    await waitFor(() => expect(screen.getByTestId("duo-stream-answer")).toHaveTextContent("Five"));
+    fireEvent.click(screen.getByTestId("composer-cancel"));
+
+    // Stop only ends the reveal (and returns the composer to usable) — it
+    // never erases what had already streamed in.
+    await waitFor(() => expect(screen.getByTestId("composer-submit")).toHaveTextContent("Ask"));
+    expect(screen.getByTestId("duo-stream-answer")).toHaveTextContent("Five");
+    expect(screen.queryByTestId("mutation-error")).toBeNull();
   });
 });

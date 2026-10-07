@@ -6,6 +6,7 @@ import { ASK_TIMEOUT_MS } from "../src/api/queries.js";
 import { writeComposerBuffer } from "../src/composerBuffer.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import { composerText, pressEnter, setComposer, typeInto } from "./composerHelpers.js";
+import { sseDraftResponse } from "./sseHelpers.js";
 
 /*
  * #27: a composer that behaves like one — multiline with keyboard submit,
@@ -37,7 +38,7 @@ function stubWedgedPost(): { signal: () => AbortSignal | null | undefined; calls
 describe("#27 — the composer takes a real question", () => {
   beforeEach(() => {
     writeComposerBuffer("");
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
+    vi.stubGlobal("fetch", vi.fn(async () => sseDraftResponse({ kind: "draft", draftId: "x", text: "t", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } })));
   });
   afterEach(() => {
     vi.unstubAllGlobals();

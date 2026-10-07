@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DuoApiConfig } from "../api/client.js";
 import { useDraftsFeed } from "../api/queries.js";
 import type { DraftRecord } from "../api/types.js";
@@ -57,6 +57,49 @@ function dayLabel(iso: string): string {
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
   return same(when, today) ? "Today" : same(when, yesterday) ? "Yesterday" : when.toLocaleDateString();
+}
+
+/**
+ * duo#304: "your duo's answers appear as they're written" — the owner's own
+ * question, paired with whatever text has streamed in so far. This is
+ * ephemeral, client-local state (`Duo`'s `live`), never a draft: the real
+ * draft-log row already exists on the daemon the moment the pipeline
+ * finishes (`client-tech-design.md` §1.4's `/drafts/stream` row), well
+ * before any of this renders, so this block's only job is to show the
+ * reveal — `Duo`'s own effect replaces it with the real `Turn` (Keep/Edit/
+ * Dismiss and all) the moment that row reaches the feed. No outcome line,
+ * no sources, no keyboard shortcut: none of that exists yet for a draft
+ * this transient view does not even have the id of.
+ */
+function LiveTurn({ question, chunks }: { question: string; chunks: readonly string[] }) {
+  return (
+    <div className="flex flex-col gap-2" data-testid="thread-entry-live">
+      <OwnerMessage bubble>{question}</OwnerMessage>
+      <div className="max-w-[90%]">
+        <DuoLine arrived attributionTestId="duo-stream-attribution" label="Your duo" meta="writing…" state="neutral" testId="duo-stream-answer">
+          <p>
+            {chunks.length === 0 ? (
+              <span className="inline-flex items-center gap-2 text-[var(--faint)]">
+                <Mark working /> Thinking…
+              </span>
+            ) : (
+              chunks.map((chunk, i) => (
+                // #39/design-language.md §3.4: a one-shot rise-and-fade per
+                // chunk, reusing the existing entrance class rather than a
+                // new loop — P3 ("quiet until it matters") keeps the
+                // working hairline as the only looping motion in the
+                // operational product, and this isn't one: each span
+                // animates once, on arrival, same as any other entrance.
+                <span className="motion-rise" key={i}>
+                  {chunk}
+                </span>
+              ))
+            )}
+          </p>
+        </DuoLine>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -130,7 +173,26 @@ export function Duo({ api }: { api: DuoApiConfig }) {
   }, [feed.data]);
   const waiting = turns.filter((draft) => draft.outcome === null && !(draft.escalated && draft.refused));
 
-  // A chat opens at its end, and stays there as turns arrive.
+  // duo#304: the question being asked right now, and whatever text has
+  // streamed in for it so far — `null` whenever nothing is in flight.
+  // Cleared the moment the real draft-log row this answer became reaches
+  // the feed (matched by question text — only one ask is ever in flight
+  // at a time, `Composer`'s own `disabled` guards that), so the ephemeral
+  // live bubble below is replaced by the authoritative `Turn` exactly once,
+  // never shown twice. This also covers Stop: aborting only ends the
+  // reveal (`Composer`'s `cancel`), never the answer — the row was already
+  // written before any of this streamed — so the real turn still lands via
+  // the ordinary feed refresh/`draft-ready` push and this effect still
+  // clears the live bubble in favor of it.
+  const [live, setLive] = useState<{ question: string; chunks: readonly string[] } | null>(null);
+  useEffect(() => {
+    if (live && turns.some((draft) => draft.question === live.question)) {
+      setLive(null);
+    }
+  }, [turns, live]);
+
+  // A chat opens at its end, and stays there as turns arrive — and, with
+  // duo#304, as the live answer grows.
   const scroller = useRef<HTMLDivElement | null>(null);
   const lastId = turns[turns.length - 1]?.id;
   useEffect(() => {
@@ -138,7 +200,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [lastId]);
+  }, [lastId, live?.chunks.length]);
 
   // isLoading covers the FIRST page only — the chat renders as soon as the
   // newest window arrives, never waiting on history behind it (#29).
@@ -190,7 +252,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
             {feed.isFetchingNextPage ? "Loading older…" : "Load older"}
           </button>
         ) : null}
-        {turns.length === 0 ? (
+        {turns.length === 0 && live === null ? (
           <div className="p-6 text-[var(--muted)]" data-testid="duo-empty">
             Ask your duo anything below. What you ask and what it answers read here, and only you can see this chat.
           </div>
@@ -208,6 +270,8 @@ export function Duo({ api }: { api: DuoApiConfig }) {
                 </div>
               );
             })}
+            {/* duo#304: the answer in flight, always last — the newest thing in any chat is at the bottom. */}
+            {live && <LiveTurn chunks={live.chunks} question={live.question} />}
           </section>
         )}
         {/* What your duo has to say about training: a few cards, batched and paced, after the last turn — the way the newest thing in any chat is at the bottom. */}
@@ -215,7 +279,13 @@ export function Duo({ api }: { api: DuoApiConfig }) {
           <TrainingCards api={api} />
         </div>
       </div>
-      <Composer api={api} thread={null} />
+      <Composer
+        api={api}
+        onAsk={(question) => setLive({ question, chunks: [] })}
+        onAskFailed={() => setLive(null)}
+        onChunk={(text) => setLive((prev) => (prev ? { ...prev, chunks: [...prev.chunks, text] } : prev))}
+        thread={null}
+      />
     </div>
   );
 }
