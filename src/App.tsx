@@ -55,6 +55,7 @@ import { Duo } from "./routes/Duo.js";
 import { Confirmations } from "./routes/Confirmations.js";
 import { Later } from "./routes/Later.js";
 import { Mentions } from "./routes/Mentions.js";
+import { ShareTargetSheet } from "./routes/ShareTargetSheet.js";
 import { SearchOverlay } from "./components/SearchOverlay.js";
 import { NoDuoPanel } from "./components/NoDuoPanel.js";
 import { PairDuoDialog } from "./components/PairDuoDialog.js";
@@ -428,10 +429,17 @@ function routeSurface(route: Route, shell: SurfaceContext) {
     );
   }
   // The routes below this line are the duo's own surfaces (Settings, the
-  // chat list, Mentions and Later are not — #222's mentions and duo#299's
-  // Later are both the member's own workspace data, not a thing their duo
-  // does).
-  if (route !== "chats" && route !== "settings" && route !== "mentions" && route !== "later" && !shell.api) {
+  // chat list, Mentions, Later and the share picker are not — #222's
+  // mentions, duo#299's Later, and duo#324's share picker are all the
+  // member's own workspace data, not a thing their duo does).
+  if (
+    route !== "chats" &&
+    route !== "settings" &&
+    route !== "mentions" &&
+    route !== "later" &&
+    route !== "share" &&
+    !shell.api
+  ) {
     return <NoDuoPanel onPairDuo={shell.onPairDuo} />;
   }
   switch (route) {
@@ -441,6 +449,8 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       return settingsSurface("index", shell);
     case "mentions":
       return <Mentions connection={shell.connection} />;
+    case "share":
+      return <ShareTargetSheet api={shell.api} connection={shell.connection} />;
     case "later":
       return <Later connection={shell.connection} />;
     case "admin":

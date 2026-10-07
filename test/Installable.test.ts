@@ -39,6 +39,12 @@ interface Manifest {
   background_color: string;
   theme_color: string;
   icons: Array<{ src: string; sizes: string; type: string; purpose: string }>;
+  share_target?: {
+    action: string;
+    method: string;
+    enctype: string;
+    params: { title?: string; text?: string; url?: string; files?: Array<{ name: string; accept: string[] }> };
+  };
 }
 
 describe("the web client is installable (#152)", () => {
@@ -82,6 +88,20 @@ describe("the web client is installable (#152)", () => {
   it("colours the browser chrome for both themes", () => {
     expect(html).toContain('content="#0b0c0e" media="(prefers-color-scheme: dark)"');
     expect(html).toContain('content="#f7f7f8" media="(prefers-color-scheme: light)"');
+  });
+
+  it("#324: duo is a Web Share Target — a POST a real multipart body (title, text, url, files) can carry, landing on the picker's own address", () => {
+    expect(manifest.share_target?.action).toBe("/share-target");
+    expect(manifest.share_target?.method).toBe("POST");
+    expect(manifest.share_target?.enctype).toBe("multipart/form-data");
+    expect(manifest.share_target?.params.title).toBe("title");
+    expect(manifest.share_target?.params.text).toBe("text");
+    expect(manifest.share_target?.params.url).toBe("url");
+    expect(manifest.share_target?.params.files?.[0]?.name).toBe("files");
+    // `public/sw.js` is the one thing that can read a POST body at all on a
+    // static host — the action must be exactly what it listens for.
+    const sw = read("public/sw.js").toString("utf8");
+    expect(sw).toContain('"/share-target"');
   });
 
   it("keeps the notch and the home indicator clear in the shell", () => {
