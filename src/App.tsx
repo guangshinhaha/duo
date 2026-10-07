@@ -16,7 +16,7 @@ import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js"
 import { unsubscribeFromPush } from "./push.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
-import { shouldPersistQuery, useCreatePinnedAnswer, useFactCheck, useOrgOverview, useRewriteText } from "./api/queries.js";
+import { shouldPersistQuery, useCreatePinnedAnswer, useExplainMessage, useFactCheck, useOrgOverview, useRewriteText } from "./api/queries.js";
 import type { DraftRecord, RewriteInstruction } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Admin } from "./routes/Admin.js";
@@ -278,6 +278,14 @@ interface SurfaceContext {
    * would otherwise surface.
    */
   draftingRoomIds: ReadonlySet<string>;
+  /**
+   * duo#283: "Explain this message, privately" — same reasoning as
+   * `onRewrite`/`onFactCheck` above, and the same flattening (`sources` as
+   * plain label strings, not the daemon's `DraftSource[]`) `onFactCheck`
+   * already does, so `Room.tsx` never needs `src/api/types.ts`'s shape
+   * either. `threadContext` is null when the message isn't in a thread.
+   */
+  onExplain?: (text: string, threadContext: string | null) => Promise<{ explanation: string; sources: readonly string[] }>;
 }
 
 /** Settings: the index of its sections, or one section alone (#148). */
@@ -322,6 +330,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
             ) : null
           }
           offTheRecordControl={shell.api ? <OffTheRecordControl api={shell.api} key={route.chat} roomId={route.chat} /> : null}
+          onExplain={shell.onExplain}
           onFactCheck={shell.onFactCheck}
           onPinAnswer={shell.onPinAnswer}
           onRewrite={shell.onRewrite}
@@ -465,6 +474,17 @@ function AppShell() {
   const createPinnedAnswerMutation = useCreatePinnedAnswer(api);
   const onPinAnswer = api
     ? (pattern: string, answerText: string) => createPinnedAnswerMutation.mutateAsync({ pattern, answerText })
+    : undefined;
+  // duo#283: same reasoning as onRewrite/onFactCheck above — owned here,
+  // not in Room.tsx. `sources` is flattened to plain label strings the
+  // same way onFactCheck's `sourceLabel` already is, so the dialog never
+  // needs the daemon's `DraftSource` shape either.
+  const explainMutation = useExplainMessage(api);
+  const onExplain = api
+    ? (text: string, threadContext: string | null) =>
+        explainMutation
+          .mutateAsync({ text, threadContext })
+          .then((result) => ({ explanation: result.explanation, sources: result.sources.map((source) => source.label) }))
     : undefined;
   // The public front door: a signed-out visitor who arrives at the bare
   // root of a hosted build sees the landing page, not the sign-in card.
@@ -1026,6 +1046,7 @@ function AppShell() {
           onFactCheck,
           onPinAnswer,
           draftingRoomIds,
+          onExplain,
         })}
         route={route}
         session={activeSession}

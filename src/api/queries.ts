@@ -53,6 +53,7 @@ import type {
   TopicCoverageReport,
   DuoRequest,
   ExcludedEvidence,
+  ExplainResult,
   FactCheckResult,
   RoomOffTheRecord,
   RewriteInstruction,
@@ -691,6 +692,22 @@ export function useFactCheck(api: DuoApiConfig | null) {
       api
         ? apiRequest<FactCheckResult>(api, "/compose/fact-check", { method: "POST", body: JSON.stringify(input) })
         : Promise.reject(new Error("No duo is paired to fact-check against.")),
+  });
+}
+
+/**
+ * duo#283: `POST /compose/explain` — privately explains a message the
+ * owner received (an acronym, missing background) using their own duo.
+ * Writes nothing: like rewrite/fact-check above, this reads the corpus and
+ * returns text for a dialog to show, visible only to the owner, never
+ * posted anywhere.
+ */
+export function useExplainMessage(api: DuoApiConfig | null) {
+  return useMutation({
+    mutationFn: (input: { text: string; threadContext?: string | null }) =>
+      api
+        ? apiRequest<ExplainResult>(api, "/compose/explain", { method: "POST", body: JSON.stringify(input) })
+        : Promise.reject(new Error("No duo is paired to explain with.")),
   });
 }
 

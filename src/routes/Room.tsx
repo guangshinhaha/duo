@@ -35,6 +35,7 @@ import { firstLinkOf } from "../workspace/linkPreview.js";
 import { readUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { PinAnswerDialog } from "../components/PinAnswerDialog.js";
+import { ExplainDialog } from "../components/ExplainDialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
 import { EmojiPicker } from "../components/EmojiPicker.js";
 import { readReactionRecents, recordReactionRecent } from "../reactionRecents.js";
@@ -318,6 +319,7 @@ export function Room({
   onRewrite,
   onFactCheck,
   onPinAnswer,
+  onExplain,
   offTheRecordControl = null,
 }: {
   connection: WorkspaceConnection | null;
@@ -344,6 +346,15 @@ export function Room({
   onFactCheck?: (text: string, threadContext: string | null) => Promise<{ claim: string; concern: string; sourceLabel: string } | null>;
   /** duo#275: pins one of the owner's own messages as the exact answer to a question/topic — same reasoning as `onRewrite`/`onFactCheck`. `undefined` (no paired duo) hides the message action entirely. */
   onPinAnswer?: (pattern: string, answerText: string) => Promise<unknown>;
+  /**
+   * duo#283: "Explain this message, privately" — same reasoning as
+   * `onRewrite`/`onFactCheck`/`onPinAnswer` above, except this one applies
+   * to ANY message in the room, not only the owner's own (there's no
+   * `own &&` gate on its action below) — `sources` are plain label
+   * strings, already flattened the same way `onFactCheck`'s `sourceLabel`
+   * is. `undefined` (no paired duo) hides the message action entirely.
+   */
+  onExplain?: (text: string, threadContext: string | null) => Promise<{ explanation: string; sources: readonly string[] }>;
   /**
    * duo#274: the header's "don't learn from this conversation" control — a
    * rendered slot, same reasoning and shape as `drafts`'s `RoomDrafts`
@@ -831,6 +842,7 @@ export function Room({
                         onJumpToReply={jumpToMessage}
                         onActiveChange={setRowActive}
                         onPinAnswer={onPinAnswer}
+                        onExplain={onExplain}
                       />
                     </>
                   );
@@ -1216,6 +1228,7 @@ export function RoomEntry({
   onJumpToReply,
   onActiveChange,
   onPinAnswer,
+  onExplain,
 }: {
   message: RoomMessage;
   /** Arrived while the room was open: it rises in. History never animates. */
@@ -1243,6 +1256,8 @@ export function RoomEntry({
   onActiveChange?: (eventId: string, active: boolean) => void;
   /** duo#275: "Duo: always answer this way" — plain callback, see `Room`'s own doc comment on this prop. `undefined` hides the action. */
   onPinAnswer?: (pattern: string, answerText: string) => Promise<unknown>;
+  /** duo#283: "Explain this message, privately" — plain callback, see `Room`'s own doc comment on this prop. `undefined` hides the action. Unlike `onPinAnswer`, offered on every message, not only the owner's own. */
+  onExplain?: (text: string, threadContext: string | null) => Promise<{ explanation: string; sources: readonly string[] }>;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   // #291: the full picker behind the quick six's "+" — its own flag so the
@@ -1250,6 +1265,7 @@ export function RoomEntry({
   // this just adds a dialog above it with every emoji, not six.
   const [fullPickerOpen, setFullPickerOpen] = useState(false);
   const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [explainDialogOpen, setExplainDialogOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.body);
   const [busy, setBusy] = useState(false);
@@ -1270,7 +1286,7 @@ export function RoomEntry({
   const [menuOpen, setMenuOpen] = useState(false);
   const touchPrimary = useTouchPrimary();
   const own = message.senderId === connection.userId;
-  const active = editing || pickerOpen || fullPickerOpen || busy || menuOpen || pinDialogOpen;
+  const active = editing || pickerOpen || fullPickerOpen || busy || menuOpen || pinDialogOpen || explainDialogOpen;
   const toolbarVisible = active || hovering || focusWithin;
   useEffect(() => {
     onActiveChange?.(message.eventId, active);
@@ -1333,6 +1349,14 @@ export function RoomEntry({
       : []),
     ...(onReply && !message.redacted
       ? [{ key: "reply", label: "Reply", disabled: busy, testId: "reply-action", onClick: () => onReply(message) }]
+      : []),
+    // duo#283: unlike every other duo-backed action here, this is never
+    // gated on `own` — the whole point is explaining a message the owner
+    // DIDN'T write. Same pending/failed/redacted/file gates as
+    // onPinAnswer below, for the same reasons (nothing stable to point
+    // at yet, the words are gone, or there's no body text to explain).
+    ...(onExplain && !message.redacted && !message.pending && !message.failed && message.file === undefined
+      ? [{ key: "explain", label: "Explain, privately", disabled: busy, testId: "explain-action", onClick: () => setExplainDialogOpen(true) }]
       : []),
     ...(own && !message.redacted && message.file === undefined
       ? [
@@ -1570,6 +1594,17 @@ export function RoomEntry({
           onOpenChange={setPinDialogOpen}
           onPin={onPinAnswer}
           open={pinDialogOpen}
+        />
+      )}
+      {onExplain && (
+        <ExplainDialog
+          messageText={message.body}
+          // Same roomId-as-threadContext convention `RoomComposer`'s own
+          // `onFactCheck(checkText, roomId)` call already uses.
+          threadContext={roomId}
+          onExplain={onExplain}
+          onOpenChange={setExplainDialogOpen}
+          open={explainDialogOpen}
         />
       )}
     </div>
