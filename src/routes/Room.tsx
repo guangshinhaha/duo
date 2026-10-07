@@ -24,6 +24,9 @@ import { RewriteMenu } from "../composer/RewriteMenu.js";
 import type { RewriteInstruction } from "../composer/rewrite.js";
 import { readFactCheckPref } from "../factCheckPrefs.js";
 import { readTypingPref } from "../typingPrefs.js";
+import { catchUpAllowedForRoom } from "../catchUpPrefs.js";
+import { isCatchUpCardThresholdMet } from "../catchUpThresholds.js";
+import { CatchUpCard } from "../components/CatchUpCard.js";
 import type { ReadReceipt, RoomMemberRef, RoomMessage, TypingMember, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
@@ -336,6 +339,7 @@ export function Room({
   onFactCheck,
   onPinAnswer,
   onExplain,
+  onCatchUp,
   offTheRecordControl = null,
 }: {
   connection: WorkspaceConnection | null;
@@ -371,6 +375,12 @@ export function Room({
    * is. `undefined` (no paired duo) hides the message action entirely.
    */
   onExplain?: (text: string, threadContext: string | null) => Promise<{ explanation: string; sources: readonly string[] }>;
+  /**
+   * duo#280: the catch-up summarizer — same reasoning as `onRewrite` above.
+   * `undefined` (no paired duo) hides the card entirely, the same as every
+   * other daemon-backed callback here.
+   */
+  onCatchUp?: (messages: readonly { from: string; text: string }[]) => Promise<{ bullets: readonly { index: number; text: string }[]; oneLine: string }>;
   /**
    * duo#274: the header's "don't learn from this conversation" control — a
    * rendered slot, same reasoning and shape as `drafts`'s `RoomDrafts`
@@ -558,6 +568,21 @@ export function Room({
   const boundary: UnreadBoundary =
     connection && anchorEventId !== null ? connection.unreadBoundaryFrom(roomId, anchorEventId) : { kind: "none" };
   const unreadFoundEventId = !markedRead && boundary.kind === "found" ? boundary.eventId : null;
+
+  // duo#280: the unread window the catch-up card summarizes — the
+  // main-flow messages (a thread's replies belong to the thread, same
+  // filter `roomRowsOf` applies below) from the unread line to the live
+  // end of what this device has already loaded. No new fetch: whatever
+  // the catch-up card can show is bounded by what the member's own sync
+  // already holds, same as everything else this route renders.
+  const unreadMessages = useMemo(() => {
+    if (unreadFoundEventId === null) {
+      return [];
+    }
+    const mainFlow = (timeline.data ?? []).filter((message) => message.threadRootEventId === null);
+    const startIndex = mainFlow.findIndex((message) => message.eventId === unreadFoundEventId);
+    return startIndex < 0 ? [] : mainFlow.slice(startIndex);
+  }, [timeline.data, unreadFoundEventId]);
 
   // #248: the transcript's rows, in order — the beginning-of-history note,
   // either other note, then every main-flow message. Built before any early
@@ -895,6 +920,16 @@ export function Room({
                   const message = row.message;
                   return (
                     <>
+                      {/* duo#280: the catch-up card, above the unread line
+                          itself — only past the threshold, only with a
+                          daemon to ask, and never in a room (or globally)
+                          turned off. */}
+                      {unreadFoundEventId === message.eventId &&
+                        onCatchUp &&
+                        catchUpAllowedForRoom(roomId) &&
+                        isCatchUpCardThresholdMet(unreadMessages.length, unreadMessages[0]?.originServerTs ?? Date.now(), Date.now()) && (
+                          <CatchUpCard messages={unreadMessages} onCatchUp={onCatchUp} onJumpToMessage={jumpToMessage} roomId={roomId} />
+                        )}
                       {/* #212: drawn once, right above the first row this member
                           hasn't seen yet — gone as soon as the dwell below
                           confirms they actually have. */}

@@ -39,6 +39,9 @@ import type {
   ClaudeImportSummary,
   CorrectPublicAnswerResult,
   PublicAnswerLogEntry,
+  CatchUpMessageInput,
+  CatchUpResult,
+  DailyBrief,
   DeriveJobStatus,
   GrantOutcome,
   MintedAskLink,
@@ -759,6 +762,36 @@ export function useExplainMessage(api: DuoApiConfig | null) {
       api
         ? apiRequest<ExplainResult>(api, "/compose/explain", { method: "POST", body: JSON.stringify(input) })
         : Promise.reject(new Error("No duo is paired to explain with.")),
+  });
+}
+
+/**
+ * duo#280/#281: `POST /compose/catch-up` — summarizes a window of unread
+ * messages the caller supplies (never a corpus read, never a daemon-side
+ * lookup of what's unread: this client's own workspace connection already
+ * knows that). Writes nothing, same as rewrite/fact-check/explain above —
+ * no query to invalidate.
+ */
+export function useCatchUp(api: DuoApiConfig | null) {
+  return useMutation({
+    mutationFn: (messages: readonly CatchUpMessageInput[]) =>
+      api
+        ? apiRequest<CatchUpResult>(api, "/compose/catch-up", { method: "POST", body: JSON.stringify({ messages }) })
+        : Promise.reject(new Error("No duo is paired to catch up with.")),
+  });
+}
+
+/**
+ * duo#282: `GET /daily-brief` — a plain read, nothing to invalidate (no
+ * mutation anywhere touches what it reads). `since` lets a caller ask for
+ * exactly the window since the brief was last shown; omitted, the daemon
+ * defaults to the last 24 hours.
+ */
+export function useDailyBrief(api: DuoApiConfig | null, since?: string) {
+  return useQuery({
+    queryKey: ["daily-brief", since ?? null],
+    queryFn: () => apiRequest<DailyBrief>(api!, since ? `/daily-brief?since=${encodeURIComponent(since)}` : "/daily-brief"),
+    enabled: api !== null,
   });
 }
 

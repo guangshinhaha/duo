@@ -28,6 +28,8 @@ import { MutationError } from "../components/MutationError.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import { readUrlPreviewPref, writeUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { readFactCheckPref, writeFactCheckPref } from "../factCheckPrefs.js";
+import { readCatchUpEnabled, writeCatchUpEnabled } from "../catchUpPrefs.js";
+import { readDailyBriefEnabled, writeDailyBriefEnabled } from "../dailyBriefPrefs.js";
 import { readTypingPref, writeTypingPref } from "../typingPrefs.js";
 import { readPrivateReceiptsPref, writePrivateReceiptsPref } from "../readReceiptPrefs.js";
 import {
@@ -161,6 +163,12 @@ export function Settings({
   // #264: off until this member turns it on — same "their own call, on
   // their own device" default as link previews above.
   const [factCheck, setFactCheck] = useState<boolean>(readFactCheckPref);
+  // duo#280/#281: on by default — a new catch-up setting must never
+  // silently hide a card or a sidebar line that would otherwise meet its
+  // own threshold, the same stance #285's typing setting takes below.
+  const [catchUpEnabled, setCatchUpEnabled] = useState<boolean>(readCatchUpEnabled);
+  // duo#282: on by default, same stance as the catch-up switch above.
+  const [dailyBriefEnabled, setDailyBriefEnabled] = useState<boolean>(readDailyBriefEnabled);
   const [sendTyping, setSendTyping] = useState<boolean>(readTypingPref);
   // #286: off (ordinary, visible receipts — this app's behavior since #63)
   // until this member turns it on — same "their own call, on their own
@@ -414,6 +422,57 @@ export function Settings({
           type="button"
         >
           {factCheck ? "Turn off quiet fact-check" : "Turn on quiet fact-check"}
+        </button>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-summaries">
+        <h2 className="type-heading">Summaries</h2>
+        {/* duo#280/#281 (epic #279): the one switch for both catch-up
+            surfaces — the card above the unread line in a busy
+            conversation, and the one-line gist under a conversation in
+            the list. On by default; #280's card has its own per-room off
+            as well, next to the conversation itself. */}
+        <p className="type-provenance text-[var(--muted)]">
+          When a conversation gets busy while you're away, your duo summarizes what you missed — a short card above the unread
+          line, and a one-line gist in the chat list. On by default; turn it off here, or per-conversation from that conversation's
+          own menu.
+        </p>
+        <button
+          aria-pressed={catchUpEnabled}
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+          data-testid="settings-summaries-toggle"
+          onClick={() => {
+            const next = !catchUpEnabled;
+            writeCatchUpEnabled(next);
+            setCatchUpEnabled(next);
+          }}
+          type="button"
+        >
+          {catchUpEnabled ? "Turn off summaries" : "Turn on summaries"}
+        </button>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-daily-brief">
+        <h2 className="type-heading">Daily brief</h2>
+        {/* duo#282: what's waiting, what was passed on, and what your duo
+            handled on its own — the first card in Your duo once a day. On
+            by default. */}
+        <p className="type-provenance text-[var(--muted)]">
+          One card each day in Your duo: what's waiting on you, what was passed on, and what your duo handled by itself. On by
+          default.
+        </p>
+        <button
+          aria-pressed={dailyBriefEnabled}
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+          data-testid="settings-daily-brief-toggle"
+          onClick={() => {
+            const next = !dailyBriefEnabled;
+            writeDailyBriefEnabled(next);
+            setDailyBriefEnabled(next);
+          }}
+          type="button"
+        >
+          {dailyBriefEnabled ? "Turn off the daily brief" : "Turn on the daily brief"}
         </button>
       </section>
 

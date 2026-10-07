@@ -10,6 +10,7 @@ import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { Mark } from "../components/Mark.js";
 import { NeverAnswerOffer, openNeverAnswerOffers } from "../components/NeverAnswerOffer.js";
 import { AwayStatusLine, ReturnSummaryCard } from "../profile/Away.js";
+import { DailyBriefCard } from "../components/DailyBriefCard.js";
 import { OwnerMessage } from "../components/OwnerMessage.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
@@ -239,6 +240,8 @@ export function Duo({ api }: { api: DuoApiConfig }) {
         <InfoButton />
       </header>
       <div className="flex-1 overflow-y-auto p-4" ref={scroller}>
+        {/* duo#282: the daily brief — literally the first card in Your duo (AC). */}
+        <DailyBriefCard api={api} />
         {/* #270: back from away — what your duo did while you were out, until you put it away. */}
         <ReturnSummaryCard api={api} />
         {/* Older history arrives on demand (#29), at the top where older things are. */}

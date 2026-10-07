@@ -62,12 +62,18 @@ function stubPagedDaemon(all: DraftRecord[]) {
       all.push(created);
       return Promise.resolve(sseDraftResponse({ kind: "draft", draftId: created.id, text: created.draftText, sources: created.sources, confidence: { score: 0.8, passesThreshold: true, threshold: 0.55 } }));
     }
-    // Only the drafts feed is being walked here: the training cards' own reads
-    // (corrections, rules, offers, the digest) are answered empty and not counted.
-    if (!new URL(href).pathname.endsWith("/drafts")) {
+    // Only the drafts feed is being walked here: the training cards' own
+    // reads (corrections, rules, offers, the digest) are answered empty and
+    // not counted — and so is any OTHER plain /drafts read that isn't the
+    // feed's own paging call (duo#282's daily brief reads `/drafts?outcome=
+    // pending` from the same route for an unrelated reason: what's waiting
+    // on you, not history). The feed's own call is the one thing here that
+    // always carries `limit` (`useDraftsFeed`); that's what distinguishes it.
+    const parsed = new URL(href);
+    if (!parsed.pathname.endsWith("/drafts") || !parsed.searchParams.has("limit")) {
       return Promise.resolve(new Response("[]", { status: 200 }));
     }
-    const { searchParams } = new URL(href);
+    const { searchParams } = parsed;
     gets.push(href);
     let rows = [...all].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     const before = searchParams.get("before");

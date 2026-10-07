@@ -19,7 +19,7 @@ import { matchesAnyKeyword } from "./keywordAlertMatch.js";
 import { unsubscribeFromPush } from "./push.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
-import { shouldPersistQuery, useCreatePinnedAnswer, useExplainMessage, useFactCheck, useOrgOverview, useRewriteText } from "./api/queries.js";
+import { shouldPersistQuery, useCatchUp, useCreatePinnedAnswer, useExplainMessage, useFactCheck, useOrgOverview, useRewriteText } from "./api/queries.js";
 import type { DraftRecord, RewriteInstruction } from "./api/types.js";
 import { Setup } from "./routes/Setup.js";
 import { Admin } from "./routes/Admin.js";
@@ -341,6 +341,15 @@ interface SurfaceContext {
    * either. `threadContext` is null when the message isn't in a thread.
    */
   onExplain?: (text: string, threadContext: string | null) => Promise<{ explanation: string; sources: readonly string[] }>;
+  /**
+   * duo#280/#281: the catch-up summarizer — same reasoning as `onRewrite`
+   * above, bound here because `Room.tsx` (the card's home) may never
+   * import `src/api/*`. Takes the unread window as plain `{ from, text }`
+   * pairs (never the daemon's own `CatchUpResult`/`CatchUpBullet` shapes
+   * beyond what's returned), so `Room.tsx` needs nothing from
+   * `src/api/types.ts` either.
+   */
+  onCatchUp?: (messages: readonly { from: string; text: string }[]) => Promise<{ bullets: readonly { index: number; text: string }[]; oneLine: string }>;
 }
 
 /** Settings: the index of its sections, or one section alone (#148). */
@@ -385,6 +394,7 @@ function routeSurface(route: Route, shell: SurfaceContext) {
             ) : null
           }
           offTheRecordControl={shell.api ? <OffTheRecordControl api={shell.api} key={route.chat} roomId={route.chat} /> : null}
+          onCatchUp={shell.onCatchUp}
           onExplain={shell.onExplain}
           onFactCheck={shell.onFactCheck}
           onPinAnswer={shell.onPinAnswer}
@@ -541,6 +551,12 @@ function AppShell() {
           .mutateAsync({ text, threadContext })
           .then((result) => ({ explanation: result.explanation, sources: result.sources.map((source) => source.label) }))
     : undefined;
+  // duo#280/#281: same reasoning as onExplain above — owned here, not in
+  // Room.tsx. The mutation's own result shape already matches the prop's
+  // (plain `{ bullets, oneLine }`), so nothing needs flattening the way
+  // onFactCheck/onExplain flatten `DraftSource` away.
+  const catchUpMutation = useCatchUp(api);
+  const onCatchUp = api ? (messages: readonly { from: string; text: string }[]) => catchUpMutation.mutateAsync(messages) : undefined;
   // The public front door: a signed-out visitor who arrives at the bare
   // root of a hosted build sees the landing page, not the sign-in card.
   // Decided once, at arrival — signing out later returns to sign-in, never
@@ -1101,6 +1117,7 @@ function AppShell() {
           onPinAnswer,
           draftingRoomIds,
           onExplain,
+          onCatchUp,
         })}
         route={route}
         session={activeSession}
