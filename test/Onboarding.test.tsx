@@ -12,6 +12,7 @@ import type { ClaudeImportSummary, DeriveJobStatus, DuoKnowledge, EmbedJobStatus
 // the client's half and is what this file pins.
 vi.mock("../src/notifications.js", () => ({
   draftArrivalBody: vi.fn(() => null),
+  draftArrivalCategory: vi.fn(() => "draftsReady"),
   notifyDraftReady: vi.fn(),
   postNotification: vi.fn(),
   wireNotificationClicks: vi.fn(() => Promise.resolve(() => {})),

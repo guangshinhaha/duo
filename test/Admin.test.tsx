@@ -11,6 +11,7 @@ import { queryKeys, shouldPersistQuery } from "../src/api/queries.js";
 
 vi.mock("../src/notifications.js", () => ({
   draftArrivalBody: vi.fn(() => null),
+  draftArrivalCategory: vi.fn(() => "draftsReady"),
   notifyDraftReady: vi.fn(),
   postNotification: vi.fn(),
   wireNotificationClicks: vi.fn(() => Promise.resolve(() => {})),

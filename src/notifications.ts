@@ -1,5 +1,6 @@
 import { getPlatform } from "./platform/index.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
+import type { NotificationCategory } from "./notificationCategoryPrefs.js";
 
 /**
  * Native notifications — build step C5 (`client-tech-design.md` §1.7 /
@@ -77,6 +78,18 @@ export function draftArrivalBody(record: { escalated: boolean; refused: boolean 
     return null;
   }
   return record.refused ? "Your duo refused to answer for you." : "Your duo escalated a question to you.";
+}
+
+/**
+ * #309: which of the four notification categories a draft-ready push is —
+ * null (meaning "the member hasn't told us yet, fetch failed") reads the
+ * conservative way, as a plain draft: `draftsReady`, never silently
+ * dropped. Escalated and refused share one category (`passedOn`) because
+ * both are the duo's own act on this same wire event, distinct from a
+ * plain draft and from a message anyone sent.
+ */
+export function draftArrivalCategory(record: { escalated: boolean; refused: boolean } | null): NotificationCategory {
+  return record?.escalated ? "passedOn" : "draftsReady";
 }
 
 /**

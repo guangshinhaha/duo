@@ -11,8 +11,10 @@ import { markDraftArrived } from "./arrivals.js";
 import { SyncStatusProvider } from "./sync.js";
 import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
 import { DuoRequestWatcher } from "./components/DuoRequests.js";
-import { draftArrivalBody, notifyDraftReady, postNotification, wireNotificationClicks } from "./notifications.js";
+import { draftArrivalBody, draftArrivalCategory, postNotification, wireNotificationClicks } from "./notifications.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
+import { notifyCategory, queueForBatch } from "./notificationDispatch.js";
+import { readNotificationCategorySetting } from "./notificationCategoryPrefs.js";
 import { unsubscribeFromPush } from "./push.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
@@ -184,6 +186,13 @@ function openRoomIdFromHash(hash: string): string | null {
  * that differs by shell, so a test exercising this function directly is
  * exercising the real per-room mode logic a browser notification obeys,
  * not a second copy of it.
+ *
+ * #309: on top of that per-room mode, a mention or a direct message is
+ * also one of the four notification categories Settings now exposes —
+ * checked additively, right before the DND check this function already
+ * made, never restructuring it. The duo acting on its own behalf (`mine`)
+ * and a plain group message are neither one of the four categories, so
+ * they fall through unchanged, exactly as before this existed.
  */
 export async function dispatchArrival(
   connection: WorkspaceConnection,
@@ -213,10 +222,22 @@ export async function dispatchArrival(
       return;
     }
   }
+  // #309: a mention is the more specific demand ("someone is waiting on
+  // you", vocabulary.md) — checked first, so a mention inside a direct
+  // conversation obeys the mentions setting, not the direct-messages one.
+  // Neither applies to the duo's own act or a plain group message.
+  const category = mine ? null : arrival.mentionsMe ? "mentions" : room?.kind === "direct" ? "directMessages" : null;
+  if (category && readNotificationCategorySetting(category) === "off") {
+    return; // the member's own category choice — not something DND held back
+  }
   const sender = isDuoUserId(arrival.senderId)
     ? `${duoOwnerLabel(arrival.senderId) ?? localpartOf(arrival.senderId)}'s duo`
     : arrival.senderName;
   const body = mine ? `Your duo answered on your behalf in ${title}.` : `${sender} in ${title}: ${arrival.body}`;
+  if (category && readNotificationCategorySetting(category) === "batched") {
+    queueForBatch(category, body, hash);
+    return;
+  }
   if (isDndActive(readDndPrefs(), new Date())) {
     recordMissed({ at: Date.now(), body, hash });
     return;
@@ -560,7 +581,7 @@ function AppShell() {
   // that lands without this device asking refreshes Review on its own.
   // The native notification rides on the push message — in the Tauri shell
   // (C5) it posts "a new draft is waiting", tagged so a click opens that
-  // draft's own address (#25); in a plain browser tab notifyDraftReady
+  // draft's own address (#25); in a plain browser tab postNotification
   // quietly no-ops (feature-detected, never throws).
   const announce = (text: string): void => {
     setArrivalNotice(text);
@@ -580,25 +601,24 @@ function AppShell() {
     // (offline, already actioned) still announces as the waiting draft it
     // most conservatively is; per-conversation modes never apply, because
     // the duo's own acts belong to no conversation.
+    //
+    // #309: which words it gets ALSO decides which of the two draft
+    // categories gates it — `draftsReady` for a plain draft, `passedOn`
+    // for an escalation or a refusal — through the one choke point every
+    // category-gated site now shares (`notifyCategory`, which keeps the
+    // same DND check this already made).
     void (async () => {
       const hash = `#draft/${encodeURIComponent(draftId)}`;
-      let body: string | null = null;
+      let record: { escalated: boolean; refused: boolean } | null = null;
       if (api) {
         try {
-          body = draftArrivalBody(await apiRequest<DraftRecord>(api, `/drafts/${encodeURIComponent(draftId)}`));
+          record = await apiRequest<DraftRecord>(api, `/drafts/${encodeURIComponent(draftId)}`);
         } catch {
-          body = null; // announce without naming what only the record could say
+          record = null; // announce without naming what only the record could say
         }
       }
-      if (body !== null) {
-        if (isDndActive(readDndPrefs(), new Date())) {
-          recordMissed({ at: Date.now(), body, hash });
-        } else {
-          await postNotification(body, hash);
-        }
-        return;
-      }
-      void notifyDraftReady(draftId);
+      const body = draftArrivalBody(record ?? { escalated: false, refused: false }) ?? "A new draft is waiting for your review.";
+      await notifyCategory(draftArrivalCategory(record), body, hash);
     })();
     // #39: the same push that fires the OS notification also feeds the
     // app's polite live region — a draft arriving is otherwise silent to

@@ -29,6 +29,13 @@ import { readUrlPreviewPref, writeUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { readFactCheckPref, writeFactCheckPref } from "../factCheckPrefs.js";
 import { readTypingPref, writeTypingPref } from "../typingPrefs.js";
 import { readPrivateReceiptsPref, writePrivateReceiptsPref } from "../readReceiptPrefs.js";
+import {
+  NOTIFICATION_CATEGORIES,
+  readNotificationCategoryPrefs,
+  writeNotificationCategoryPrefs,
+  type CategorySetting,
+  type NotificationCategoryPrefs,
+} from "../notificationCategoryPrefs.js";
 import { SendingSettings } from "../components/SendingSettings.js";
 import {
   clearMissed,
@@ -162,6 +169,8 @@ export function Settings({
   // fresh per visit), written through — the log's read is the same story.
   const [dnd, setDnd] = useState<DndPrefs>(readDndPrefs);
   const [missed, setMissed] = useState<readonly MissedArrival[]>(readMissed);
+  // #309: each of the four categories' own immediate/batched/off setting.
+  const [notificationCategories, setNotificationCategories] = useState<NotificationCategoryPrefs>(readNotificationCategoryPrefs);
   // Hosted mode: who this browser is signed in as (null on a paired-by-address app).
   const [account] = useState(readHostedAccount);
 
@@ -251,6 +260,44 @@ export function Settings({
               </button>
             </>
           )}
+        </div>
+      </section>
+
+      {/* #309: a category on every notification, each with its own setting
+          — drafts ready, mentions, passed-on questions and direct messages,
+          independently immediate, batched into one summary every few
+          minutes, or off. Immediate is every category's default: a new
+          setting must never silently change what already ships. */}
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-notification-categories">
+        <h2 className="type-heading">Notification categories</h2>
+        <p className="type-provenance text-[var(--muted)]">
+          Choose how you&apos;re told about each kind — right away, batched into one summary every few minutes, or not at
+          all.
+        </p>
+        <div className="flex flex-col gap-2">
+          {NOTIFICATION_CATEGORIES.map((category) => (
+            <div className="flex flex-wrap items-center gap-2" key={category.id}>
+              <label className="type-provenance min-w-32 text-[var(--muted)]" htmlFor={`notif-category-${category.id}-input`}>
+                {category.label}
+              </label>
+              <select
+                aria-label={category.label}
+                className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 text-[var(--text)]"
+                data-testid={`notif-category-${category.id}`}
+                id={`notif-category-${category.id}-input`}
+                onChange={(e) => {
+                  const next = { ...notificationCategories, [category.id]: e.target.value as CategorySetting };
+                  writeNotificationCategoryPrefs(next);
+                  setNotificationCategories(next);
+                }}
+                value={notificationCategories[category.id]}
+              >
+                <option value="immediate">Immediate</option>
+                <option value="batched">Batched</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
+          ))}
         </div>
       </section>
 
