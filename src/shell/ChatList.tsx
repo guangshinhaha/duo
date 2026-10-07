@@ -60,6 +60,7 @@ import { bridgedHref, bridgedTitle, useBridgedChats, type BridgedChat } from "./
 import { SourceBadge } from "./BridgedChat.js";
 import { useWaitingItems, waitingWords, swipeActionsOf, type WaitingItem } from "./waiting.js";
 import { useMentions } from "./mentions.js";
+import { dueLaterItems, useLaterItems } from "./later.js";
 import { SwipeRow } from "./SwipeRow.js";
 import { ChatRowSwipe } from "./ChatRowSwipe.js";
 import { DESKTOP_QUERY, useMediaQuery } from "./useMediaQuery.js";
@@ -1221,6 +1222,7 @@ export function ChatList({
         {api && <WaitingChip active={filterWaiting} count={waiting.count} current={route === "waiting"} />}
         <SectionFilterChip active={!filterWaiting && sectionFilter === "duos"} count={duosCount} filter="duos" label="Duos" onSelect={setSectionFilter} />
         {api && <ConfirmationsChip api={api} active={route === "confirmations"} />}
+        {connection && <LaterChip active={route === "later"} connection={connection} />}
       </div>
       <nav aria-label="Chats" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {actionError && (
@@ -1534,6 +1536,39 @@ function ConfirmationsChip({ api, active }: { api: DuoApiConfig; active: boolean
       {count > 0 && (
         <span className="type-identifier text-[var(--accent)]" data-testid="confirmations-badge">
           {count}
+        </span>
+      )}
+    </a>
+  );
+}
+
+/**
+ * duo#299: the chip into Later — hidden at zero unless it's the open
+ * surface, same stance `ConfirmationsChip` already takes, so an owner who
+ * has never saved anything doesn't carry an empty nav item forever. The
+ * badge counts DUE reminders (`dueLaterItems`), not every saved item: the
+ * chip's job is "something needs you", the same thing every other number
+ * in this row says, and a saved item with no reminder (or one not due yet)
+ * is not that.
+ */
+function LaterChip({ connection, active }: { connection: WorkspaceConnection; active: boolean }) {
+  const { items } = useLaterItems(connection);
+  const notDone = items.filter((item) => !item.done);
+  const due = dueLaterItems(items).length;
+  if (notDone.length === 0 && !active) {
+    return null;
+  }
+  return (
+    <a
+      aria-current={active ? "page" : undefined}
+      className={`inline-flex min-h-8 items-center gap-2 rounded-full border border-[var(--edge)] px-3 type-provenance ${active ? "bg-[var(--surface-2)] text-[var(--text)]" : "text-[var(--muted)]"}`}
+      data-testid="later-chip"
+      href="#later"
+    >
+      Later
+      {due > 0 && (
+        <span className="type-identifier text-[var(--accent)]" data-testid="later-badge">
+          {due}
         </span>
       )}
     </a>
