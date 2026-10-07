@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
@@ -81,6 +81,11 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 // last field that forced a bump: `delivery` (#21), whose `.state` read
 // joined `provenance`'s `.origin` at the dereference grade.
 const CACHE_BUSTER = "delivery";
+// #285: how long "your duo is drafting" stays on for a room with no other
+// signal that the wait is over — generous against real inference latency,
+// but finite, so a daemon that never answers (an offline channel adapter,
+// a crash mid-draft) can't leave this on forever.
+const DRAFTING_TIMEOUT_MS = 45_000;
 // A 401 is exempt from the retry default: a revoked token never
 // re-authenticates on attempt two, so retrying only delays the return to
 // Setup by TanStack's full backoff window (~7s). A 404 is exempt with it
@@ -267,6 +272,13 @@ interface SurfaceContext {
   /** duo#275: "Duo: always answer this way" — same reasoning as `onRewrite`/`onFactCheck` above. */
   onPinAnswer?: (pattern: string, answerText: string) => Promise<unknown>;
   /**
+   * #285: which rooms the daemon's own `draft-drafting` push currently
+   * names — App.tsx owns the socket (same reasoning as `onRewrite` above),
+   * `RoomDrafts` reads it to show "your duo is drafting" where a draft
+   * would otherwise surface.
+   */
+  draftingRoomIds: ReadonlySet<string>;
+  /**
    * duo#283: "Explain this message, privately" — same reasoning as
    * `onRewrite`/`onFactCheck` above, and the same flattening (`sources` as
    * plain label strings, not the daemon's `DraftSource[]`) `onFactCheck`
@@ -312,7 +324,11 @@ function routeSurface(route: Route, shell: SurfaceContext) {
         <Room
           at={route.at}
           connection={shell.connection}
-          drafts={shell.api ? <RoomDrafts api={shell.api} connection={shell.connection} key={route.chat} roomId={route.chat} /> : null}
+          drafts={
+            shell.api ? (
+              <RoomDrafts api={shell.api} connection={shell.connection} drafting={shell.draftingRoomIds.has(route.chat)} key={route.chat} roomId={route.chat} />
+            ) : null
+          }
           offTheRecordControl={shell.api ? <OffTheRecordControl api={shell.api} key={route.chat} roomId={route.chat} /> : null}
           onExplain={shell.onExplain}
           onFactCheck={shell.onFactCheck}
@@ -499,6 +515,37 @@ function AppShell() {
     },
     [],
   );
+  // #285: "your duo is drafting" — which rooms, right now. Held here (not
+  // in Room.tsx or RoomDrafts.tsx themselves) for the same reason `drafts`
+  // is a rendered slot: this app's push socket is owned here, and the
+  // share path may not import `src/api/*` (test/WorkspaceMatrixSeam.test.ts's
+  // structural pin). A room clears on its own — on any room news at all
+  // (below, beside the existing arrival subscription) or, failing that,
+  // after DRAFTING_TIMEOUT_MS — so a daemon that never gets to post an
+  // answer (an offline adapter, a crash) never leaves this stuck on.
+  const [draftingRoomIds, setDraftingRoomIds] = useState<ReadonlySet<string>>(() => new Set());
+  const draftingTimers = useRef(new Map<string, number>());
+  useEffect(
+    () => () => {
+      draftingTimers.current.forEach((timer) => clearTimeout(timer));
+    },
+    [],
+  );
+  const clearDrafting = useCallback((roomId: string): void => {
+    const timer = draftingTimers.current.get(roomId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      draftingTimers.current.delete(roomId);
+    }
+    setDraftingRoomIds((current) => {
+      if (!current.has(roomId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(roomId);
+      return next;
+    });
+  }, []);
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
@@ -559,6 +606,15 @@ function AppShell() {
     // does not repeat identical content: the next arrival needs an empty
     // region to fill.
     announce("A draft is waiting on you.");
+  }, (roomId) => {
+    // #285: a snapshot add — idempotent whether this is the first word
+    // of a brand-new draft or a refresh of one already showing.
+    setDraftingRoomIds((current) => (current.has(roomId) ? current : new Set(current).add(roomId)));
+    const existing = draftingTimers.current.get(roomId);
+    if (existing !== undefined) {
+      clearTimeout(existing);
+    }
+    draftingTimers.current.set(roomId, window.setTimeout(() => clearDrafting(roomId), DRAFTING_TIMEOUT_MS));
   });
 
   // #25/#69/#308: one subscription for the app's life — a clicked
@@ -584,9 +640,18 @@ function AppShell() {
       return;
     }
     return connection.subscribe((roomId, arrival) => {
+      // #285: any news about this room at all — a real arrival most of
+      // all, since the duo's own answer posting is exactly that — is good
+      // enough reason to stop saying it's drafting. Clearing on every
+      // call (not only on a new message) also covers the no-answer paths
+      // honestly: a refusal or an escalation produces no new room
+      // message, but the room still "moved on" the moment anything about
+      // it changes — and the DRAFTING_TIMEOUT_MS backstop above covers
+      // the rare case where nothing here fires at all.
+      clearDrafting(roomId);
       void dispatchArrival(connection, roomId, arrival);
     });
-  }, [connection]);
+  }, [connection, clearDrafting]);
 
   // #42: the tray's Review item — the same shape as the subscription above
   // it. The Rust half shows and focuses the window; the navigation to
@@ -980,6 +1045,7 @@ function AppShell() {
           onRewrite,
           onFactCheck,
           onPinAnswer,
+          draftingRoomIds,
           onExplain,
         })}
         route={route}

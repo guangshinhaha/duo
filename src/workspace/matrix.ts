@@ -15,6 +15,7 @@ import {
   ReceiptType,
   RelationType,
   RoomEvent,
+  RoomMemberEvent,
   SyncState,
   TweakName,
   type INotification,
@@ -464,6 +465,23 @@ export interface LiveArrival {
   readonly senderName: string;
   readonly body: string;
   readonly mentionsMe: boolean;
+}
+
+/**
+ * One other member composing a reply in a room, right now (#285): the
+ * SDK's own live `m.typing` state (`RoomMember.typing`). `name` is the
+ * room's own claimed name, resolved exactly the way `LiveArrival.senderName`
+ * is — a display name is a claim, the id is the fact — so a caller derives
+ * a duo's structural "{owner}'s duo" label the same way it already does
+ * for every other sender (`mentionLabelOf`), never trusting this seam to
+ * have done it. In practice a duo never appears here: this app's own duo
+ * composes through the draft tray, never the Matrix composer, and a
+ * colleague's duo answers by posting, not by holding `m.typing` open — but
+ * nothing here assumes that, since the SDK reports whatever the wire says.
+ */
+export interface TypingMember {
+  readonly userId: string;
+  readonly name: string;
 }
 
 /** One line of the words around a search hit — who said it (by id, with the name the workspace holds for them) and what. */
@@ -917,6 +935,33 @@ export interface WorkspaceConnection {
    * retried, cancelled), which rides the same arrival-less way.
    */
   subscribe(handler: (roomId: string, arrival?: LiveArrival) => void): () => void;
+  /**
+   * Tells the room this member is composing a reply (#285) — the SDK's own
+   * ephemeral `m.typing` event, never persisted and never read back from
+   * history. `typing: true` carries a server-side timeout
+   * (`TYPING_TIMEOUT_MS`) the homeserver clears on its own if this device
+   * goes quiet without calling again; `typing: false` clears it at once.
+   * Respecting the member's own choice not to send this at all is the
+   * caller's job (Settings, `typingPrefs.ts`) — this seam only ever does
+   * what it's asked, the same stance `send`/`react` take. Optional like
+   * `renewToken` above: every fixture built before #285 lacks it, and a
+   * caller that doesn't have one simply doesn't send typing — no worse
+   * than the privacy setting being off.
+   */
+  sendTyping?(roomId: string, typing: boolean): Promise<void>;
+  /**
+   * Who, besides this member, is composing a reply in this room right now
+   * (#285): the SDK's own live `m.typing` state, reported as a fresh
+   * snapshot on every change and once immediately at subscribe time — so
+   * opening a room someone is already typing in doesn't wait for their
+   * next keystroke. Clears on its own as each member's own entry does
+   * (the homeserver's typing timeout, or their own explicit stop) — there
+   * is nothing here for a caller to time out itself. Separate from
+   * `subscribe` on purpose: `m.typing` is ephemeral room state, not a
+   * timeline event, and unlike an arrival it is keyed to one room a caller
+   * names, not every room at once. Optional, same reasoning as `sendTyping`.
+   */
+  subscribeTyping?(roomId: string, handler: (typing: readonly TypingMember[]) => void): () => void;
   /** Stops the connection. Idempotent. */
   stop(): Promise<void>;
 }
@@ -928,6 +973,15 @@ const DEVICE_DISPLAY_NAME = "Duo";
 
 /** How long `connect` waits for the first completed sync before giving up on the homeserver. */
 const FIRST_SYNC_TIMEOUT_MS = 20_000;
+
+/**
+ * #285: the server-side timeout `sendTyping(true)` carries — the homeserver
+ * clears the member's own `m.typing` entry on its own once this elapses
+ * with no refresh, which is what lets a receiver's indicator clear itself
+ * even if the sender's device goes away mid-sentence (closed the laptop,
+ * lost power) without ever sending `false`.
+ */
+const TYPING_TIMEOUT_MS = 20_000;
 
 /**
  * Sign in with member credentials: one throwaway client that logs in,
@@ -3173,6 +3227,38 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         client.off(RoomEvent.LocalEchoUpdated, localEchoListener);
         client.off(RoomEvent.Receipt, receiptListener);
         handlers.delete(handler);
+      };
+    },
+    sendTyping: async (roomId, typing) => {
+      await client.sendTyping(roomId, typing, typing ? TYPING_TIMEOUT_MS : 0);
+    },
+    subscribeTyping: (roomId, handler) => {
+      const room = client.getRoom(roomId);
+      if (!room) {
+        // Nothing this account can read `m.typing` for — the same honest
+        // "nothing to report" every other per-room read gives a room this
+        // account isn't (or isn't yet) joined to.
+        return () => {};
+      }
+      const snapshot = (): void => {
+        const typing = room
+          .getMembers()
+          .filter((member) => member.typing && member.userId !== session.userId)
+          .map((member) => ({ userId: member.userId, name: nonIdName(member.rawDisplayName ?? member.name, member.userId) ?? localpartOf(member.userId) }));
+        handler(typing);
+      };
+      const listener = (_event: MatrixEvent, member: RoomMember): void => {
+        if (member.roomId === roomId) {
+          snapshot();
+        }
+      };
+      client.on(RoomMemberEvent.Typing, listener);
+      // Reports whoever is already typing the instant this is called —
+      // opening a room mid-conversation must not wait for the next
+      // keystroke to say so.
+      snapshot();
+      return () => {
+        client.off(RoomMemberEvent.Typing, listener);
       };
     },
     stop: async () => {

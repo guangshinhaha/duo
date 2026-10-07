@@ -23,7 +23,8 @@ import { mentionCandidatesOf } from "../composer/mentionOffer.js";
 import { RewriteMenu } from "../composer/RewriteMenu.js";
 import type { RewriteInstruction } from "../composer/rewrite.js";
 import { readFactCheckPref } from "../factCheckPrefs.js";
-import type { ReadReceipt, RoomMemberRef, RoomMessage, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
+import { readTypingPref } from "../typingPrefs.js";
+import type { ReadReceipt, RoomMemberRef, RoomMessage, TypingMember, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { duoConversationOf, questionOutcomes, questionOutcomeWords, type QuestionOutcome } from "../workspace/duoConversation.js";
@@ -87,6 +88,9 @@ const sheetTriggerClass = `${rowActionClass} sr-only focus:not-sr-only`;
 /** #211: how near the scroll container's own top counts as "scrolled to the top" — close enough that the member doesn't have to hit the exact pixel. */
 const SCROLLBACK_TRIGGER_PX = 80;
 
+/** #285: `sendTyping(true)` is throttled to once per this long while the member keeps typing — "throttled", per the issue — well under the seam's own server-side timeout so a receiver never sees a gap. */
+const TYPING_SEND_THROTTLE_MS = 8_000;
+
 /** #212: how long the "New messages" line has to sit in view before the member's read marker actually advances past it (AC3) — long enough that flying past it while scrolling doesn't count as having read it. */
 const UNREAD_DWELL_MS = 900;
 
@@ -98,6 +102,26 @@ export { roomHref, threadHref };
 /** The latest reply's author as the id says they are — "carol's duo" from `@duo-carol`, never a chosen name. */
 function threadPreviewLabel(reply: { senderId: string; senderName: string }): string {
   return mentionLabelOf(reply.senderId, reply.senderName);
+}
+
+/**
+ * #285: "X is typing…" for one, "X and Y are typing…" for two, "X, Y and 2
+ * others are typing…" past that — each name run through `mentionLabelOf`
+ * so a duo that somehow typed would read as "{owner}'s duo", structurally,
+ * never by a display name it chose.
+ */
+function typingWords(typing: readonly TypingMember[]): string | null {
+  if (typing.length === 0) {
+    return null;
+  }
+  const names = typing.map((member) => mentionLabelOf(member.userId, member.name));
+  if (names.length === 1) {
+    return `${names[0]} is typing…`;
+  }
+  if (names.length === 2) {
+    return `${names[0]} and ${names[1]} are typing…`;
+  }
+  return `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length - 2 === 1 ? "" : "s"} are typing…`;
 }
 
 /**
@@ -354,6 +378,19 @@ export function Room({
       void queryClient.invalidateQueries({ queryKey: ["workspace", "rooms"] });
     });
   }, [connection, queryClient]);
+
+  // #285: who else is typing here, right now — a fresh snapshot on every
+  // change, re-subscribed whenever the room or the connection itself
+  // changes (never for an older window: `at !== undefined` has no live
+  // composer to answer back from, so there is nothing to show this for).
+  const [typingUsers, setTypingUsers] = useState<readonly TypingMember[]>([]);
+  useEffect(() => {
+    setTypingUsers([]);
+    if (!connection || at !== undefined) {
+      return;
+    }
+    return connection.subscribeTyping?.(roomId, setTypingUsers);
+  }, [connection, roomId, at]);
 
   const rooms = useQuery({
     queryKey: ["workspace", "rooms"],
@@ -836,16 +873,24 @@ export function Room({
         </div>
       )}
       {at === undefined ? (
-        <RoomComposer
-          connection={connection}
-          roomId={roomId}
-          roomName={roomName}
-          members={room?.members ?? []}
-          replyTarget={replyTarget}
-          onCancelReply={() => setReplyTarget(null)}
-          onFactCheck={onFactCheck}
-          onRewrite={onRewrite}
-        />
+        <>
+          {/* #285: a plain status line, not an action — Fog/muted, no accent, clears itself the moment the SDK's own typing state does. */}
+          {typingWords(typingUsers) !== null && (
+            <p className="px-4 pt-2 type-provenance text-[var(--muted)]" data-testid="room-typing-indicator">
+              {typingWords(typingUsers)}
+            </p>
+          )}
+          <RoomComposer
+            connection={connection}
+            roomId={roomId}
+            roomName={roomName}
+            members={room?.members ?? []}
+            replyTarget={replyTarget}
+            onCancelReply={() => setReplyTarget(null)}
+            onFactCheck={onFactCheck}
+            onRewrite={onRewrite}
+          />
+        </>
       ) : (
         // A window into history has no composer: the words go to the live
         // conversation, one link away.
@@ -1635,6 +1680,22 @@ function RoomComposer({
   // once the drag has actually left every element of the composer.
   const dragDepth = useRef(0);
   const [dragActive, setDragActive] = useState(false);
+  // #285: whether this device currently has `m.typing: true` live for this
+  // room, and when it last (re)sent it — both plain refs, never state:
+  // neither should ever cause a render, they only gate how often
+  // `sendTyping` is actually called.
+  const typingActive = useRef(false);
+  const typingSentAt = useRef(0);
+  const stopTyping = (): void => {
+    if (typingActive.current) {
+      typingActive.current = false;
+      connection.sendTyping?.(roomId, false).catch(() => undefined);
+    }
+  };
+  // Leaving the room (or this room's composer unmounting for any other
+  // reason) stops typing exactly like clearing the text does — nothing
+  // here waits out the server's own timeout for a member who's moved on.
+  useEffect(() => stopTyping, [connection, roomId]);
 
   /**
    * Stages what this app will share and says why about what it won't — the
@@ -1762,6 +1823,8 @@ function RoomComposer({
             editor.current?.clear();
             setAttachments([]);
             onCancelReply?.();
+            // #285: a sent message is the clearest possible "stopped typing" — no reason to wait out the throttle or the server's own timeout.
+            stopTyping();
           } catch (error) {
             // Only an upload throws here — a refused send lives on its own
             // row instead (caught above). The rest stay attached and the
@@ -1874,6 +1937,22 @@ function RoomComposer({
           onTextChange={(body) => {
             setText(body);
             setError(null);
+            // #285: off entirely when this member turned sending off
+            // (Settings) — seeing everyone else's typing is unaffected,
+            // only this device's own announcement stops.
+            if (!readTypingPref()) {
+              return;
+            }
+            if (body.trim().length === 0) {
+              stopTyping();
+              return;
+            }
+            const now = Date.now();
+            if (!typingActive.current || now - typingSentAt.current >= TYPING_SEND_THROTTLE_MS) {
+              typingActive.current = true;
+              typingSentAt.current = now;
+              connection.sendTyping?.(roomId, true).catch(() => undefined);
+            }
           }}
         />
         <button

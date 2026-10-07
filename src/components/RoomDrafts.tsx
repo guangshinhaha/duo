@@ -4,6 +4,7 @@ import { conversationOf } from "../workspace/drafts.js";
 import { DeliveryStateLine } from "./DeliveryStateLine.js";
 import { Collapse, useLeaving } from "./Collapse.js";
 import { DraftTray } from "./DraftTray.js";
+import { Mark } from "./Mark.js";
 import { useStickToEnd } from "../shell/stickToEnd.js";
 import { useHeldRooms } from "../shell/waiting.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
@@ -32,7 +33,24 @@ import { EscalationCard, isColleagueEscalation } from "./EscalationCard.js";
 /** How long "Delivered." stays at the end of a conversation after the send it confirms. */
 const DELIVERED_NEWS_MS = 5 * 60_000;
 
-export function RoomDrafts({ api, roomId, connection = null }: { api: DuoApiConfig; roomId: string; connection?: WorkspaceConnection | null }) {
+export function RoomDrafts({
+  api,
+  roomId,
+  connection = null,
+  drafting = false,
+}: {
+  api: DuoApiConfig;
+  roomId: string;
+  connection?: WorkspaceConnection | null;
+  /**
+   * #285: "your duo is drafting" — App.tsx's own read of the daemon's
+   * `draft-drafting` push for this room (see its own doc comment for why
+   * it lives there). Shown only while there's nothing already waiting:
+   * once a draft (or an escalation) exists, that IS the answer to "is it
+   * drafting", rendered as it always was.
+   */
+  drafting?: boolean;
+}) {
   const pending = usePendingDrafts(api);
   const rooms = useHeldRooms(connection);
   const feed = useDraftsFeed(api);
@@ -64,6 +82,12 @@ export function RoomDrafts({ api, roomId, connection = null }: { api: DuoApiConf
   // from "waiting" to "sent" is one region changing, not one unmounting.
   return (
     <div data-testid="room-drafts" ref={end}>
+      {/* #285: never implies the duo IS the owner — it's attributed exactly like any other duo activity, with the duo's own working mark, never a typing dot borrowed from a person. */}
+      {drafting && waiting.length === 0 && (
+        <p className="mt-5 flex items-center gap-2 type-provenance text-[var(--muted)] motion-rise" data-testid="room-drafting-indicator">
+          <Mark working /> Your duo is drafting…
+        </p>
+      )}
       {(waiting.length > 0 || sent.length > 0) && (
         <section aria-label="Drafts from your duo" className="mt-5 flex flex-col gap-4">
           {sent.map((draft) => (
