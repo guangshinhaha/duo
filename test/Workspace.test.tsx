@@ -296,6 +296,23 @@ function fakeConnection(state: {
         state.rooms[at] = { ...state.rooms[at]!, markedUnread: true };
       }
     }),
+    // duo#290: the account's own composer draft for a room — "" clears it,
+    // the same server-side footing (and the same "present only when true"
+    // reading) every other account-data field here takes.
+    setDraft: vi.fn(async (roomId: string, text: string) => {
+      const at = roomAt(roomId);
+      if (at < 0) {
+        return;
+      }
+      if (text === "") {
+        const next = { ...state.rooms[at]! };
+        delete (next as { draft?: string }).draft;
+        state.rooms[at] = next;
+      } else {
+        state.rooms[at] = { ...state.rooms[at]!, draft: text };
+      }
+      notify(roomId);
+    }),
     startDirect: vi.fn(async (userId: string) => {
       const roomId = `!fresh-${userId.slice(1).replace(/[^a-z0-9-]/gi, "")}:workspace.example`;
       state.rooms.push({
@@ -4001,6 +4018,92 @@ describe("#244 — Enter sends in the conversation composer", () => {
     pressEnter(field);
     // …and the body is the markdown source the seam turns into formatted_body (markdown.ts).
     await waitFor(() => expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "**ship** it, 2 * 3 times"));
+  });
+});
+
+describe("duo#290 — the composer's own words follow the member across devices", () => {
+  it("opens a room already holding the draft another device wrote", async () => {
+    seedSession();
+    const rooms = roomsFixture();
+    const projectX = rooms.find((room) => room.roomId === "!project-x:workspace.example")!;
+    // What a sync from another device would already have delivered into
+    // this account's own room data — the seam's `rooms()` carries it the
+    // same way it carries `markedUnread` or the notification mode.
+    (projectX as { draft?: string }).draft = "let me check with";
+    const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    expect(composerText(field)).toBe("let me check with");
+  });
+
+  it("saves the typed words a short pause after the member stops, and leaves them alone before that", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    const field = screen.getByLabelText("Message project-x");
+
+    // Real timers, deliberately, even though this is exactly the shape of
+    // wait every other debounce/throttle test in this file fakes: the app
+    // also runs a real `PersistQueryClientProvider` whose own throttled
+    // write rides the same global `setTimeout` faking it would capture,
+    // and advancing fake time far enough to clear this debounce (800ms)
+    // routinely crosses that throttle too — on past evidence, firing it
+    // mid-test and leaving a stale cache write for a LATER test's cold
+    // `renderApp()` to rehydrate. The debounce is short; a real wait costs
+    // this one test under a second.
+    typeInto(field, "let me check");
+    // Still typing, or at least not yet paused for a full debounce window
+    // — nothing has gone out to the account yet.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(fake.connection.setDraft).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(fake.connection.setDraft).toHaveBeenCalledWith("!project-x:workspace.example", "let me check"));
+  });
+
+  it("clears the draft the instant the words are sent — never resurrected by a save already in flight", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    const field = screen.getByLabelText("Message project-x");
+
+    // Real timers — see the previous test's doc comment for why.
+    typeInto(field, "ship it");
+    pressEnter(field);
+    await waitFor(() => expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "ship it"));
+    expect(fake.connection.setDraft).toHaveBeenCalledWith("!project-x:workspace.example", "");
+
+    // The debounce that was still pending when Send fired must never land
+    // afterward and write the sent words back as a "draft".
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(fake.connection.setDraft).not.toHaveBeenCalledWith("!project-x:workspace.example", "ship it");
+  });
+
+  it("switching rooms never carries one room's unsent words into another's composer", async () => {
+    seedSession();
+    const rooms = roomsFixture();
+    const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+    typeInto(screen.getByLabelText("Message project-x"), "ship it");
+
+    navigate("#chat/!announce%3Aworkspace.example");
+    // "room-timeline" is one element across both rooms — it's already
+    // there from project-x, so it resolves before the switch; the
+    // composer's own label is what's actually room-specific.
+    const announceField = await screen.findByLabelText("Message announce");
+    expect(composerText(announceField)).toBe("");
   });
 });
 

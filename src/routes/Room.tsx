@@ -102,6 +102,9 @@ const SCROLLBACK_TRIGGER_PX = 80;
 /** #285: `sendTyping(true)` is throttled to once per this long while the member keeps typing — "throttled", per the issue — well under the seam's own server-side timeout so a receiver never sees a gap. */
 const TYPING_SEND_THROTTLE_MS = 8_000;
 
+/** duo#290: how long the composer waits, after the member last changed the words, before saving them as this room's draft — "debounced", per the issue — short enough that a device switch within a few seconds still finds them. */
+const DRAFT_SAVE_DEBOUNCE_MS = 800;
+
 /** #212: how long the "New messages" line has to sit in view before the member's read marker actually advances past it (AC3) — long enough that flying past it while scrolling doesn't count as having read it. */
 const UNREAD_DWELL_MS = 900;
 
@@ -1138,6 +1141,14 @@ export function Room({
             )}
             <RoomComposer
               connection={connection}
+              // duo#290: a fresh instance per room — the one thing that
+              // guarantees the typed-but-unsent words of the room just
+              // left can never bleed into the one just opened, and that
+              // this room's own composer starts from its own draft
+              // (`initialDraft` below) rather than whatever the previous
+              // room's instance happened to hold.
+              key={roomId}
+              initialDraft={room?.draft ?? ""}
               roomId={roomId}
               roomName={roomName}
               members={room?.members ?? []}
@@ -1987,12 +1998,24 @@ export function RoomEntry({
  * the wire carries. Sharing is not importing — the upload goes to the
  * homeserver's media store for the people in the room, and nothing here
  * can reach any daemon's corpus.
+ *
+ * duo#290: the typed-but-unsent words themselves follow the member across
+ * devices — a half-written message started on one is there to finish on
+ * another. `initialDraft` (the room's own `draft` field, `Room`'s own
+ * fresh `key={roomId}` per room) seeds the editor once; from then on, a
+ * short debounce after each change saves the words to this account's own
+ * room data (`connection.setDraft`), and Send clears them there immediately
+ * — no undo window, no merge, last write wins, same as every other
+ * account-data field this seam holds. `connection.setDraft` is optional
+ * (a minimal test stub may not implement it), so the feature degrades to
+ * "nothing follows you" rather than throwing where it's absent.
  */
 function RoomComposer({
   connection,
   roomId,
   roomName,
   members,
+  initialDraft = "",
   replyTarget = null,
   onCancelReply,
   onRewrite,
@@ -2003,6 +2026,8 @@ function RoomComposer({
   roomId: string;
   roomName: string;
   members: readonly RoomMemberRef[];
+  /** duo#290: this room's own `draft` (`RoomSummary.draft`), read once to seed the editor — `Room`'s `key={roomId}` on this component is what makes "once" mean "once per room" rather than carrying a stale value across a room switch. */
+  initialDraft?: string;
   /** #215: the message this send will quote — set by a row's "Reply" action, held by `Room`. */
   replyTarget?: RoomMessage | null;
   /** #215: cancels the reply in progress — the composer never holds this state itself, so cancelling and sending both just ask `Room` to let go of it. */
@@ -2034,7 +2059,34 @@ function RoomComposer({
   const [pendingShare] = useState(() => takeShareForRoom(roomId));
   // The editor's composed body, mirrored for the one thing the form itself
   // needs to know before Send: whether there's anything to send at all.
-  const [text, setText] = useState(() => pendingShare?.text ?? "");
+  // duo#290/#324: a pending share (just now, on THIS device, from the OS
+  // share sheet) outranks a cross-device draft — it's the more immediate,
+  // more deliberate "I want to send this" — but either seeds the editor
+  // ahead of starting empty. The editor below takes the same resolved
+  // value as its own one-read-only `initialText` prop (#248's convention
+  // — see `Composer.tsx`'s identical use of it).
+  const [text, setText] = useState(() => pendingShare?.text ?? initialDraft);
+  // duo#290: `initialDraft` can still be "" on this very first render even
+  // for a room that DOES have one — `timeline` (gating the whole page
+  // above) and `rooms` (where `draft` actually lives) are two separate
+  // queries, so the page can already be past loading while `rooms` hasn't
+  // answered yet. A later prop change can never reach `useState`'s initial
+  // value, so this effect is the one place a late-arriving draft still
+  // gets in — once, and only while nothing already seeded the editor
+  // (a pending share, or a draft already available at mount) and the
+  // member hasn't typed anything of their own in the meantime (`text ===
+  // ""` is that "untouched" read; a member who typed something and
+  // deleted it all back to "" in that same narrow window is a case rare
+  // enough, and harmless enough, not to guard any further than this).
+  const seededLateDraft = useRef(Boolean(pendingShare?.text) || initialDraft !== "");
+  useEffect(() => {
+    if (seededLateDraft.current || initialDraft === "" || text !== "") {
+      return;
+    }
+    seededLateDraft.current = true;
+    setText(initialDraft);
+    editor.current?.setText(initialDraft);
+  }, [initialDraft, text]);
   const [attachments, setAttachments] = useState<StagedShare[]>([]);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -2083,6 +2135,56 @@ function RoomComposer({
   // reason) stops typing exactly like clearing the text does — nothing
   // here waits out the server's own timeout for a member who's moved on.
   useEffect(() => stopTyping, [connection, roomId]);
+
+  // duo#290: saves the typed-but-unsent words to this account's own room
+  // data, a short pause after the member stops changing them — not on
+  // every keystroke, the same throttling spirit `sendTyping` above already
+  // takes, just a plain debounce rather than a repeat. A ref, never state:
+  // the timer itself must never cause a render, and it must survive the
+  // component unmounting mid-pause so a room switch doesn't drop whatever
+  // was typed in the half-second before it (the cleanup below fires it
+  // immediately instead of letting it evaporate).
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveDraftSoon = (body: string): void => {
+    if (draftSaveTimer.current !== null) {
+      clearTimeout(draftSaveTimer.current);
+    }
+    draftSaveTimer.current = setTimeout(() => {
+      draftSaveTimer.current = null;
+      connection.setDraft?.(roomId, body).catch(() => undefined);
+    }, DRAFT_SAVE_DEBOUNCE_MS);
+  };
+  /**
+   * duo#290: every other way the composer's words leave it without going
+   * out as a message — Send (`performSend`), "Save to Later"
+   * (`saveComposerToLater`), a dispatched slash command (`runSlashCommand`)
+   * — must clear the account's own copy the same way Send does: cancel a
+   * save already queued (it must never land after this and resurrect
+   * words that just went somewhere else), and write `""` so another
+   * device stops showing them too.
+   */
+  const clearDraftEverywhere = (): void => {
+    if (draftSaveTimer.current !== null) {
+      clearTimeout(draftSaveTimer.current);
+      draftSaveTimer.current = null;
+    }
+    connection.setDraft?.(roomId, "").catch(() => undefined);
+  };
+  useEffect(() => {
+    return () => {
+      if (draftSaveTimer.current !== null) {
+        clearTimeout(draftSaveTimer.current);
+        draftSaveTimer.current = null;
+        // Flush rather than drop: leaving before the debounce fired must
+        // not look, to another device, like the words were never typed.
+        connection.setDraft?.(roomId, editor.current?.read().body ?? text).catch(() => undefined);
+      }
+    };
+    // Deliberately not reactive to `text`: reading it is only the
+    // mid-unmount fallback above (`editor.current` is read first and is
+    // never null while mounted), and resubscribing on every keystroke
+    // would just tear this effect down and back up for no reason.
+  }, [connection, roomId]);
 
   /**
    * Stages what this app will share and says why about what it won't — the
@@ -2151,6 +2253,8 @@ function RoomComposer({
     await saveNoteToLater(text.trim(), remindAt);
     editor.current?.clear();
     setText("");
+    // duo#290: the words just left the composer for Later, same as sending.
+    clearDraftEverywhere();
   };
 
   /**
@@ -2214,6 +2318,8 @@ function RoomComposer({
         onCancelReply?.();
         // #285: a sent message is the clearest possible "stopped typing" — no reason to wait out the throttle or the server's own timeout.
         stopTyping();
+        // duo#290: sent is the clearest possible "nothing left to save" too.
+        clearDraftEverywhere();
       } catch (error) {
         // Only an upload throws here — a refused send lives on its own
         // row instead (caught above). The rest stay attached and the
@@ -2251,6 +2357,9 @@ function RoomComposer({
     editor.current?.clear();
     setAttachments([]);
     onCancelReply?.();
+    // duo#290: every branch below dispatches the typed command instead of
+    // sending it — the words still left the composer.
+    clearDraftEverywhere();
     if (command.id === "duo" || command.id === "summarize") {
       setCommandNotice(onSlashCommand(command.id));
       return;
@@ -2439,9 +2548,13 @@ function RoomComposer({
         <ChatEditor
           ariaLabel={`Message ${roomName}`}
           editorRef={editor}
-          // #324: seeds the editor with whatever text the share carried —
-          // read once, same as `text`'s own initial state above.
-          initialText={pendingShare?.text ?? ""}
+          // duo#290/#324: the one read, the one time, the same resolved
+          // value `text`'s own initial state takes above (a pending share
+          // ahead of a cross-device draft) — same convention
+          // `Composer.tsx`'s `initialQuestion` already takes; `Room`'s own
+          // `key={roomId}` on this whole component is what makes this value
+          // (and the editor state it seeds) specific to the room on screen.
+          initialText={pendingShare?.text ?? initialDraft}
           mentionCandidates={mentionCandidates}
           mode="markdown"
           placeholder={`Message ${roomName}`}
@@ -2453,6 +2566,11 @@ function RoomComposer({
           onTextChange={(body) => {
             setText(body);
             setError(null);
+            // duo#290: every change restarts the debounce — saved only once
+            // the member actually pauses, including a pause at "" (the
+            // words were typed and then taken back, which must clear the
+            // draft everywhere exactly as a never-typed room has none).
+            saveDraftSoon(body);
             // duo#301: typing something new past either state empties it —
             // a stale confirm or notice must never apply to words that
             // changed underneath it. Gated on non-empty, deliberately: the

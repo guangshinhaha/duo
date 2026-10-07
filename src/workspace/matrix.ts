@@ -253,6 +253,19 @@ export interface RoomSummary {
    */
   readonly pinnedEventIds?: readonly string[];
   /**
+   * duo#290: this member's own typed-but-unsent words for this room, held
+   * as this account's own data (`duo.composer_draft`) — not this device's —
+   * so a half-written message started on one device is there to finish on
+   * another, the same "the account holds it, every device reads the same
+   * answer" story `markedUnread`/`notifications` already tell. Absent when
+   * there's nothing typed (never an empty string), the same "present only
+   * when true" convention `markedUnread`/`pinnedEventIds` use above, so an
+   * existing fixture that predates this field still satisfies the type.
+   * `RoomComposer` writes it on a short debounce and clears it (with `""`)
+   * the instant the words are sent.
+   */
+  readonly draft?: string;
+  /**
    * #297: this conversation is pinned to the top of the sidebar — the
    * spec's own `m.favourite` room tag, the account's own state, so it
    * syncs the same way on every device. Distinct from `pinnedEventIds`
@@ -892,6 +905,20 @@ export interface WorkspaceConnection {
    * the same as every other account-data write in this seam.
    */
   markUnread(roomId: string): Promise<void>;
+  /**
+   * duo#290: saves (or clears, with `""`) this member's own typed-but-unsent
+   * words for a room — this account's own data (`duo.composer_draft`), the
+   * same "the account holds it, every device reads the same answer" story
+   * `markUnread`/`setNotificationMode` above already tell, so a half-written
+   * message follows the member to wherever they open this room next.
+   * `RoomComposer` calls this on a short debounce while the member types,
+   * and immediately with `""` the instant the words are sent — last write
+   * wins, the same as every other account-data field in this seam; there is
+   * no merge between devices. Optional: absent on a minimal test stub that
+   * never exercises composer drafts (the same stance `sendTyping` and
+   * `keywordAlerts` already take above).
+   */
+  setDraft?(roomId: string, text: string): Promise<void>;
   /**
    * This member's place in this room (#212): `m.fully_read`'s event id, or
    * — the one time no marker has ever been set here — this account's own
@@ -2473,6 +2500,7 @@ async function projectRoom(
   const invitedMembers = await projectMemberRefs(client, room, selfId, "invite", ownerNameCache, askServer);
   const declinedDuos = declinedDuosOf(room);
   const pinnedEventIds = pinnedEventIdsOf(room);
+  const draftText = draftTextOf(room);
   return {
     roomId: room.roomId,
     kind: roomKindOf(direct, room.getJoinRule()),
@@ -2500,6 +2528,7 @@ async function projectRoom(
     canEdit: editPermissionsOf(room, selfId),
     ...(markedUnreadOf(room) ? { markedUnread: true as const } : {}),
     ...(pinnedEventIds.length > 0 ? { pinnedEventIds } : {}),
+    ...(draftText !== "" ? { draft: draftText } : {}),
     ...(pinnedOf(room) ? { pinned: true as const } : {}),
     ...(archivedOf(room) ? { archived: true as const } : {}),
   };
@@ -2536,6 +2565,23 @@ function markedUnreadOf(room: MatrixRoom): boolean {
     return content?.unread === true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * duo#290: this member's own typed-but-unsent words for this room, read as
+ * defensively as the other account-data flags above (`notificationModeOf`,
+ * `markedUnreadOf`) — a fixture that predates this, or carries no such
+ * accessor at all, reads as "nothing typed", never a crash. Empty reads the
+ * same as absent: there is no distinction between "never wrote a draft
+ * here" and "wrote one, then emptied it back out".
+ */
+function draftTextOf(room: MatrixRoom): string {
+  try {
+    const content = room.getAccountData("duo.composer_draft")?.getContent() as { text?: unknown } | undefined;
+    return typeof content?.text === "string" ? content.text : "";
+  } catch {
+    return "";
   }
 }
 
@@ -3402,6 +3448,9 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
     markUnread: async (roomId) => {
       await client.setRoomAccountData(roomId, "m.marked_unread", { unread: true });
     },
+    setDraft: async (roomId, text) => {
+      await client.setRoomAccountData(roomId, "duo.composer_draft", { text });
+    },
     readMarker: (roomId) => {
       const room = client.getRoom(roomId);
       if (!room) {
@@ -3798,6 +3847,17 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       const receiptListener = (_event: MatrixEvent, room: MatrixRoom): void => {
         handler(room.roomId);
       };
+      // duo#290: this account's own room data changing (a composer draft
+      // written from another device, a mute, a mark-unread) is room news
+      // the same way a reaction or an amendment is — no arrival, because
+      // it is never a NEW message, only this device's own next projection
+      // reading differently. This is the one thing that puts a draft
+      // typed on another device in front of this one within seconds: the
+      // homeserver's sync pushes the account-data change live, same as a
+      // message would.
+      const accountDataListener = (_event: MatrixEvent, room: MatrixRoom): void => {
+        handler(room.roomId);
+      };
       // #297: a pin or an archive — this account's own `m.tag` write,
       // from this device or another — is room news the same way a name
       // change is: no arrival, just the roomId, so the sidebar re-reads
@@ -3808,12 +3868,14 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       client.on(RoomEvent.Timeline, listener);
       client.on(RoomEvent.LocalEchoUpdated, localEchoListener);
       client.on(RoomEvent.Receipt, receiptListener);
+      client.on(RoomEvent.AccountData, accountDataListener);
       client.on(RoomEvent.Tags, tagsListener);
       handlers.add(handler);
       return () => {
         client.off(RoomEvent.Timeline, listener);
         client.off(RoomEvent.LocalEchoUpdated, localEchoListener);
         client.off(RoomEvent.Receipt, receiptListener);
+        client.off(RoomEvent.AccountData, accountDataListener);
         client.off(RoomEvent.Tags, tagsListener);
         handlers.delete(handler);
       };

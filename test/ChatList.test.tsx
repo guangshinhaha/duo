@@ -353,6 +353,47 @@ describe("#143 — Waiting on you is a count and a filter", () => {
   });
 });
 
+describe("duo#290 — a composer draft marks the row it's waiting in", () => {
+  it("shows the member's own typed-but-unsent words, with a pencil, never the word \"Draft\"", async () => {
+    stubQueues([], []);
+    renderList({ connection: connectionWith([room("!p:w", { name: "project-x", kind: "group", draft: "let me check with" })]), session: {} as never });
+    const link = await screen.findByTestId("conversations-room");
+    const preview = await within(link).findByTestId("room-draft-preview");
+    expect(preview).toHaveTextContent("let me check with");
+    // #1 of vocabulary.md's rules travels structurally, not just by copy
+    // choice here — but the word itself is the one most likely to drift
+    // back in by accident, since the issue that asked for this feature
+    // (duo#290) names it "Draft" throughout. It must never appear as text
+    // in this row: that noun is already spent, on the duo's own object,
+    // one branch up in this same ternary (`waitingByRoom`'s "Draft ready").
+    expect(preview).not.toHaveTextContent(/draft/i);
+  });
+
+  it("never shows beside a draft your duo is holding for the same room — that one needs a decision, this one is just unfinished", async () => {
+    const roomId = "!p:w";
+    const permalink = `https://matrix.to/#/${roomId}/$e?via=w`;
+    stubQueues(
+      [draftAt("d", "2026-01-01T00:00:00Z", { provenance: { origin: "channel", channelKind: "native", askerRef: "@b:w", threadId: null, permalink } })],
+      [],
+    );
+    renderList({
+      connection: connectionWith([room(roomId, { name: "project-x", kind: "group", draft: "let me check with" })]),
+      session: {} as never,
+    });
+    const link = await screen.findByTestId("conversations-room");
+    await waitFor(() => expect(within(link).getByTestId("room-preview")).toHaveTextContent("Draft ready"));
+    expect(within(link).queryByTestId("room-draft-preview")).toBeNull();
+  });
+
+  it("clears the moment the account's own data says there's nothing typed — absent, same as a room that never had one", async () => {
+    stubQueues([], []);
+    renderList({ connection: connectionWith([room("!p:w", { name: "project-x", kind: "group" })]), session: {} as never });
+    const link = await screen.findByTestId("conversations-room");
+    expect(within(link).queryByTestId("room-draft-preview")).toBeNull();
+    expect(within(link).getByTestId("room-preview")).toHaveTextContent("lunch?");
+  });
+});
+
 describe("#298 — Unread, Mentions and Duos narrow the list, each with a count", () => {
   const channel = room("!c:w", { kind: "channel", name: "general", members: [{ userId: "@dee:workspace.example", name: "Dee" }] });
   const unread = room("!u:w", {
