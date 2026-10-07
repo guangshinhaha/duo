@@ -12,6 +12,7 @@ import {
   useOwnOrgInvites,
   useOwnOrgMembers,
   useRenameOrg,
+  useSetAnswering,
   useSetOrgAdmin,
   type OrgScope,
 } from "../api/queries.js";
@@ -202,6 +203,21 @@ function RoleMark({ kind }: { kind: "org_admin" | "super_admin" | "root" }) {
   );
 }
 
+/**
+ * duo#318: the verification marks — "Unverified" (the owner's Google sign-in was never checked against an
+ * invite; a duo made this way cannot answer colleagues at all, whatever the switch below says) and "Answering
+ * revoked" (verified, but an admin switched it off). The hairline's refused colour (`--refused`), the same one
+ * a draft's refusal reading carries, because both are the system declining to speak on the owner's behalf.
+ */
+function AnsweringMark({ kind }: { kind: "unverified" | "revoked" }) {
+  const label = kind === "unverified" ? "Unverified" : "Answering revoked";
+  return (
+    <span className="rounded-[var(--r-sm)] border border-[var(--refused)] px-2 type-identifier text-[var(--refused)]" data-testid={`admin-member-${kind}`}>
+      {label}
+    </span>
+  );
+}
+
 /** What to say for a refusal the daemon gave a code for. The app's words, keyed by the code and never by the daemon's own text. */
 function knownRefusal(error: unknown): string | null {
   if (!(error instanceof ApiRequestError)) {
@@ -308,6 +324,7 @@ function ConfirmChange({
 }
 
 function MemberRow({
+  answeringBusy,
   busy,
   isSelf,
   lastOrgAdminForOrgAdmin,
@@ -315,10 +332,13 @@ function MemberRow({
   onAppoint,
   onClosed,
   onRevoke,
+  onRevokeAnswering,
+  onRestoreAnswering,
   orgName,
   rowRef,
   viewer,
 }: {
+  answeringBusy: boolean;
   busy: boolean;
   isSelf: boolean;
   /** An org admin looking at the org's only org admin: the daemon refuses that revoke for them, so it is explained, not offered. */
@@ -327,6 +347,9 @@ function MemberRow({
   onAppoint: () => void;
   onClosed: () => void;
   onRevoke: () => void;
+  /** duo#318: never offered for the root duo or (to an org admin) the super admin's own duo — the daemon protects both the same way the role does. */
+  onRevokeAnswering: () => void;
+  onRestoreAnswering: () => void;
   orgName: string;
   rowRef: (element: HTMLLIElement | null) => void;
   viewer: "super" | "org";
@@ -335,6 +358,9 @@ function MemberRow({
   const canAppoint = !isOrgAdmin && !member.superAdmin && !member.isRoot;
   // A super admin who also holds the role can step down themselves, but another org admin does not manage them.
   const canRevoke = isOrgAdmin && !lastOrgAdminForOrgAdmin && !(viewer === "org" && member.superAdmin && !isSelf);
+  // duo#318: the root duo is never a target (always verified, always answering), and no viewer manages a super
+  // admin's own duo from this screen — the same unconditional carve-out `canAppoint` already gives that row.
+  const answeringManageable = !member.isRoot && !member.superAdmin;
   return (
     <li
       className="shape-entry flex flex-col gap-1 px-4 py-3"
@@ -348,6 +374,8 @@ function MemberRow({
         {member.isRoot && <RoleMark kind="root" />}
         {member.superAdmin && <RoleMark kind="super_admin" />}
         {isOrgAdmin && <RoleMark kind="org_admin" />}
+        {!member.verified && <AnsweringMark kind="unverified" />}
+        {member.verified && !member.answeringEnabled && <AnsweringMark kind="revoked" />}
       </div>
       <div className="flex flex-wrap gap-x-4 type-provenance text-[var(--muted)]">
         <span>{member.name}&apos;s duo</span>
@@ -378,6 +406,23 @@ function MemberRow({
       {isOrgAdmin && lastOrgAdminForOrgAdmin && (
         <p className="type-provenance text-[var(--muted)]" data-testid="admin-member-last">
           The org&apos;s last org admin. Only the super admin can remove them.
+        </p>
+      )}
+      {!member.verified && (
+        <p className="type-provenance text-[var(--muted)]" data-testid="admin-member-unverified-note">
+          {member.name}&apos;s Google sign-in was never checked against an invite.
+        </p>
+      )}
+      {member.verified && !member.answeringEnabled && (
+        <p className="type-provenance text-[var(--muted)]" data-testid="admin-member-answering-revoked">
+          Revoked{member.answeringRevokedByName ? ` by ${member.answeringRevokedByName}` : ""}
+          {member.answeringRevokedAt && (
+            <>
+              {" "}
+              on <DateLabel iso={member.answeringRevokedAt} />
+            </>
+          )}
+          . {member.name}&apos;s duo still works for them, but can&apos;t answer colleagues until this is restored.
         </p>
       )}
       {member.orgAdminLog.length > 0 && (
@@ -429,6 +474,37 @@ function MemberRow({
           )}
         </div>
       )}
+      {member.verified && answeringManageable && (
+        <div className="flex flex-wrap gap-2 pt-1">
+          {member.answeringEnabled ? (
+            <ConfirmChange
+              confirmLabel={`Revoke answering`}
+              description={`${member.name}'s duo stops answering colleagues at once. It keeps working for ${member.name} themselves, and nothing it already answered is undone.`}
+              disabled={answeringBusy}
+              onClosed={onClosed}
+              onConfirm={onRevokeAnswering}
+              testId="admin-revoke-answering"
+              title={`Stop ${member.name}'s duo answering colleagues?`}
+              tone="revoke"
+              triggerLabel="Revoke answering…"
+              triggerName={`Stop ${member.name}'s duo from answering colleagues…`}
+            />
+          ) : (
+            <ConfirmChange
+              confirmLabel={`Restore answering`}
+              description={`${member.name}'s duo can answer colleagues again, at once, within whatever limits ${member.name} has set.`}
+              disabled={answeringBusy}
+              onClosed={onClosed}
+              onConfirm={onRestoreAnswering}
+              testId="admin-restore-answering"
+              title={`Let ${member.name}'s duo answer colleagues again?`}
+              tone="appoint"
+              triggerLabel="Restore answering…"
+              triggerName={`Let ${member.name}'s duo answer colleagues again…`}
+            />
+          )}
+        </div>
+      )}
     </li>
   );
 }
@@ -463,12 +539,55 @@ function OrgPeople({
   viewer: "super" | "org";
 }) {
   const change = useSetOrgAdmin(api, scope, orgId);
+  const answering = useSetAnswering(api, scope, orgId);
   const [notice, setNotice] = useState<Notice | null>(null);
   const rows = Array.isArray(members.data) ? members.data : [];
   const selfId = viewer === "org" ? pairedDuoId(api) : null;
   const orgAdminCount = rows.filter((member) => member.orgRole === "org_admin").length;
   const rowElements = useRef(new Map<string, HTMLLIElement>());
   const inFlight = useRef(false);
+  const answeringInFlight = useRef(false);
+
+  /** duo#318: revokes or restores a member's answering — its own mutation and its own in-flight guard, parallel to `apply` above but with no step-down page swap to protect. */
+  function applyAnswering(member: HostedOrgMember, enabled: boolean): void {
+    if (answering.isPending || answeringInFlight.current) {
+      return;
+    }
+    answeringInFlight.current = true;
+    setNotice(null);
+    answering.mutate(
+      { duoId: member.duoId, enabled },
+      {
+        onSettled: () => {
+          answeringInFlight.current = false;
+        },
+        onSuccess: ({ changed }) => {
+          setNotice({
+            tone: "ok",
+            text: enabled
+              ? changed
+                ? `${member.name}'s duo can answer colleagues again.`
+                : `${member.name}'s duo could already answer colleagues.`
+              : changed
+                ? `${member.name}'s duo no longer answers colleagues.`
+                : `${member.name}'s duo already couldn't answer colleagues.`,
+          });
+        },
+        onError: (error) => {
+          if (viewer === "org" && error instanceof ApiRequestError && error.status === 403) {
+            onRefused?.();
+            return;
+          }
+          setNotice({
+            tone: "error",
+            text:
+              knownRefusal(error) ??
+              (error instanceof ApiRequestError && error.code === "not_found" ? `${member.name} isn't in ${orgName} any more. The list has been refreshed.` : error.message),
+          });
+        },
+      },
+    );
+  }
 
   function apply(member: HostedOrgMember, appoint: boolean): void {
     // One mutation serves the whole list: a second confirm while one is in flight would replace its callbacks (a step-down would lose its page swap). The ref covers two clicks in one render, before `isPending` has shown.
@@ -535,6 +654,7 @@ function OrgPeople({
         <ul className="flex flex-col gap-2">
           {rows.map((member) => (
             <MemberRow
+              answeringBusy={answering.isPending}
               busy={change.isPending}
               isSelf={member.duoId === selfId}
               key={member.duoId}
@@ -543,6 +663,8 @@ function OrgPeople({
               onAppoint={() => apply(member, true)}
               onClosed={() => rowElements.current.get(member.duoId)?.focus()}
               onRevoke={() => apply(member, false)}
+              onRevokeAnswering={() => applyAnswering(member, false)}
+              onRestoreAnswering={() => applyAnswering(member, true)}
               orgName={orgName}
               rowRef={(element) => {
                 if (element) {

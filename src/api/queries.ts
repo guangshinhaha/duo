@@ -24,7 +24,11 @@ import {
   listOwnOrgMembers,
   renameOrg,
   renameOwnOrg,
+  restoreAnswering,
+  restoreOwnAnswering,
+  revokeAnswering,
   revokeOrgAdmin,
+  revokeOwnAnswering,
   revokeOwnOrgAdmin,
   type CreateInviteInput,
 } from "./hosted.js";
@@ -1636,6 +1640,28 @@ export function useSetOrgAdmin(api: DuoApiConfig, scope: { origin: string; orgId
       scope
         ? (appoint ? grantOrgAdmin : revokeOrgAdmin)(scope.origin, api.token, scope.orgId, duoId)
         : (appoint ? grantOwnOrgAdmin : revokeOwnOrgAdmin)(api, duoId),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: scope ? queryKeys.hostedOrgMembers(scope.orgId) : queryKeys.orgMembers(orgId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.orgOverview });
+    },
+  });
+}
+
+/**
+ * duo#318: stops or restores a member's duo answering colleagues — the same `scope` shape as
+ * `useSetOrgAdmin` (the super admin's `{ origin, orgId }`, or null for an org admin's own org),
+ * but its own mutation: unlike the org admin role there is no "last one" constraint and no
+ * step-down page-swap, so it never needs `onSteppedDown`. The affected member's own `GET /org`
+ * is re-read too, so a revoked duo's app (and this one's Profile, if it is this duo) reflects it
+ * at once rather than on the next minute's poll.
+ */
+export function useSetAnswering(api: DuoApiConfig, scope: { origin: string; orgId: string } | null, orgId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ duoId, enabled }: { duoId: string; enabled: boolean }) =>
+      scope
+        ? (enabled ? restoreAnswering : revokeAnswering)(scope.origin, api.token, scope.orgId, duoId)
+        : (enabled ? restoreOwnAnswering : revokeOwnAnswering)(api, duoId),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: scope ? queryKeys.hostedOrgMembers(scope.orgId) : queryKeys.orgMembers(orgId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.orgOverview });

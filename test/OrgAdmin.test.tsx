@@ -374,7 +374,7 @@ describe("#254 — how the role is learned", () => {
 
 describe("#254 — the entry matrix (adminRoleOf)", () => {
   const account = (fields: Partial<HostedAccount> = {}): HostedAccount => ({ origin: ORIGIN, ownerName: "Ada", isAdmin: false, ...fields });
-  const answer = (role: OrgOverview["role"], superAdmin = false): OrgOverview => ({ org: ORG, role, superAdmin });
+  const answer = (role: OrgOverview["role"], superAdmin = false): OrgOverview => ({ org: ORG, role, superAdmin, verified: true, answeringEnabled: true });
   const none = { none: true } as const;
 
   it.each([
@@ -702,6 +702,76 @@ describe("#254 — appoint and revoke by an org admin", () => {
   });
 });
 
+describe("#254/duo#318 — answering, alongside the org admin role", () => {
+  /** Like `orgDaemon`'s `set` for the role, but for `answeringEnabled`. */
+  function answeringDaemon(initial: Row[], extra: Record<string, Handler> = {}) {
+    const answering: Record<string, boolean> = {};
+    const members = () => initial.map((m) => ({ ...m, answeringEnabled: answering[m.duoId] !== false, answeringRevokedByName: answering[m.duoId] === false ? "Ada" : null }));
+    return orgDaemon(initial, {
+      "GET /t/abc123/org/members": () => json(members()),
+      "POST /t/abc123/org/members/kim1/answering/revoke": () => {
+        const changed = answering["kim1"] !== false;
+        answering["kim1"] = false;
+        return json({ member: members().find((m) => m.duoId === "kim1"), changed });
+      },
+      "POST /t/abc123/org/members/kim1/answering/restore": () => {
+        const changed = answering["kim1"] === false;
+        delete answering["kim1"];
+        return json({ member: members().find((m) => m.duoId === "kim1"), changed });
+      },
+      ...extra,
+    });
+  }
+
+  it("revokes a member's answering after a plain confirmation, marks the row, and announces it; restoring brings the button back", async () => {
+    const { mock } = answeringDaemon([ME, SAM, KIM]);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
+    await screen.findAllByTestId("admin-member");
+    const kim = rowFor("Kim");
+    expect(within(kim).queryByTestId("admin-member-unverified")).toBeNull();
+    expect(within(kim).queryByTestId("admin-member-revoked")).toBeNull();
+
+    fireEvent.click(within(kim).getByRole("button", { name: "Stop Kim's duo from answering colleagues…" }));
+    const dialog = screen.getByTestId("admin-revoke-answering-confirmation");
+    expect(dialog).toHaveTextContent("stops answering colleagues at once");
+    expect(callsTo(mock, "POST", "/t/abc123/org/members/kim1/answering/revoke")).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("admin-revoke-answering-confirm"));
+
+    await waitFor(() => expect(within(rowFor("Kim")).getByTestId("admin-member-revoked")).toBeInTheDocument());
+    expect(screen.getByTestId("admin-people-notice")).toHaveTextContent("Kim's duo no longer answers colleagues.");
+    expect(within(rowFor("Kim")).getByTestId("admin-member-answering-revoked")).toHaveTextContent(/^Revoked by Ada\. Kim's duo still works for them/);
+    const [, init] = callsTo(mock, "POST", "/t/abc123/org/members/kim1/answering/revoke")[0]!;
+    expect(init?.body).toBeUndefined();
+
+    fireEvent.click(within(rowFor("Kim")).getByRole("button", { name: "Let Kim's duo answer colleagues again…" }));
+    fireEvent.click(screen.getByTestId("admin-restore-answering-confirm"));
+    await waitFor(() => expect(within(rowFor("Kim")).queryByTestId("admin-member-revoked")).toBeNull());
+    expect(screen.getByTestId("admin-people-notice")).toHaveTextContent("Kim's duo can answer colleagues again.");
+    expect(callsTo(mock, "POST", "/t/abc123/org/members/kim1/answering/restore")).toHaveLength(1);
+  });
+
+  it("shows Unverified for a duo with no identity check, with no answering control offered (nothing to toggle)", async () => {
+    const unverified = row({ duoId: "kim1", name: "Kim", email: "kim@example.com" });
+    orgDaemon([ME, SAM, { ...unverified, verified: false } as unknown as Row]);
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
+    await screen.findAllByTestId("admin-member");
+    const kim = rowFor("Kim");
+    expect(within(kim).getByTestId("admin-member-unverified")).toHaveTextContent("Unverified");
+    expect(within(kim).queryByTestId("admin-revoke-answering")).toBeNull();
+    expect(within(kim).queryByTestId("admin-restore-answering")).toBeNull();
+  });
+
+  it("super_admin_protected on an answering route says the same plain sentence as the role routes", async () => {
+    answeringDaemon([ME, SAM, KIM], { "POST /t/abc123/org/members/kim1/answering/revoke": () => refusal(409, "super_admin_protected", "Daemon text that must not be shown.") });
+    withClient(<Admin api={api} origin={ORIGIN} orgId={null} role="org" />);
+    await screen.findAllByTestId("admin-member");
+    fireEvent.click(within(rowFor("Kim")).getByTestId("admin-revoke-answering"));
+    fireEvent.click(screen.getByTestId("admin-revoke-answering-confirm"));
+    expect(await screen.findByText("The super admin manages every org already, so this can't be changed here.")).toBeInTheDocument();
+    expect(screen.queryByText(/Daemon text/)).toBeNull();
+  });
+});
+
 describe("#254 — the role goes while the page is open", () => {
   it("a 403 on Confirm is the plain 'not for you' note: no error screen, nothing changed, and the role is asked again", async () => {
     const { mock } = orgDaemon([ME, SAM, KIM], { "POST /t/abc123/org/admins/kim1/grant": () => forbidden() });
@@ -850,6 +920,38 @@ describe("#254 — the super admin's org page: appoint, revoke, marks and histor
     expect(within(rowFor("Boss")).getByTestId("admin-member-super-admin")).toHaveTextContent("Super admin");
     expect(within(rowFor("Boss")).queryByRole("button")).toBeNull();
     expect(within(rowFor("Shin")).queryByRole("button")).toBeNull();
+  });
+
+  it("duo#318: revokes and restores a member's answering through the super admin's own route; the root duo and Boss (another super admin) offer no control", async () => {
+    let answeringEnabled = true;
+    const currentMembers = () => [ME, { ...KIM, answeringEnabled, answeringRevokedByName: answeringEnabled ? null : "Super admin" }, BOSS, ROOT];
+    const { mock } = superDaemon([ME, KIM, BOSS, ROOT], {
+      "GET /hosted/orgs/plat1/members": () => json(currentMembers()),
+      "POST /hosted/orgs/plat1/members/kim1/answering/revoke": () => {
+        const changed = answeringEnabled;
+        answeringEnabled = false;
+        return json({ member: currentMembers().find((m) => m.duoId === "kim1"), changed });
+      },
+      "POST /hosted/orgs/plat1/members/kim1/answering/restore": () => {
+        const changed = !answeringEnabled;
+        answeringEnabled = true;
+        return json({ member: currentMembers().find((m) => m.duoId === "kim1"), changed });
+      },
+    });
+    withClient(<Admin api={superToken} origin={ORIGIN} orgId="plat1" role="super" />);
+    await screen.findAllByTestId("admin-member");
+    expect(within(rowFor("Boss")).queryByRole("button")).toBeNull();
+    expect(within(rowFor("Shin")).queryByRole("button")).toBeNull();
+
+    fireEvent.click(within(rowFor("Kim")).getByTestId("admin-revoke-answering"));
+    fireEvent.click(screen.getByTestId("admin-revoke-answering-confirm"));
+    await waitFor(() => expect(within(rowFor("Kim")).getByTestId("admin-member-revoked")).toBeInTheDocument());
+    expect(callsTo(mock, "POST", "/hosted/orgs/plat1/members/kim1/answering/revoke")).toHaveLength(1);
+
+    fireEvent.click(within(rowFor("Kim")).getByTestId("admin-restore-answering"));
+    fireEvent.click(screen.getByTestId("admin-restore-answering-confirm"));
+    await waitFor(() => expect(within(rowFor("Kim")).queryByTestId("admin-member-revoked")).toBeNull());
+    expect(callsTo(mock, "POST", "/hosted/orgs/plat1/members/kim1/answering/restore")).toHaveLength(1);
   });
 
   it("appoints through the super admin's route with the device token, then the row shows the mark", async () => {

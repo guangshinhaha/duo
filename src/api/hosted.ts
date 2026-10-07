@@ -135,6 +135,18 @@ export interface HostedOrgMember {
   readonly appointedByName: string | null;
   readonly appointedAt: string | null;
   readonly orgAdminLog: readonly OrgAdminLogRow[];
+  /**
+   * duo#318: whether this duo's owner is identity-verified — signed up with the Google account
+   * their invite named (or an invite open to anyone). Defaults to `true` when a daemon predates
+   * this (the same "fills every optional field" rule as `isAdmin`/`orgRole`): an older server's
+   * rows show no verification mark at all, rather than a false "unverified".
+   */
+  readonly verified: boolean;
+  /** duo#318: whether this duo may currently answer colleagues at all. Defaults to `true`, for the same reason. */
+  readonly answeringEnabled: boolean;
+  /** duo#318: who revoked answering, and when — null while enabled, or on an older daemon. */
+  readonly answeringRevokedByName: string | null;
+  readonly answeringRevokedAt: string | null;
 }
 
 /** `GET {basePath}/org` — what the signed-in duo is in its org. Any member may ask; it is how the app learns its role. */
@@ -143,6 +155,9 @@ export interface OrgOverview {
   readonly role: OrgRole;
   /** Also the super admin of this server. */
   readonly superAdmin: boolean;
+  /** duo#318: this duo's own verification and answering state. Defaults to `true`/`true` on a daemon that predates them. */
+  readonly verified: boolean;
+  readonly answeringEnabled: boolean;
 }
 
 /** A row of `GET {basePath}/org/invites`: this org's invite that has not been used or expired. The code is never listed. */
@@ -388,6 +403,9 @@ export function readOrgMembers(raw: unknown): HostedOrgMember[] {
         log.push({ at, action: item.action, byName: str(item.byName) });
       }
     }
+    // duo#318: absent on a daemon that predates this reads as "verified, answering" — the same
+    // graceful default `isAdmin`/`orgRole` already give an older row, never a false "unverified".
+    const answeringEnabled = fields.answeringEnabled !== false;
     members.push({
       duoId,
       name,
@@ -400,6 +418,10 @@ export function readOrgMembers(raw: unknown): HostedOrgMember[] {
       appointedByName: orgRole === "org_admin" ? str(fields.appointedByName) : null,
       appointedAt: orgRole === "org_admin" ? isoOrNull(fields.appointedAt) : null,
       orgAdminLog: log,
+      verified: fields.verified !== false,
+      answeringEnabled,
+      answeringRevokedByName: answeringEnabled ? null : str(fields.answeringRevokedByName),
+      answeringRevokedAt: answeringEnabled ? null : isoOrNull(fields.answeringRevokedAt),
     });
   }
   return members;
@@ -434,6 +456,18 @@ export async function grantOrgAdmin(origin: string, token: string, orgId: string
 export async function revokeOrgAdmin(origin: string, token: string, orgId: string, duoId: string): Promise<OrgAdminChange> {
   const base = `${origin}/hosted/orgs/${encodeURIComponent(orgId)}/admins/${encodeURIComponent(duoId)}`;
   return readChange(await readAnswer<unknown>(await postNothing(`${base}/revoke`, token)));
+}
+
+/** duo#318: `POST {origin}/hosted/orgs/:orgId/members/:duoId/answering/revoke` — the super admin stops a member's duo from answering colleagues. 404 for an unknown org, member, or the root duo (never managed this way). */
+export async function revokeAnswering(origin: string, token: string, orgId: string, duoId: string): Promise<OrgAdminChange> {
+  const base = `${origin}/hosted/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(duoId)}/answering`;
+  return readChange(await readAnswer<unknown>(await postNothing(`${base}/revoke`, token)));
+}
+
+/** duo#318: `POST {origin}/hosted/orgs/:orgId/members/:duoId/answering/restore` — the super admin lets the duo answer colleagues again. */
+export async function restoreAnswering(origin: string, token: string, orgId: string, duoId: string): Promise<OrgAdminChange> {
+  const base = `${origin}/hosted/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(duoId)}/answering`;
+  return readChange(await readAnswer<unknown>(await postNothing(`${base}/restore`, token)));
 }
 
 /**
@@ -478,7 +512,13 @@ export async function fetchOrgOverview(api: DuoApiConfig): Promise<OrgOverview |
   if (id === null || name === null) {
     return null;
   }
-  return { org: { id, name }, role: fields.role === "org_admin" ? "org_admin" : "member", superAdmin: fields.superAdmin === true };
+  return {
+    org: { id, name },
+    role: fields.role === "org_admin" ? "org_admin" : "member",
+    superAdmin: fields.superAdmin === true,
+    verified: fields.verified !== false,
+    answeringEnabled: fields.answeringEnabled !== false,
+  };
 }
 
 /** `GET {basePath}/org/members` — org admins only; 403 for anyone else. */
@@ -524,6 +564,16 @@ export async function grantOwnOrgAdmin(api: DuoApiConfig, duoId: string): Promis
 /** `POST {basePath}/org/admins/:duoId/revoke` — 409 `last_org_admin` for the org's last one (only the super admin may). Revoking one's own id steps down. */
 export async function revokeOwnOrgAdmin(api: DuoApiConfig, duoId: string): Promise<OrgAdminChange> {
   return readChange(await readAnswer<unknown>(await postNothing(orgUrl(api, `/org/admins/${encodeURIComponent(duoId)}/revoke`), api.token)));
+}
+
+/** duo#318: `POST {basePath}/org/members/:duoId/answering/revoke` — an org admin stops a member of their own org from answering colleagues. */
+export async function revokeOwnAnswering(api: DuoApiConfig, duoId: string): Promise<OrgAdminChange> {
+  return readChange(await readAnswer<unknown>(await postNothing(orgUrl(api, `/org/members/${encodeURIComponent(duoId)}/answering/revoke`), api.token)));
+}
+
+/** duo#318: `POST {basePath}/org/members/:duoId/answering/restore` — an org admin lets a member of their own org answer colleagues again. */
+export async function restoreOwnAnswering(api: DuoApiConfig, duoId: string): Promise<OrgAdminChange> {
+  return readChange(await readAnswer<unknown>(await postNothing(orgUrl(api, `/org/members/${encodeURIComponent(duoId)}/answering/restore`), api.token)));
 }
 
 /**

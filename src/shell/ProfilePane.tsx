@@ -1,4 +1,6 @@
 import type { DuoApiConfig } from "../api/client.js";
+import { pairedHostedAccount } from "../api/hosted.js";
+import { useOrgOverview } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
 import { Activity } from "../profile/Activity.js";
 import { Knows } from "../profile/Knows.js";
@@ -14,6 +16,50 @@ const LABELS: Readonly<Record<ProfileTab, string>> = {
   rules: "Rules",
   activity: "Activity",
 };
+
+/**
+ * duo#318: the owner's own verification/answering read — the one place this client tells the owner,
+ * rather than an admin, what their duo's state is. Hosted-only; `useOrgOverview` answers `{ none: true }`
+ * for a personal duo, or null before the first answer lands, and nothing is shown either way.
+ */
+function useVerification(api: DuoApiConfig): { verified: boolean; answeringEnabled: boolean } | null {
+  const data = useOrgOverview(api, pairedHostedAccount(api) !== null).data;
+  return data && !("none" in data) ? data : null;
+}
+
+/**
+ * The inline label beside "Your duo": "Verified" is quiet and informational, because a deployment
+ * with no Google sign-in at all shows every duo unverified by design, and that is not the owner's
+ * problem to fix from here — so an unverified owner sees no badge at all rather than a false alarm.
+ */
+function VerificationBadge({ api }: { api: DuoApiConfig }) {
+  const verification = useVerification(api);
+  if (!verification?.verified || !verification.answeringEnabled) {
+    return null;
+  }
+  return (
+    <span className="type-provenance text-[var(--muted)]" data-testid="profile-verified">
+      Verified
+    </span>
+  );
+}
+
+/**
+ * The one state that changes what colleagues experience, so — unlike the quiet badge above — it
+ * carries the refused tone and an explanation, the same register a demotion or a refusal gets
+ * elsewhere in this client, and sits on its own line rather than beside the title.
+ */
+function AnsweringPausedNotice({ api }: { api: DuoApiConfig }) {
+  const verification = useVerification(api);
+  if (verification?.answeringEnabled !== false) {
+    return null;
+  }
+  return (
+    <p className="type-provenance text-[var(--refused)]" data-testid="profile-answering-paused">
+      An admin has paused this duo&apos;s answering. It still works for you — colleagues are told it isn&apos;t answering right now.
+    </p>
+  );
+}
 
 /**
  * The duo's profile — what you open by tapping its name (docs/design-language.md
@@ -33,12 +79,16 @@ export function ProfilePane({ api, tab }: { api: DuoApiConfig; tab: ProfileTab }
             <Mark />
           </span>
           <div className="flex min-w-0 flex-col">
-            <h1 className="type-heading">Your duo</h1>
+            <div className="flex flex-wrap items-baseline gap-2">
+              <h1 className="type-heading">Your duo</h1>
+              <VerificationBadge api={api} />
+            </div>
             <a className="type-provenance text-[var(--muted)] underline" data-testid="profile-back" href="#duo">
               Back to the chat
             </a>
           </div>
         </div>
+        <AnsweringPausedNotice api={api} />
         <nav aria-label="Profile" className="-mb-px mt-2 flex gap-1 overflow-x-auto">
           {PROFILE_TABS.map((name) => (
             <a
