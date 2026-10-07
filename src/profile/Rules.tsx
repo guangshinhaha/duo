@@ -7,6 +7,7 @@ import { RuleCard, type RuleBucket } from "../components/RuleCard.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { CandidateCard } from "./CandidateCard.js";
+import { CoverageSummary } from "./CoverageSummary.js";
 
 /** The buckets in the order an owner meets them — what needs a decision first, the record last. */
 const BUCKETS: ReadonlyArray<{ key: RuleBucket; heading: string; empty: string; collapsed?: boolean }> = [
@@ -96,6 +97,11 @@ const isCandidate = (value: unknown): value is CorrectionCandidate =>
  * Approve, reject and promote are the daemon's own routes; there is no
  * free-text editing here, because `duo/rules/*.md` on the Mac is the source
  * of truth (AR-18).
+ *
+ * duo#317 AC2: the first run ends here, on these buckets, so the coverage
+ * number ("X of Y commonly-asked questions have an approved answer") sits
+ * at the top — the same read the Knows tab shows (`CoverageSummary`), so
+ * approving a rule here and checking coverage there can never disagree.
  */
 export function Rules({ api }: { api: DuoApiConfig }) {
   const rules = useMirrorRules(api);
@@ -117,6 +123,10 @@ export function Rules({ api }: { api: DuoApiConfig }) {
           {listing.approved?.length ?? 0} in use · {listing.awaitingApproval?.length ?? 0} waiting for you · {listing.rejected?.length ?? 0} set aside
         </p>
       )}
+      <section className="shape-container flex flex-col gap-2 p-4" data-testid="rules-coverage">
+        <h2 className="type-heading">What it can answer</h2>
+        <CoverageSummary api={api} />
+      </section>
       {/* duo#275: the owner's own overrides read first — ahead of standing
           orders and edits, because a pinned answer outranks both. Loads
           independently of `rules` and degrades to nothing rather than
