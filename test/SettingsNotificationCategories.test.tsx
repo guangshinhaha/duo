@@ -33,12 +33,14 @@ afterEach(() => {
 });
 
 describe("Settings — notification categories (#309)", () => {
-  it("lists all four categories, each defaulting to Immediate", () => {
+  it("lists all five categories, each defaulting to Immediate", () => {
     renderSettings();
     expect(screen.getByTestId("notif-category-draftsReady")).toHaveValue("immediate");
     expect(screen.getByTestId("notif-category-mentions")).toHaveValue("immediate");
     expect(screen.getByTestId("notif-category-passedOn")).toHaveValue("immediate");
     expect(screen.getByTestId("notif-category-directMessages")).toHaveValue("immediate");
+    // #310: keyword alerts is the fifth category — same default, same shape.
+    expect(screen.getByTestId("notif-category-keywordAlerts")).toHaveValue("immediate");
   });
 
   it("changing one category's setting writes it to this device's storage, leaving the others untouched", () => {
@@ -49,6 +51,7 @@ describe("Settings — notification categories (#309)", () => {
       passedOn: "immediate",
       mentions: "off",
       directMessages: "immediate",
+      keywordAlerts: "immediate",
     });
 
     fireEvent.change(screen.getByTestId("notif-category-directMessages"), { target: { value: "batched" } });
@@ -57,16 +60,18 @@ describe("Settings — notification categories (#309)", () => {
       passedOn: "immediate",
       mentions: "off",
       directMessages: "batched",
+      keywordAlerts: "immediate",
     });
   });
 
   it("reflects a setting already on this device's storage at mount", () => {
     localStorage.setItem(
       NOTIFICATION_CATEGORY_STORAGE_KEY,
-      JSON.stringify({ draftsReady: "batched", passedOn: "off", mentions: "immediate", directMessages: "immediate" }),
+      JSON.stringify({ draftsReady: "batched", passedOn: "off", mentions: "immediate", directMessages: "immediate", keywordAlerts: "off" }),
     );
     renderSettings();
     expect(screen.getByTestId("notif-category-draftsReady")).toHaveValue("batched");
     expect(screen.getByTestId("notif-category-passedOn")).toHaveValue("off");
+    expect(screen.getByTestId("notif-category-keywordAlerts")).toHaveValue("off");
   });
 });

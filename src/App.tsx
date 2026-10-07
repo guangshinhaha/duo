@@ -15,6 +15,7 @@ import { draftArrivalBody, draftArrivalCategory, postNotification, wireNotificat
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
 import { notifyCategory, queueForBatch } from "./notificationDispatch.js";
 import { readNotificationCategorySetting } from "./notificationCategoryPrefs.js";
+import { matchesAnyKeyword } from "./keywordAlertMatch.js";
 import { unsubscribeFromPush } from "./push.js";
 import { wireTrayReview } from "./tray.js";
 import { onDraftsChanged, wireMenu, wireOpenHash } from "./shell/native.js";
@@ -188,11 +189,19 @@ function openRoomIdFromHash(hash: string): string | null {
  * not a second copy of it.
  *
  * #309: on top of that per-room mode, a mention or a direct message is
- * also one of the four notification categories Settings now exposes —
+ * also one of the five notification categories Settings now exposes —
  * checked additively, right before the DND check this function already
  * made, never restructuring it. The duo acting on its own behalf (`mine`)
- * and a plain group message are neither one of the four categories, so
- * they fall through unchanged, exactly as before this existed.
+ * and a plain group message are neither one of the four conversation
+ * categories, so they fall through unchanged, exactly as before this
+ * existed.
+ *
+ * #310: a keyword alert is the one category that also bypasses the
+ * per-room mode above — the whole point of a standing alert ("a word that
+ * always surfaces") is that it is NOT subject to a room's mute or
+ * mentions-only setting. It still obeys the member's own keywordAlerts
+ * category setting (immediate/batched/off) and do-not-disturb exactly
+ * like every other category — only the room's own mode is overridden.
  */
 export async function dispatchArrival(
   connection: WorkspaceConnection,
@@ -214,9 +223,23 @@ export async function dispatchArrival(
   // member's own duo is the one acting on their behalf; a colleague's duo
   // is a participant like anyone else.
   const mine = isDuoUserId(arrival.senderId) && duoOwnerLabel(arrival.senderId) === localpartOf(connection.userId);
+  // #310: read once, used both to decide whether a keyword alert bypasses
+  // the room's mode below and, if so, which category gates the result.
+  // Cached under the same query key `connection.rooms()` falls back from
+  // above — `keywordAlerts` is optional (absent on a minimal test stub,
+  // same stance `renewToken` takes), so a stub that never set this up
+  // simply never matches.
+  const keywordHit =
+    !mine &&
+    matchesAnyKeyword(
+      arrival.body,
+      queryClient.getQueryData<readonly string[]>(["workspace", "keywordAlerts"]) ??
+        (await connection.keywordAlerts?.().catch(() => [])) ??
+        [],
+    );
   if (!mine) {
     const mode = room?.notifications ?? "all";
-    if (mode === "nothing" || (mode === "mentions" && !arrival.mentionsMe)) {
+    if (!keywordHit && (mode === "nothing" || (mode === "mentions" && !arrival.mentionsMe))) {
       // The member's standing choice, not something missed: the record is
       // for what do-not-disturb held back, and nothing else.
       return;
@@ -225,8 +248,19 @@ export async function dispatchArrival(
   // #309: a mention is the more specific demand ("someone is waiting on
   // you", vocabulary.md) — checked first, so a mention inside a direct
   // conversation obeys the mentions setting, not the direct-messages one.
-  // Neither applies to the duo's own act or a plain group message.
-  const category = mine ? null : arrival.mentionsMe ? "mentions" : room?.kind === "direct" ? "directMessages" : null;
+  // #310: a keyword hit that isn't also a mention comes next, ahead of
+  // direct messages — it is what let this arrival through a muted or
+  // mentions-only room in the first place. None of these apply to the
+  // duo's own act or a plain group message with no hit.
+  const category = mine
+    ? null
+    : arrival.mentionsMe
+      ? "mentions"
+      : keywordHit
+        ? "keywordAlerts"
+        : room?.kind === "direct"
+          ? "directMessages"
+          : null;
   if (category && readNotificationCategorySetting(category) === "off") {
     return; // the member's own category choice — not something DND held back
   }

@@ -341,6 +341,20 @@ export function ChatList({
     meta: { target: "workspace" },
   });
 
+  // #310: keeps the cache `dispatchArrival` (App.tsx) reads warm, the same
+  // "always-mounted query feeds the dispatch-side cache" shape `rooms`
+  // above already takes — without this, a keyword check would cost a
+  // network round trip on every single live arrival instead of reading
+  // what's already here. `keywordAlerts` is optional on the connection
+  // (absent on a minimal test stub); `enabled` below keeps this query from
+  // ever firing against one that doesn't have it.
+  useQuery({
+    queryKey: ["workspace", "keywordAlerts"],
+    queryFn: () => connection!.keywordAlerts!(),
+    enabled: connection !== null && typeof connection.keywordAlerts === "function",
+    meta: { target: "workspace" },
+  });
+
   // #296: the owner's own folders — this account's own data, read once and
   // then kept current by `watchSections`, the same "subscribe, never poll"
   // shape `connection.subscribe` above already uses for everything else

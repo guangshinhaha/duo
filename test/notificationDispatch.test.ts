@@ -4,7 +4,13 @@ import { setPlatformForTesting } from "../src/platform/index.js";
 import { writeNotificationCategoryPrefs } from "../src/notificationCategoryPrefs.js";
 import { notifyCategory, queueForBatch, resetNotificationBatches } from "../src/notificationDispatch.js";
 
-const ALL_IMMEDIATE = { draftsReady: "immediate", passedOn: "immediate", mentions: "immediate", directMessages: "immediate" } as const;
+const ALL_IMMEDIATE = {
+  draftsReady: "immediate",
+  passedOn: "immediate",
+  mentions: "immediate",
+  directMessages: "immediate",
+  keywordAlerts: "immediate",
+} as const;
 
 describe("#309 — notifyCategory, the one choke point every category-gated firing site shares", () => {
   let fake: ReturnType<typeof fakePlatform>;

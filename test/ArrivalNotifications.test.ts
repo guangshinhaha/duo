@@ -23,7 +23,13 @@ import { resetNotificationBatches } from "../src/notificationDispatch.js";
 
 const postNotificationMock = vi.mocked(postNotification);
 
-const ALL_IMMEDIATE = { draftsReady: "immediate", passedOn: "immediate", mentions: "immediate", directMessages: "immediate" } as const;
+const ALL_IMMEDIATE = {
+  draftsReady: "immediate",
+  passedOn: "immediate",
+  mentions: "immediate",
+  directMessages: "immediate",
+  keywordAlerts: "immediate",
+} as const;
 
 const ME = "@me:workspace.example";
 const ROOM_ID = "!project-x:workspace.example";
@@ -49,8 +55,8 @@ function arrival(overrides: Partial<LiveArrival> = {}): LiveArrival {
   return { senderId: "@bob:workspace.example", senderName: "Bob", body: "ship it", mentionsMe: false, ...overrides };
 }
 
-function connectionWith(rooms: readonly RoomSummary[]): WorkspaceConnection {
-  return { userId: ME, rooms: async () => rooms } as unknown as WorkspaceConnection;
+function connectionWith(rooms: readonly RoomSummary[], keywords: readonly string[] = []): WorkspaceConnection {
+  return { userId: ME, rooms: async () => rooms, keywordAlerts: async () => keywords } as unknown as WorkspaceConnection;
 }
 
 describe("dispatchArrival — the per-room notification level a browser notification now obeys too (#221)", () => {
@@ -169,5 +175,71 @@ describe("dispatchArrival — the mentions and direct-messages categories (#309)
     const connection = connectionWith([room({ kind: "direct", notifications: "all" })]);
     await dispatchArrival(connection, ROOM_ID, arrival());
     expect(postNotificationMock).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * #310: a keyword alert is the one category that also overrides the
+ * per-room mode checked at the very top of `dispatchArrival` — "a word
+ * that always surfaces" has to mean exactly that, even in a muted room.
+ */
+describe("dispatchArrival — keyword alerts (#310)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    window.location.hash = "";
+    postNotificationMock.mockClear();
+  });
+  afterEach(() => {
+    resetNotificationBatches();
+    localStorage.clear();
+    window.location.hash = "";
+  });
+
+  it("notifies for a matching keyword even in a fully muted room", async () => {
+    const connection = connectionWith([room({ notifications: "nothing", muted: true })], ["launch"]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ body: "We launch Monday." }));
+    expect(postNotificationMock).toHaveBeenCalledTimes(1);
+    const [body] = postNotificationMock.mock.calls[0]!;
+    expect(body).toBe("Bob in project-x: We launch Monday.");
+  });
+
+  it("notifies for a matching keyword in a mentions-only room, even without a mention", async () => {
+    const connection = connectionWith([room({ notifications: "mentions" })], ["launch"]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ body: "We launch Monday.", mentionsMe: false }));
+    expect(postNotificationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches a whole word only — 'launch' does not fire on 'prelaunching'", async () => {
+    const connection = connectionWith([room({ notifications: "nothing", muted: true })], ["launch"]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ body: "the prelaunching checklist" }));
+    expect(postNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("does nothing special when nothing matches — the room's own mute still holds", async () => {
+    const connection = connectionWith([room({ notifications: "nothing", muted: true })], ["launch"]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ body: "unrelated words" }));
+    expect(postNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("is never sent when the keywordAlerts category is off, even though it matched", async () => {
+    writeNotificationCategoryPrefs({ ...ALL_IMMEDIATE, keywordAlerts: "off" });
+    const connection = connectionWith([room({ notifications: "nothing", muted: true })], ["launch"]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ body: "We launch Monday." }));
+    expect(postNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("batched queues a keyword match instead of posting it immediately", async () => {
+    writeNotificationCategoryPrefs({ ...ALL_IMMEDIATE, keywordAlerts: "batched" });
+    const connection = connectionWith([room({ notifications: "nothing", muted: true })], ["launch"]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ body: "We launch Monday." }));
+    expect(postNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("a mention that also matches a keyword is categorized as a mention, not a keyword alert", async () => {
+    writeNotificationCategoryPrefs({ ...ALL_IMMEDIATE, keywordAlerts: "off" });
+    const connection = connectionWith([room({ notifications: "all" })], ["launch"]);
+    await dispatchArrival(connection, ROOM_ID, arrival({ body: "We launch Monday.", mentionsMe: true }));
+    // keywordAlerts is off, but mentions is still immediate — the mention category wins.
+    expect(postNotificationMock).toHaveBeenCalledTimes(1);
   });
 });

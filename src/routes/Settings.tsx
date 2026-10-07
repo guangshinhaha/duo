@@ -4,6 +4,7 @@ import type { WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.
 import { isHostedAccess, useWorkspaceAccess } from "../workspace/access.js";
 import { HostedWorkspaceStatus } from "../components/HostedWorkspaceStatus.js";
 import { WorkspaceProfile } from "../components/WorkspaceProfile.js";
+import { KeywordAlerts } from "../components/KeywordAlerts.js";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -300,6 +301,23 @@ export function Settings({
           ))}
         </div>
       </section>
+
+      {/* #310: keyword alerts — managed here because the list is this
+          account's own Matrix content push rules, which needs a live
+          workspace connection, not a paired duo (unlike the push section
+          below). A member signed in with no duo paired still gets to set
+          these. */}
+      {connection ? (
+        <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-keyword-alerts">
+          <h2 className="type-heading">Keyword alerts</h2>
+          <KeywordAlerts connection={connection} />
+        </section>
+      ) : (
+        <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-keyword-alerts">
+          <h2 className="type-heading">Keyword alerts</h2>
+          <p className="type-provenance text-[var(--muted)]">Sign in to a workspace to set keyword alerts.</p>
+        </section>
+      )}
 
       {/* #308: web push — the one path that reaches this device while the
           app is fully closed, which nothing above this (a live tab, or the
