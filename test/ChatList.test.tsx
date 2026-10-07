@@ -6,6 +6,7 @@ import type { DuoApiConfig } from "../src/api/client.js";
 import { ChatList } from "../src/shell/ChatList.js";
 import type { Route } from "../src/shell/routes.js";
 import type { ChatSection, RoomSummary, WorkspaceConnection } from "../src/workspace/matrix.js";
+import { stubDesktop, stubPhone } from "./desktop.js";
 
 /*
  * The chat list (#141, docs/design-language.md §6.2): people, groups and
@@ -62,6 +63,21 @@ function connectionWithSections(rooms: RoomSummary[], initial: ChatSection[] = [
     subscribeSections: (handler: (sections: readonly ChatSection[]) => void) => {
       handlers.add(handler);
       return () => handlers.delete(handler);
+    },
+  } as unknown as WorkspaceConnection;
+}
+
+/** #297: `connectionWith` plus real, in-memory `setPinned`/`setArchived` — mutates its own room list the way a room tag write would, close enough to the seam's own round trip (pinned there against `m.favourite`/`m.lowpriority` in `WorkspaceMatrixSeam.test.ts`). */
+function connectionWithPinArchive(rooms: RoomSummary[]): WorkspaceConnection {
+  let current = rooms;
+  return {
+    ...connectionWith(rooms),
+    rooms: async () => current,
+    setPinned: async (roomId: string, pinned: boolean) => {
+      current = current.map((room) => (room.roomId === roomId ? { ...room, pinned: pinned ? (true as const) : undefined } : room));
+    },
+    setArchived: async (roomId: string, archived: boolean) => {
+      current = current.map((room) => (room.roomId === roomId ? { ...room, archived: archived ? (true as const) : undefined } : room));
     },
   } as unknown as WorkspaceConnection;
 }
@@ -510,5 +526,136 @@ describe("#296 — the owner's own sections and folders, with unread counts", ()
     await connection.setSections!([{ id: "remote", name: "From my Mac", collapsed: false, roomIds: [] }]);
 
     expect(await screen.findByTestId("chat-folder-remote")).toHaveTextContent("From my Mac");
+  });
+});
+
+function swipe(target: HTMLElement, dx: number, dy = 0): void {
+  const base = { pointerId: 1, pointerType: "touch", button: 0 };
+  fireEvent.pointerDown(target, { ...base, clientX: 300, clientY: 100 });
+  fireEvent.pointerMove(target, { ...base, clientX: 300 + dx / 2, clientY: 100 + dy / 2 });
+  fireEvent.pointerMove(target, { ...base, clientX: 300 + dx, clientY: 100 + dy });
+  fireEvent.pointerUp(target, { ...base, clientX: 300 + dx, clientY: 100 + dy });
+}
+
+describe("#297 — pin and archive, and swipe to triage on phone", () => {
+  it("pinning a conversation (desktop row menu) puts it in its own Pinned section, above the ordinary shelves", async () => {
+    stubDesktop();
+    renderList({ connection: connectionWithPinArchive([room("!a:w", { name: "a" }), room("!b:w", { name: "b" })]) });
+    const entries = await screen.findAllByTestId("conversations-entry");
+    fireEvent.click(within(entries[1]!).getByTestId("room-more"));
+    fireEvent.click(await screen.findByTestId("room-pin"));
+
+    await waitFor(() => expect(screen.getByTestId("chat-section-pinned")).toBeInTheDocument());
+    const titles = screen.getAllByTestId("room-title").map((t) => t.textContent);
+    expect(titles[0]).toBe("b");
+    // Shown once — not a second time under its ordinary shelf.
+    expect(screen.getAllByTestId("conversations-room")).toHaveLength(2);
+  });
+
+  it("unpinning takes it back off the Pinned section", async () => {
+    stubDesktop();
+    renderList({ connection: connectionWithPinArchive([room("!a:w", { name: "a", pinned: true })]) });
+    await waitFor(() => expect(screen.getByTestId("chat-section-pinned")).toBeInTheDocument());
+
+    fireEvent.click(within(screen.getByTestId("conversations-entry")).getByTestId("room-more"));
+    fireEvent.click(await screen.findByTestId("room-pin"));
+
+    await waitFor(() => expect(screen.queryByTestId("chat-section-pinned")).not.toBeInTheDocument());
+    expect(screen.getByTestId("chat-section-direct-messages")).toBeInTheDocument();
+  });
+
+  it("archiving hides a conversation from the list; it returns once something new mentions the member (AC2)", async () => {
+    stubDesktop();
+    const connection = connectionWithPinArchive([room("!a:w", { name: "a" }), room("!b:w", { name: "b" })]);
+    renderList({ connection });
+    const entries = await screen.findAllByTestId("conversations-entry");
+    fireEvent.click(within(entries[0]!).getByTestId("room-more"));
+    fireEvent.click(await screen.findByTestId("room-archive"));
+
+    await waitFor(() => expect(screen.getAllByTestId("room-title").map((t) => t.textContent)).toEqual(["b"]));
+
+    // A mention arrives on the archived room — it's back, with nothing further asked of the member.
+    const withMention = connectionWithPinArchive([room("!a:w", { name: "a", archived: true, unread: { notifications: 1, mentions: 1 } }), room("!b:w", { name: "b" })]);
+    cleanup();
+    renderList({ connection: withMention });
+    await waitFor(() => expect(screen.getAllByTestId("room-title").map((t) => t.textContent).sort()).toEqual(["a", "b"]));
+  });
+
+  it("the Archived dialog exists only once something is archived, lists it, and Unarchive brings it back", async () => {
+    stubDesktop();
+    renderList({ connection: connectionWithPinArchive([room("!a:w", { name: "a" })]) });
+    await screen.findByTestId("conversations-room");
+    expect(screen.queryByTestId("chat-list-archived")).not.toBeInTheDocument();
+
+    cleanup();
+    const connection = connectionWithPinArchive([room("!a:w", { name: "a", archived: true })]);
+    renderList({ connection });
+    await screen.findByTestId("chat-list-archived");
+    expect(screen.queryByTestId("conversations-room")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("chat-list-archived"));
+    const dialog = await screen.findByTestId("archived-dialog");
+    expect(within(dialog).getByTestId("archived-row")).toHaveTextContent("a");
+
+    fireEvent.click(within(dialog).getByTestId("archived-row-unarchive"));
+    await waitFor(() => expect(screen.getByTestId("conversations-room")).toBeInTheDocument());
+  });
+
+  it("on phone, swiping a row right pins it and left archives it", async () => {
+    stubPhone();
+    renderList({ connection: connectionWithPinArchive([room("!a:w", { name: "a" })]) });
+    await screen.findByTestId("conversations-entry");
+    const surface = screen.getByTestId("chat-row-swipe-surface");
+
+    swipe(surface, 200);
+    await waitFor(() => expect(screen.getByTestId("chat-section-pinned")).toBeInTheDocument());
+
+    const pinnedSurface = screen.getByTestId("chat-row-swipe-surface");
+    swipe(pinnedSurface, -200);
+    await waitFor(() => expect(screen.queryByTestId("conversations-room")).not.toBeInTheDocument());
+  });
+
+  it("a row already showing a draft keeps only the draft's own swipe elsewhere — this swipe never wraps it, though Pin/Archive still work from its \"more\" panel", async () => {
+    stubPhone();
+    const api: DuoApiConfig = { baseUrl: "http://d:7717", token: "t" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/drafts")) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "d1",
+                question: "q",
+                threadContext: null,
+                draftText: "answer",
+                escalated: false,
+                escalationReason: null,
+                confidenceScore: 0.9,
+                sources: [],
+                createdAt: "2026-01-01T00:00:00.000Z",
+                outcome: null,
+                outcomeRecordedAt: null,
+                sentText: null,
+                refused: false,
+                escalationThreshold: 0.55,
+                provenance: { origin: "channel", channelKind: null, askerRef: null, threadId: null, permalink: `https://matrix.to/#/${encodeURIComponent("!a:w")}` },
+                delivery: null,
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        return new Response("[]", { status: 200 });
+      }),
+    );
+    renderList({ api, connection: connectionWithPinArchive([room("!a:w", { name: "a" })]) });
+    await screen.findByTestId("conversations-entry");
+    await waitFor(() => expect(screen.getByTestId("draft-line")).toBeInTheDocument());
+    expect(screen.queryByTestId("chat-row-swipe-surface")).not.toBeInTheDocument();
+    // The "more" panel still offers both — the swipe is what's withheld, not the actions themselves.
+    fireEvent.click(within(screen.getByTestId("conversations-entry")).getByTestId("room-more"));
+    expect(await screen.findByTestId("room-pin")).toBeInTheDocument();
+    expect(screen.getByTestId("room-archive")).toBeInTheDocument();
   });
 });
