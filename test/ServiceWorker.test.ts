@@ -435,3 +435,108 @@ describe("public/sw.js — notificationclick (#308)", () => {
     expect(fakeSelf.clients.openWindow).toHaveBeenCalledWith("/#draft/abc");
   });
 });
+
+/** The share `public/manifest.json`'s `share_target.action` POSTs here — a FormData the way a real multipart body would carry it, including a file when the share had one. */
+function shareFormData(fields: { title?: string; text?: string; url?: string; files?: File[] } = {}): FormData {
+  const form = new FormData();
+  if (fields.title !== undefined) {
+    form.set("title", fields.title);
+  }
+  if (fields.text !== undefined) {
+    form.set("text", fields.text);
+  }
+  if (fields.url !== undefined) {
+    form.set("url", fields.url);
+  }
+  for (const file of fields.files ?? []) {
+    form.append("files", file);
+  }
+  return form;
+}
+
+function fetchEvent(method: string, url: string, formData: FormData): SettlingEvent & { request: { method: string; url: string; formData(): Promise<FormData> }; respondWith(promise: Promise<unknown>): void } {
+  const event = {
+    request: { method, url, formData: async () => formData },
+    settled: undefined as Promise<unknown> | undefined,
+    waitUntil(promise: Promise<unknown>) {
+      event.settled = promise;
+    },
+    respondWith(promise: Promise<unknown>) {
+      event.settled = promise;
+    },
+  };
+  return event;
+}
+
+/** Reads back whatever `handleShareTarget` wrote, raw — never through `src/shareTarget.ts` (that side is `test/shareTarget.test.ts`'s own job, under its `node` environment, for exactly the Blob-fidelity reason named there); this only checks that the right record landed under the right name. */
+function readRawShare(fakeSelf: FakeSelf): Promise<unknown> {
+  return new Promise((resolve) => {
+    const request = fakeSelf.indexedDB.open("duo-sw-share-target", 1);
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction("pending", "readonly");
+      const getRequest = tx.objectStore("pending").get("current");
+      getRequest.onsuccess = () => resolve(getRequest.result);
+      getRequest.onerror = () => resolve(undefined);
+    };
+    request.onerror = () => resolve(undefined);
+  });
+}
+
+describe("public/sw.js — the Web Share Target door (#324)", () => {
+  let fakeSelf: FakeSelf;
+  beforeEach(() => {
+    fakeSelf = loadServiceWorker();
+  });
+
+  it("catches a POST to /share-target, writes the text fields, and redirects into the app's picker", async () => {
+    const [handler] = fakeSelf.listeners.fetch!;
+    const event = fetchEvent("POST", "https://duo.example/share-target", shareFormData({ title: "A page", text: "look at this", url: "https://example.com/a" }));
+    handler!(event);
+    const response = (await event.settled) as Response;
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("https://duo.example/#share");
+
+    const stored = (await readRawShare(fakeSelf)) as { title: string; text: string; url: string; files: unknown[] };
+    expect(stored).toEqual({ title: "A page", text: "look at this", url: "https://example.com/a", files: [] });
+  });
+
+  it("carries a file's name and type alongside the text", async () => {
+    const file = new File(["hello"], "note.txt", { type: "text/plain" });
+    const [handler] = fakeSelf.listeners.fetch!;
+    const event = fetchEvent("POST", "https://duo.example/share-target", shareFormData({ text: "a note", files: [file] }));
+    handler!(event);
+    await event.settled;
+
+    const stored = (await readRawShare(fakeSelf)) as { files: Array<{ name: string; type: string }> };
+    expect(stored.files).toHaveLength(1);
+    expect(stored.files[0]!.name).toBe("note.txt");
+    expect(stored.files[0]!.type).toBe("text/plain");
+  });
+
+  it("an unreadable body still redirects — the OS's share sheet always gets a page back", async () => {
+    const [handler] = fakeSelf.listeners.fetch!;
+    const event = fetchEvent("POST", "https://duo.example/share-target", shareFormData());
+    event.request.formData = () => Promise.reject(new Error("broken body"));
+    handler!(event);
+    const response = (await event.settled) as Response;
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("https://duo.example/#share");
+  });
+
+  it("never intercepts a GET, or a POST to any other path — only POST /share-target", async () => {
+    const [handler] = fakeSelf.listeners.fetch!;
+    const respondWith = vi.fn();
+
+    const get = fetchEvent("GET", "https://duo.example/share-target", shareFormData());
+    get.respondWith = respondWith;
+    handler!(get);
+
+    const otherPath = fetchEvent("POST", "https://duo.example/other", shareFormData());
+    otherPath.respondWith = respondWith;
+    handler!(otherPath);
+
+    expect(respondWith).not.toHaveBeenCalled();
+  });
+});

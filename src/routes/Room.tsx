@@ -33,6 +33,7 @@ import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.j
 import { duoConversationOf, questionOutcomes, questionOutcomeWords, type QuestionOutcome } from "../workspace/duoConversation.js";
 import { DuoConversationBanner } from "../components/DuoConversationBanner.js";
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
+import { takeShareForRoom } from "../shareTarget.js";
 import { messagePermalink, roomHref, threadHref } from "../workspace/links.js";
 import { firstLinkOf } from "../workspace/linkPreview.js";
 import { readUrlPreviewPref } from "../urlPreviewPrefs.js";
@@ -1894,9 +1895,14 @@ function RoomComposer({
   // #264: this member's own opt-in, read fresh on mount — off unless
   // Settings says otherwise (factCheckPrefs.ts).
   const [factCheckEnabled] = useState<boolean>(readFactCheckPref);
+  // #324: what the share picker (`ShareTargetSheet.tsx`) stashed for THIS
+  // room, if anything — read once, on mount, the same "taken exactly once"
+  // convention `takeShareForRoom` itself keeps, so leaving and returning to
+  // this room without sharing anything new finds nothing waiting.
+  const [pendingShare] = useState(() => takeShareForRoom(roomId));
   // The editor's composed body, mirrored for the one thing the form itself
   // needs to know before Send: whether there's anything to send at all.
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => pendingShare?.text ?? "");
   const [attachments, setAttachments] = useState<StagedShare[]>([]);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -1960,6 +1966,18 @@ function RoomComposer({
       }
     })();
   };
+
+  // #324 AC3: a shared file goes through the exact same door above —
+  // `stage` validates and reads it exactly as it would a drop or a picked
+  // file, so a refused one says why in the same banner, never a silent
+  // drop. Runs once, only when the share actually carried a file (`stage`
+  // on an empty list is a harmless no-op either way).
+  useEffect(() => {
+    if (pendingShare && pendingShare.files.length > 0) {
+      stage(pendingShare.files);
+    }
+    // Deliberately once, on mount — `pendingShare` itself never changes.
+  }, []);
 
   return (
     <form
@@ -2159,6 +2177,9 @@ function RoomComposer({
         <ChatEditor
           ariaLabel={`Message ${roomName}`}
           editorRef={editor}
+          // #324: seeds the editor with whatever text the share carried —
+          // read once, same as `text`'s own initial state above.
+          initialText={pendingShare?.text ?? ""}
           mentionCandidates={mentionCandidates}
           mode="markdown"
           placeholder={`Message ${roomName}`}

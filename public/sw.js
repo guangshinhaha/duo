@@ -303,3 +303,110 @@ self.addEventListener("notificationclick", (event) => {
   // the notification's body both land exactly here, unchanged from #308.
   event.waitUntil(focusOrOpen(hash));
 });
+
+// #324: the Web Share Target door — `public/manifest.json`'s own
+// `share_target.action`. The OS's share sheet POSTs here (multipart, so a
+// file rides alongside the text) straight from another app, before this
+// page has necessarily ever loaded this session — a plain static host
+// can't read a POST body at all, so this worker is the one thing standing
+// between "the OS tried to share" and "the app ever finds out". It writes
+// what it reads into this origin's own IndexedDB (same door, same shape of
+// door, `credentialMirror.ts`'s mirror uses for the opposite direction —
+// a second, same-origin resting place a page and a worker can both open)
+// and redirects the browser straight into the app, which reads it back
+// (`src/shareTarget.ts`) and takes it from there: nothing here decides
+// what the share means, only that it survived the handoff.
+const SHARE_TARGET_PATH = "/share-target";
+const SHARE_DB_NAME = "duo-sw-share-target";
+const SHARE_STORE_NAME = "pending";
+const SHARE_KEY = "current";
+
+/** Writes the share this worker just caught — best-effort, like every other cache this app keeps (`readCredential` above takes the same stance): a failed write here costs the share, never a crashed fetch. */
+function writePendingShare(payload) {
+  return new Promise((resolve) => {
+    if (!self.indexedDB) {
+      resolve(false);
+      return;
+    }
+    let request;
+    try {
+      request = self.indexedDB.open(SHARE_DB_NAME, 1);
+    } catch {
+      resolve(false);
+      return;
+    }
+    request.onupgradeneeded = () => {
+      try {
+        if (!request.result.objectStoreNames.contains(SHARE_STORE_NAME)) {
+          request.result.createObjectStore(SHARE_STORE_NAME);
+        }
+      } catch {
+        // Falls through to onsuccess/onerror below either way.
+      }
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      try {
+        const tx = db.transaction(SHARE_STORE_NAME, "readwrite");
+        tx.objectStore(SHARE_STORE_NAME).put(payload, SHARE_KEY);
+        tx.oncomplete = () => {
+          resolve(true);
+          db.close();
+        };
+        tx.onerror = () => {
+          resolve(false);
+          db.close();
+        };
+      } catch {
+        resolve(false);
+      }
+    };
+    request.onerror = () => resolve(false);
+  });
+}
+
+/**
+ * Reads the POST this app's manifest asked for (`title`, `text`, `url`,
+ * one or several `files`) and answers the redirect the browser then
+ * navigates to — `#share`, where the app's own picker (AC2) takes over.
+ * The redirect fires whether or not the write actually landed: the OS's
+ * share sheet gets back a page either way, and `src/shareTarget.ts` reads
+ * an honestly empty share rather than this worker pretending the POST
+ * never happened.
+ */
+async function handleShareTarget(event) {
+  let title = "";
+  let text = "";
+  let url = "";
+  const files = [];
+  try {
+    const formData = await event.request.formData();
+    title = String(formData.get("title") || "");
+    text = String(formData.get("text") || "");
+    url = String(formData.get("url") || "");
+    for (const value of formData.getAll("files")) {
+      if (value && typeof value === "object" && typeof value.arrayBuffer === "function") {
+        files.push({ name: value.name || "shared file", type: value.type || "", blob: value });
+      }
+    }
+  } catch {
+    // An unreadable body — nothing to carry, but still a page to land on.
+  }
+  await writePendingShare({ title, text, url, files });
+  // Resolved against the request's own URL, explicitly — a worker has no
+  // "current document" to resolve a bare path against the way a browser
+  // tab would.
+  return Response.redirect(new URL("/#share", event.request.url).href, 303);
+}
+
+self.addEventListener("fetch", (event) => {
+  let url;
+  try {
+    url = new URL(event.request.url);
+  } catch {
+    return;
+  }
+  if (event.request.method === "POST" && url.pathname === SHARE_TARGET_PATH) {
+    event.respondWith(handleShareTarget(event));
+  }
+});
