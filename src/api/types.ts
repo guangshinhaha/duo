@@ -134,6 +134,23 @@ export interface DailyBrief {
   readonly allClear: boolean;
 }
 
+// `GET /suggestions/starters` (duo#305): up to a handful of things to ask
+// an empty "Your duo" — a composition over coverage gaps and recent
+// activity, never a corpus read of its own. Mirrors digital-duo's
+// `src/derivation/suggestions.ts`.
+export interface StarterSuggestions {
+  readonly starters: readonly string[];
+}
+
+// `POST /suggestions/follow-ups` (duo#305): up to three follow-up
+// questions for one self-chat turn. Ambient and optional — an empty array
+// is the common, honest case (no provider configured, or genuinely
+// nothing follows), never an error the caller has to special-case.
+// Mirrors digital-duo's `src/drafting/follow-ups.ts`.
+export interface FollowUpSuggestions {
+  readonly followUps: readonly string[];
+}
+
 /**
  * `GET /knowledge/evidence/excluded` (duo#272, digital-duo#288): one past
  * exchange the owner removed from a draft's "Used" list — reversible from

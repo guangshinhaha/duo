@@ -67,6 +67,27 @@ export async function notifyDuoRequest(asker: string | null): Promise<void> {
 }
 
 /**
+ * duo#299: a saved item's reminder has come due, while this device is open
+ * to show it — honestly, that's the whole of what's built here. The body
+ * is the owner's own saved words, trimmed to a notification's size, never
+ * paraphrased or re-fetched: it's the snapshot they saved, not a second
+ * guess about it. The click opens Later, where Done and Snooze are — a
+ * reminder is never itself a way to decide either, same stance
+ * `notifyConfirmationWaiting` takes for a confirmation. Do-not-disturb
+ * holds it like any of this device's own notifications.
+ */
+export async function notifyLaterItemDue(preview: string): Promise<void> {
+  const trimmed = preview.length > 120 ? `${preview.slice(0, 120)}…` : preview;
+  const body = `Reminder: ${trimmed}`;
+  const hash = "#later";
+  if (isDndActive(readDndPrefs(), new Date())) {
+    recordMissed({ at: Date.now(), body, hash });
+    return;
+  }
+  await postNotification(body, hash);
+}
+
+/**
  * #69 AC3: the duo's own acts carry their own words. An escalation and a
  * refusal each say what happened, in a category no message or draft copy
  * occupies; a plain draft is none of the duo's own acts — null, so the

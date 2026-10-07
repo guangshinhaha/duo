@@ -161,10 +161,13 @@ describe("the app speaks in an owner's words (#149)", () => {
     // The exact stamps that remain are deliberate: the Activity detail's record line, the offline bar's "last seen at",
     // and the retired old screens' (not scanned), and #261's scheduled sends — a time something WILL go out is a
     // promise of when, which "in 9 hours" would blur. #270's away end time is the same kind of promise ("away until
-    // Mon 12 Oct, 09:00" is what colleagues are told). Anything new here must be argued for.
+    // Mon 12 Oct, 09:00" is what colleagues are told). #287's status end time is the identical promise — "In a
+    // meeting until 3pm" blurs exactly the same way "in 2 hours" would once a minute has passed. Anything new here
+    // must be argued for.
     expect([...new Set(stamps.map((entry) => entry.split(":")[0]))].sort()).toEqual([
       "src/components/OfflineBar.tsx",
       "src/components/SendControls.tsx",
+      "src/components/StatusAndPresence.tsx",
       "src/profile/Activity.tsx",
       "src/profile/Away.tsx",
     ]);
