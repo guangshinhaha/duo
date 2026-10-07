@@ -442,6 +442,41 @@ export interface InterruptionPortrait {
   minimumQuestionsToCharacterize: number;
 }
 
+/**
+ * `GET /knowledge/coverage` (duo#277): one topic from the owner's own
+ * question history, joined against whatever rule backs it. `covered` is
+ * true exactly when `reviewStatus` is `"approved"` — the one signal the
+ * product already treats as "the owner signed off on this" — so this
+ * client never re-derives that decision from `ruleStatus` on its own.
+ * `"none"` for both rule fields means no rule has ever been induced or
+ * asserted for this topic at all.
+ */
+export interface TopicCoverageEntry {
+  topicId: string;
+  label: string;
+  questionCount: number;
+  share: number;
+  covered: boolean;
+  ruleStatus: "confirmed" | "inconsistent" | "weak_signal" | "none";
+  reviewStatus: RuleReviewStatus | "none";
+}
+
+/**
+ * `GET /knowledge/coverage` in full: the portrait's own thinness verdict
+ * (never re-judged here), every topic the owner has ever been asked about
+ * with its covered/gap state, and `gaps` — the uncovered subset, already
+ * ordered most-asked-first by the daemon, so this client never re-sorts it.
+ */
+export interface TopicCoverageReport {
+  totalQuestions: number;
+  tooThin: boolean;
+  minimumQuestionsToCharacterize: number;
+  /** Share (0..1) of questions whose topic is covered — drawn as a bar, never a percentage numeral (§1.6). */
+  coveredShare: number;
+  topics: TopicCoverageEntry[];
+  gaps: TopicCoverageEntry[];
+}
+
 /** One of a voice-trend bucket's worst-scoring drafts (duo#276) — enough to link to the draft itself and show what the duo actually wrote. */
 export interface VoiceTrendExample {
   draftId: string;
