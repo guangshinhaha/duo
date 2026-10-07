@@ -48,7 +48,7 @@ function connectionWith(rooms: RoomSummary[]): WorkspaceConnection {
 
 /** #296: `connectionWith` plus a real, in-memory `duo.sidebar.sections` door — close enough to the real account-data round trip for the sidebar's own behaviour, without touching matrix.ts at all. */
 function connectionWithSections(rooms: RoomSummary[], initial: ChatSection[] = []): WorkspaceConnection {
-  let stored = initial;
+  let stored: readonly ChatSection[] = initial;
   const handlers = new Set<(sections: readonly ChatSection[]) => void>();
   return {
     ...connectionWith(rooms),
