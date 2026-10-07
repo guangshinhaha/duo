@@ -6,6 +6,7 @@ import { hairlineState, type HairlineState } from "../components/ConfidenceHairl
 import { toDraftPipelineResult } from "../components/DraftCard.js";
 import { Mark } from "../components/Mark.js";
 import { OffTheRecordControl } from "../components/OffTheRecordControl.js";
+import { PinnedMessagesList } from "../components/PinnedMessages.js";
 import { ProvenanceLine } from "../components/ProvenanceLine.js";
 import { SourceRemoveButton } from "../components/SourceRemoveButton.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -501,6 +502,7 @@ function MemberRow({ member, duoHere, connection }: { member: RoomMemberRef; duo
 
 /** A conversation with nothing waiting in it: who is in it, what your duo does here, and (a group's) its own name, topic and picture (#223). */
 export function RoomInfo({ room, connection = null, api = null }: { room: RoomSummary; connection?: WorkspaceConnection | null; api?: DuoApiConfig | null }) {
+  const queryClient = useQueryClient();
   const sole = soleDuoLabel(room);
   const title = sole ?? roomTitle(room);
   // #247: one row per person, a duo attached to its owner's row when the
@@ -518,6 +520,25 @@ export function RoomInfo({ room, connection = null, api = null }: { room: RoomSu
           <p className="type-body text-[var(--muted)]" data-testid="room-info-duo">
             Your duo drafts a reply when someone here asks you something. Nothing is sent without you.
           </p>
+          {room.pinnedEventIds && room.pinnedEventIds.length > 0 && (
+            <div className="flex flex-col gap-2" data-testid="room-info-pinned">
+              <p className="type-identifier uppercase text-[var(--faint)]">Pinned messages</p>
+              <PinnedMessagesList
+                canUnpin={room.canEdit.pins}
+                onJump={(eventId) => {
+                  window.location.hash = roomHref(room.roomId, eventId);
+                }}
+                onUnpin={(eventId) => {
+                  if (connection) {
+                    void connection.unpin(room.roomId, eventId).then(() => {
+                      void queryClient.invalidateQueries({ queryKey: ["workspace", "rooms"] });
+                    });
+                  }
+                }}
+                pinnedEventIds={room.pinnedEventIds}
+              />
+            </div>
+          )}
           {people.length > 0 && (
             <div className="flex flex-col gap-1">
               <p className="type-identifier uppercase text-[var(--faint)]">In this conversation</p>

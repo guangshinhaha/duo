@@ -56,7 +56,7 @@ const room = (over: Partial<RoomSummary> = {}): RoomSummary => ({
   unread: { notifications: 0, mentions: 0 },
   muted: false,
   notifications: "all",
-  canEdit: { name: false, topic: false, avatar: false },
+  canEdit: { name: false, topic: false, avatar: false, pins: false },
   ...over,
 });
 
@@ -304,7 +304,7 @@ function fakeRoomConnection(over: Partial<WorkspaceConnection> = {}): WorkspaceC
 
 describe("a group conversation's name, topic and picture (#223)", () => {
   it("a direct conversation never shows the settings — a DM has no name of its own to give", () => {
-    mount(<RoomInfo connection={fakeRoomConnection()} room={room({ kind: "direct", canEdit: { name: true, topic: true, avatar: true } })} />);
+    mount(<RoomInfo connection={fakeRoomConnection()} room={room({ kind: "direct", canEdit: { name: true, topic: true, avatar: true, pins: true } })} />);
     expect(screen.queryByTestId("room-settings")).toBeNull();
   });
 
@@ -312,7 +312,7 @@ describe("a group conversation's name, topic and picture (#223)", () => {
     mount(
       <RoomInfo
         connection={fakeRoomConnection()}
-        room={room({ topic: "refunds and billing", canEdit: { name: false, topic: false, avatar: false } })}
+        room={room({ topic: "refunds and billing", canEdit: { name: false, topic: false, avatar: false, pins: false } })}
       />,
     );
     expect(screen.getByTestId("room-settings-name")).toHaveTextContent("project-x");
@@ -326,7 +326,7 @@ describe("a group conversation's name, topic and picture (#223)", () => {
 
   it("a member with permission can rename the conversation, and the seam hears the new name", async () => {
     const connection = fakeRoomConnection();
-    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: true, topic: false, avatar: false } })} />);
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: true, topic: false, avatar: false, pins: false } })} />);
 
     fireEvent.click(screen.getByTestId("room-settings-name-edit"));
     const input = screen.getByTestId("room-settings-name-input");
@@ -340,7 +340,7 @@ describe("a group conversation's name, topic and picture (#223)", () => {
 
   it("can set a topic independently of the name — a blank room gets one for the first time", async () => {
     const connection = fakeRoomConnection();
-    mount(<RoomInfo connection={connection} room={room({ topic: null, canEdit: { name: false, topic: true, avatar: false } })} />);
+    mount(<RoomInfo connection={connection} room={room({ topic: null, canEdit: { name: false, topic: true, avatar: false, pins: false } })} />);
 
     expect(screen.getByTestId("room-settings-topic")).toHaveTextContent("No topic");
     fireEvent.click(screen.getByTestId("room-settings-topic-edit"));
@@ -354,7 +354,7 @@ describe("a group conversation's name, topic and picture (#223)", () => {
 
   it("a cancel discards the draft without calling the seam", () => {
     const connection = fakeRoomConnection();
-    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: true, topic: false, avatar: false } })} />);
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: true, topic: false, avatar: false, pins: false } })} />);
 
     fireEvent.click(screen.getByTestId("room-settings-name-edit"));
     fireEvent.change(screen.getByTestId("room-settings-name-input"), { target: { value: "something else" } });
@@ -367,7 +367,7 @@ describe("a group conversation's name, topic and picture (#223)", () => {
 
   it("a homeserver refusal shows in words at the field that was refused, not a generic error", async () => {
     const connection = fakeRoomConnection({ setRoomName: vi.fn(async () => { throw new Error("M_FORBIDDEN"); }) });
-    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: true, topic: false, avatar: false } })} />);
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: true, topic: false, avatar: false, pins: false } })} />);
 
     fireEvent.click(screen.getByTestId("room-settings-name-edit"));
     fireEvent.change(screen.getByTestId("room-settings-name-input"), { target: { value: "Project X" } });
@@ -380,7 +380,7 @@ describe("a group conversation's name, topic and picture (#223)", () => {
 
   it("a picture upload reuses the share path's own type and size rules before it ever uploads", async () => {
     const connection = fakeRoomConnection();
-    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: false, topic: false, avatar: true } })} />);
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: false, topic: false, avatar: true, pins: false } })} />);
 
     const input = screen.getByTestId("room-picture-input") as HTMLInputElement;
     const tooBig = new File([new Uint8Array(9 * 1024 * 1024)], "huge.png", { type: "image/png" });
@@ -397,7 +397,7 @@ describe("a group conversation's name, topic and picture (#223)", () => {
 
   it("a member with permission can set the picture — staged, uploaded, then stated as the room's own", async () => {
     const connection = fakeRoomConnection();
-    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: false, topic: false, avatar: true } })} />);
+    mount(<RoomInfo connection={connection} room={room({ canEdit: { name: false, topic: false, avatar: true, pins: false } })} />);
 
     const input = screen.getByTestId("room-picture-input") as HTMLInputElement;
     const picture = new File([new Uint8Array([1, 2, 3])], "team.png", { type: "image/png" });
@@ -405,6 +405,38 @@ describe("a group conversation's name, topic and picture (#223)", () => {
 
     await waitFor(() => expect(connection.uploadFile).toHaveBeenCalled());
     await waitFor(() => expect(connection.setRoomAvatar).toHaveBeenCalledWith("!p:w", "mxc://w/uploaded"));
+  });
+});
+
+describe("#292 — pinned messages, discoverable from the room's own Info panel", () => {
+  it("renders nothing when the room has pinned nothing", () => {
+    mount(<RoomInfo connection={fakeRoomConnection()} room={room()} />);
+    expect(screen.queryByTestId("room-info-pinned")).toBeNull();
+  });
+
+  it("lists what's pinned, and offers Unpin only where this member's power level allows it", () => {
+    mount(
+      <RoomInfo
+        connection={fakeRoomConnection()}
+        room={room({ pinnedEventIds: ["$1", "$2"], canEdit: { name: false, topic: false, avatar: false, pins: false } })}
+      />,
+    );
+    const section = screen.getByTestId("room-info-pinned");
+    expect(within(section).getAllByTestId("pinned-message-jump")).toHaveLength(2);
+    expect(within(section).queryByTestId("pinned-message-unpin")).toBeNull();
+  });
+
+  it("Unpin asks the workspace to unpin exactly that one event, when this member may", async () => {
+    const connection = fakeRoomConnection({ unpin: vi.fn(async () => {}) });
+    mount(
+      <RoomInfo
+        connection={connection}
+        room={room({ pinnedEventIds: ["$1", "$2"], canEdit: { name: false, topic: false, avatar: false, pins: true } })}
+      />,
+    );
+    const section = screen.getByTestId("room-info-pinned");
+    fireEvent.click(within(section).getAllByTestId("pinned-message-unpin")[0]!);
+    await waitFor(() => expect(connection.unpin).toHaveBeenCalledWith("!p:w", "$1"));
   });
 });
 

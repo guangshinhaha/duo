@@ -150,7 +150,7 @@ describe("sectionUnreadCount (AC3)", () => {
       unread: { notifications, mentions: 0 },
       muted: false,
       notifications: "all",
-      canEdit: { name: false, topic: false, avatar: false },
+      canEdit: { name: false, topic: false, avatar: false, pins: false },
     }) as RoomSummary;
 
   it("sums its own rooms' unread counts, never a second opinion", () => {

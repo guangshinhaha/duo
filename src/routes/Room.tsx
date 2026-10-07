@@ -39,6 +39,8 @@ import { ExplainDialog } from "../components/ExplainDialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
 import { EmojiPicker } from "../components/EmojiPicker.js";
 import { readReactionRecents, recordReactionRecent } from "../reactionRecents.js";
+import { PinnedBar } from "../components/PinnedMessages.js";
+import { ForwardMessageDialog } from "../components/ForwardMessageDialog.js";
 
 /**
  * #62 + #63 + #64: one conversation — the timeline, the message verbs, and
@@ -102,6 +104,20 @@ export { roomHref, threadHref };
 /** The latest reply's author as the id says they are — "carol's duo" from `@duo-carol`, never a chosen name. */
 function threadPreviewLabel(reply: { senderId: string; senderName: string }): string {
   return mentionLabelOf(reply.senderId, reply.senderName);
+}
+
+/**
+ * #292: a forwarded message's own words — "Forwarded from {who} in
+ * {conversation}:" over the original body, never a claim that the
+ * forwarding member wrote it. Sent as the forwarding member's own plain
+ * message (`WorkspaceConnection.send`), the same way a reply's quote is the
+ * sender's own words beside the original's — there is no separate wire
+ * shape for a forward. `who` runs through `mentionLabelOf` at the call
+ * site, same as every other attribution in this file, so a forwarded duo
+ * message still reads as the duo's, never its owner's.
+ */
+export function forwardedBodyOf(message: RoomMessage, senderLabel: string, sourceLabel: string): string {
+  return `Forwarded from ${senderLabel} in ${sourceLabel}:\n${message.body}`;
 }
 
 /**
@@ -454,6 +470,16 @@ export function Room({
   const [deleteTarget, setDeleteTarget] = useState<RoomMessage | null>(null);
   // The delete dialog stays mounted through its exit.
   const heldDelete = useHeld(deleteTarget);
+  // #292: the message(s) a forward is on its way for — null when the dialog
+  // is closed. One message from a row's own "Forward" action, several from
+  // the selection toolbar below.
+  const [forwardTargets, setForwardTargets] = useState<readonly RoomMessage[] | null>(null);
+  // #292: a selection mode toggled from a row's own "Select" action — once
+  // on, rows show a checkbox instead of their usual verbs, and a toolbar
+  // replaces the composer (`at === undefined` only — a search window has
+  // neither).
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   // Which messages were already here when the room opened: only what arrives after that rises in (B7).
   const seen = useRef<{ roomId: string; at: string | undefined; ids: Set<string> | null }>({ roomId, at, ids: null });
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -511,6 +537,10 @@ export function Room({
     setOlderState({ loading: false, atStart: false });
     setMarkedRead(false);
     setDividerVisible(true);
+    // #292: a selection belongs to the room it was made in — opening
+    // another one (or the same one at a different `at`) starts fresh.
+    setSelecting(false);
+    setSelectedIds(new Set());
   }, [roomId, at]);
 
   // #212: freezing the anchor the moment this room is opened — re-reading
@@ -747,6 +777,54 @@ export function Room({
   const showJumpToUnread =
     at === undefined && !markedRead && ((boundary.kind === "found" && !dividerVisible) || boundary.kind === "unknown");
 
+  // #292: this room's pinned messages, and whether this member may change
+  // them — the same power-level convention #223 reads for name/topic/avatar.
+  const pinnedEventIds = room?.pinnedEventIds ?? [];
+  const canPin = room?.canEdit.pins ?? false;
+
+  const toggleSelect = (eventId: string): void => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(eventId)) {
+        next.delete(eventId);
+      } else {
+        next.add(eventId);
+      }
+      return next;
+    });
+  };
+  const enterSelection = (eventId: string): void => {
+    setSelecting(true);
+    setSelectedIds(new Set([eventId]));
+  };
+  const cancelSelection = (): void => {
+    setSelecting(false);
+    setSelectedIds(new Set());
+  };
+
+  // #292: a pin someone else's already made may be older than this
+  // window — jump to it when it's loaded, else open the conversation IN
+  // CONTEXT around it (#70's own `timelineAt`, already wired through `at`).
+  const goToPinned = (eventId: string): void => {
+    if (rowIndexOf(eventId) >= 0) {
+      jumpToMessage(eventId);
+      return;
+    }
+    window.location.hash = roomHref(roomId, eventId);
+  };
+
+  // #292: one or several messages, each sent again to the chosen room with
+  // its own "Forwarded from" words (`forwardedBodyOf`) — in the order they
+  // were said here, never the order they were selected in.
+  const forward = async (targetRoomId: string): Promise<void> => {
+    const ordered = [...(forwardTargets ?? [])].sort((a, b) => a.originServerTs - b.originServerTs);
+    for (const target of ordered) {
+      await connection.send(targetRoomId, forwardedBodyOf(target, mentionLabelOf(target.senderId, target.senderName), roomName));
+    }
+    refresh();
+    cancelSelection();
+  };
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-[var(--edge)] px-4 py-2" data-testid="room-header">
@@ -755,6 +833,13 @@ export function Room({
         <InfoButton />
       </header>
       {duoConversation !== null && <DuoConversationBanner conversation={duoConversation} />}
+      <PinnedBar
+        canUnpin={canPin}
+        conversation={timeline.data}
+        onJump={goToPinned}
+        onUnpin={(eventId) => void connection.unpin(roomId, eventId).then(refresh)}
+        pinnedEventIds={pinnedEventIds}
+      />
       <div className="relative flex min-h-0 flex-1 flex-col">
         {/* #211: a page on its way up top. Floats over the transcript rather
             than sitting in its flow: a line appearing above the member's place
@@ -843,6 +928,13 @@ export function Room({
                         onActiveChange={setRowActive}
                         onPinAnswer={onPinAnswer}
                         onExplain={onExplain}
+                        pinned={pinnedEventIds.includes(message.eventId)}
+                        canPin={canPin}
+                        onForward={(target) => setForwardTargets([target])}
+                        selecting={selecting}
+                        selected={selectedIds.has(message.eventId)}
+                        onToggleSelect={toggleSelect}
+                        onEnterSelection={enterSelection}
                       />
                     </>
                   );
@@ -873,24 +965,54 @@ export function Room({
         </div>
       )}
       {at === undefined ? (
-        <>
-          {/* #285: a plain status line, not an action — Fog/muted, no accent, clears itself the moment the SDK's own typing state does. */}
-          {typingWords(typingUsers) !== null && (
-            <p className="px-4 pt-2 type-provenance text-[var(--muted)]" data-testid="room-typing-indicator">
-              {typingWords(typingUsers)}
-            </p>
-          )}
-          <RoomComposer
-            connection={connection}
-            roomId={roomId}
-            roomName={roomName}
-            members={room?.members ?? []}
-            replyTarget={replyTarget}
-            onCancelReply={() => setReplyTarget(null)}
-            onFactCheck={onFactCheck}
-            onRewrite={onRewrite}
-          />
-        </>
+        selecting ? (
+          // #292: the selection toolbar stands in for the composer while
+          // selecting — forwarding together is the one bulk verb this adds;
+          // Cancel lets go of the selection without acting on it.
+          <div className="flex items-center justify-between gap-3 border-t border-[var(--edge)] px-4 py-3" data-testid="selection-toolbar">
+            <span className="type-body text-[var(--muted)]" data-testid="selection-count">
+              {selectedIds.size} selected
+            </span>
+            <div className="flex gap-2">
+              <button
+                className="inline-flex min-h-11 items-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body disabled:opacity-40"
+                data-testid="selection-forward"
+                disabled={selectedIds.size === 0}
+                onClick={() => setForwardTargets((timeline.data ?? []).filter((candidate) => selectedIds.has(candidate.eventId)))}
+                type="button"
+              >
+                Forward
+              </button>
+              <button
+                className="inline-flex min-h-11 items-center rounded-[var(--r-sm)] px-3 type-body text-[var(--muted)]"
+                data-testid="selection-cancel"
+                onClick={cancelSelection}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* #285: a plain status line, not an action — Fog/muted, no accent, clears itself the moment the SDK's own typing state does. */}
+            {typingWords(typingUsers) !== null && (
+              <p className="px-4 pt-2 type-provenance text-[var(--muted)]" data-testid="room-typing-indicator">
+                {typingWords(typingUsers)}
+              </p>
+            )}
+            <RoomComposer
+              connection={connection}
+              roomId={roomId}
+              roomName={roomName}
+              members={room?.members ?? []}
+              replyTarget={replyTarget}
+              onCancelReply={() => setReplyTarget(null)}
+              onFactCheck={onFactCheck}
+              onRewrite={onRewrite}
+            />
+          </>
+        )
       ) : (
         // A window into history has no composer: the words go to the live
         // conversation, one link away.
@@ -967,6 +1089,17 @@ export function Room({
           </DialogContent>
         )}
       </Dialog>
+      <ForwardMessageDialog
+        connection={connection}
+        count={forwardTargets?.length ?? 0}
+        onForward={forward}
+        onOpenChange={(open) => {
+          if (!open) {
+            setForwardTargets(null);
+          }
+        }}
+        open={forwardTargets !== null}
+      />
     </div>
   );
 }
@@ -1229,6 +1362,13 @@ export function RoomEntry({
   onActiveChange,
   onPinAnswer,
   onExplain,
+  pinned = false,
+  canPin = false,
+  onForward,
+  selecting = false,
+  selected = false,
+  onToggleSelect,
+  onEnterSelection,
 }: {
   message: RoomMessage;
   /** Arrived while the room was open: it rises in. History never animates. */
@@ -1258,6 +1398,20 @@ export function RoomEntry({
   onPinAnswer?: (pattern: string, answerText: string) => Promise<unknown>;
   /** duo#283: "Explain this message, privately" — plain callback, see `Room`'s own doc comment on this prop. `undefined` hides the action. Unlike `onPinAnswer`, offered on every message, not only the owner's own. */
   onExplain?: (text: string, threadContext: string | null) => Promise<{ explanation: string; sources: readonly string[] }>;
+  /** #292: whether this message is one of the room's own pinned events (`m.room.pinned_events`) — the row's own Pin action reads as Unpin. */
+  pinned?: boolean;
+  /** #292: whether THIS member may pin or unpin here at all (`RoomSummary.canEdit.pins`) — the action is simply absent otherwise, the same convention #223 reads for name/topic/avatar. */
+  canPin?: boolean;
+  /** #292: forwards this one message — opens `Room`'s own room-picker dialog. `undefined` hides the action (there is none without a conversation list to forward into). */
+  onForward?: (message: RoomMessage) => void;
+  /** #292: whether the conversation is in selection mode — a checkbox stands in for this row's usual verbs while it's on. */
+  selecting?: boolean;
+  /** #292: whether THIS message is one of the current selection. */
+  selected?: boolean;
+  /** #292: toggles this message in or out of the selection — only meaningful once `selecting`. */
+  onToggleSelect?: (eventId: string) => void;
+  /** #292: starts selection mode with this message as its first pick — the row's own "Select" action. */
+  onEnterSelection?: (eventId: string) => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   // #291: the full picker behind the quick six's "+" — its own flag so the
@@ -1378,6 +1532,31 @@ export function RoomEntry({
     ...(own && !message.redacted && !message.pending && !message.failed && message.file === undefined && onPinAnswer
       ? [{ key: "pin-answer", label: "Duo: always answer this way", disabled: busy, testId: "pin-answer-action", onClick: () => setPinDialogOpen(true) }]
       : []),
+    // #292: forwarding a copy of this message elsewhere — never a
+    // pending/failed echo (nothing stable to send a copy of yet), never a
+    // redacted row (the words are gone). Offered on every message, like
+    // Explain — forwarding someone else's words is the whole point.
+    ...(onForward && !message.redacted && !message.pending && !message.failed
+      ? [{ key: "forward", label: "Forward", disabled: busy, testId: "forward-action", onClick: () => onForward(message) }]
+      : []),
+    // #292: pin/unpin — gated by this member's own power level
+    // (`canPin`, #223's own convention), same eligibility as Forward.
+    ...(canPin && !message.redacted && !message.pending && !message.failed
+      ? [
+          {
+            key: "pin",
+            label: pinned ? "Unpin" : "Pin to conversation",
+            disabled: busy,
+            testId: pinned ? "unpin-action" : "pin-action",
+            onClick: () => run(pinned ? connection.unpin(roomId, message.eventId) : connection.pin(roomId, message.eventId)),
+          },
+        ]
+      : []),
+    // #292: starts selecting several messages, this one first — same
+    // eligibility as Forward, since selecting is for forwarding together.
+    ...(onEnterSelection && !message.redacted && !message.pending && !message.failed
+      ? [{ key: "select", label: "Select", disabled: busy, testId: "select-action", onClick: () => onEnterSelection(message.eventId) }]
+      : []),
   ];
 
   const messageBody = (
@@ -1414,10 +1593,26 @@ export function RoomEntry({
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
     >
-      {/* #252: on touch, the bubble itself is the long-press surface — a
+      {/* #292: selecting stands in for the usual touch/pointer split — a
+          checkbox leads the row, and tapping it (never the bubble itself,
+          so nothing here steals a tap meant for a link or a reaction) is
+          the only way to change the selection. */}
+      {selecting ? (
+        <div className="flex items-start gap-2" data-testid="room-message-select-row">
+          <input
+            aria-label="Select this message"
+            checked={selected}
+            className="mt-1 size-4 shrink-0"
+            data-testid="room-message-select-checkbox"
+            onChange={() => onToggleSelect?.(message.eventId)}
+            type="checkbox"
+          />
+          <div className="min-w-0 flex-1">{messageBody}</div>
+        </div>
+      ) : /* #252: on touch, the bubble itself is the long-press surface — a
           hold opens the sheet below; a quick tap (the gesture's own
-          `onClickCapture`) does nothing more than it always did. */}
-      {touchPrimary ? (
+          `onClickCapture`) does nothing more than it always did. */
+      touchPrimary ? (
         <div data-testid="room-message-bubble" {...longPress}>
           {messageBody}
         </div>
@@ -1433,56 +1628,58 @@ export function RoomEntry({
           </a>
         </p>
       )}
-      {touchPrimary ? (
-        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-          <DropdownMenuTrigger asChild>
-            <button className={sheetTriggerClass} data-testid="room-message-actions-trigger" type="button">
-              Message actions
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" data-testid="room-message-actions">
-            {actions.map((action) => (
-              <DropdownMenuItem
-                asChild={action.href !== undefined}
-                data-testid={action.testId}
-                disabled={action.disabled}
-                key={action.key}
-                onSelect={action.href === undefined ? () => action.onClick?.() : undefined}
-              >
-                {action.href !== undefined ? <a href={action.href}>{action.label}</a> : action.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : (
-        // #252: hidden until the row is hovered, focused (keyboard, Tab),
-        // or something it opened is still active — never a permanent row.
-        // `pointer-events-none` while hidden is belt-and-braces only: the
-        // visibility is already gated above, this just keeps a stray mouse
-        // from reaching an invisible button.
-        <div
-          className={`flex flex-wrap gap-1 transition-opacity motion-reduce:transition-none ${toolbarVisible ? "opacity-100" : "pointer-events-none opacity-0"}`}
-          data-testid="room-message-actions"
-        >
-          {actions.map((action) =>
-            action.href !== undefined ? (
-              <a className={rowActionClass} data-testid={action.testId} href={action.href} key={action.key}>
-                {action.label}
-              </a>
-            ) : (
-              <button
-                className={rowActionClass}
-                data-testid={action.testId}
-                disabled={action.disabled}
-                key={action.key}
-                onClick={action.onClick}
-              >
-                {action.label}
+      {/* #292: selecting replaces a row's own verbs with the checkbox above — the sheet/toolbar below is for when it isn't. */}
+      {!selecting &&
+        (touchPrimary ? (
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+            <DropdownMenuTrigger asChild>
+              <button className={sheetTriggerClass} data-testid="room-message-actions-trigger" type="button">
+                Message actions
               </button>
-            ),
-          )}
-        </div>
-      )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" data-testid="room-message-actions">
+              {actions.map((action) => (
+                <DropdownMenuItem
+                  asChild={action.href !== undefined}
+                  data-testid={action.testId}
+                  disabled={action.disabled}
+                  key={action.key}
+                  onSelect={action.href === undefined ? () => action.onClick?.() : undefined}
+                >
+                  {action.href !== undefined ? <a href={action.href}>{action.label}</a> : action.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          // #252: hidden until the row is hovered, focused (keyboard, Tab),
+          // or something it opened is still active — never a permanent row.
+          // `pointer-events-none` while hidden is belt-and-braces only: the
+          // visibility is already gated above, this just keeps a stray mouse
+          // from reaching an invisible button.
+          <div
+            className={`flex flex-wrap gap-1 transition-opacity motion-reduce:transition-none ${toolbarVisible ? "opacity-100" : "pointer-events-none opacity-0"}`}
+            data-testid="room-message-actions"
+          >
+            {actions.map((action) =>
+              action.href !== undefined ? (
+                <a className={rowActionClass} data-testid={action.testId} href={action.href} key={action.key}>
+                  {action.label}
+                </a>
+              ) : (
+                <button
+                  className={rowActionClass}
+                  data-testid={action.testId}
+                  disabled={action.disabled}
+                  key={action.key}
+                  onClick={action.onClick}
+                >
+                  {action.label}
+                </button>
+              ),
+            )}
+          </div>
+        ))}
       {pickerOpen && !message.redacted && (
         <div className="flex flex-wrap gap-1" data-testid="reaction-picker">
           {REACTION_CHOICES.map((key) => (

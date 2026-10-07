@@ -70,7 +70,7 @@ function roomsFixture(): RoomSummary[] {
       unread: { notifications: 0, mentions: 0 },
       muted: false,
       notifications: "all",
-      canEdit: { name: false, topic: false, avatar: false },
+      canEdit: { name: false, topic: false, avatar: false, pins: false },
     },
     {
       roomId: "!project-x:workspace.example",
@@ -86,7 +86,7 @@ function roomsFixture(): RoomSummary[] {
       unread: { notifications: 3, mentions: 0 },
       muted: false,
       notifications: "all",
-      canEdit: { name: true, topic: true, avatar: true },
+      canEdit: { name: true, topic: true, avatar: true, pins: true },
     },
     {
       roomId: "!announce:workspace.example",
@@ -99,7 +99,7 @@ function roomsFixture(): RoomSummary[] {
       unread: { notifications: 0, mentions: 0 },
       muted: false,
       notifications: "all",
-      canEdit: { name: false, topic: false, avatar: false },
+      canEdit: { name: false, topic: false, avatar: false, pins: false },
     },
   ];
 }
@@ -309,7 +309,7 @@ function fakeConnection(state: {
         unread: { notifications: 0, mentions: 0 },
         muted: false,
         notifications: "all",
-        canEdit: { name: false, topic: false, avatar: false },
+        canEdit: { name: false, topic: false, avatar: false, pins: false },
       });
       return roomId;
     }),
@@ -328,7 +328,7 @@ function fakeConnection(state: {
         unread: { notifications: 0, mentions: 0 },
         muted: false,
         notifications: "all",
-        canEdit: { name: true, topic: true, avatar: true },
+        canEdit: { name: true, topic: true, avatar: true, pins: true },
       });
       return roomId;
     }),
@@ -354,7 +354,7 @@ function fakeConnection(state: {
         unread: { notifications: 0, mentions: 0 },
         muted: false,
         notifications: "all",
-        canEdit: { name: true, topic: true, avatar: true },
+        canEdit: { name: true, topic: true, avatar: true, pins: true },
       });
       state.channels = [...(state.channels ?? []), { roomId, name, topic: null, memberCount: 1, joined: true }];
       return roomId;
@@ -377,7 +377,7 @@ function fakeConnection(state: {
         unread: { notifications: 0, mentions: 0 },
         muted: false,
         notifications: "all",
-        canEdit: { name: false, topic: false, avatar: false },
+        canEdit: { name: false, topic: false, avatar: false, pins: false },
       });
     }),
     invites: vi.fn(async () => [...(state.invites ?? [])]),
@@ -396,7 +396,7 @@ function fakeConnection(state: {
           unread: { notifications: 0, mentions: 0 },
           muted: false,
           notifications: "all",
-          canEdit: { name: false, topic: false, avatar: false },
+          canEdit: { name: false, topic: false, avatar: false, pins: false },
         });
       }
     }),
@@ -512,6 +512,8 @@ function fakeConnection(state: {
           .filter((reaction) => reaction.count > 0),
       };
     }),
+    pin: vi.fn(async () => {}),
+    unpin: vi.fn(async () => {}),
     replyInThread: vi.fn(async (roomId: string, rootEventId: string, body: string) => {
       const eventId = `~reply-${(pendingSeq += 1)}`;
       const rootAt = messageAt(roomId, rootEventId);
@@ -3726,7 +3728,7 @@ describe("#223 — naming a conversation, setting its topic, and its picture", (
     seedSession();
     const readOnlyRooms = roomsFixture().map((room) =>
       room.roomId === "!project-x:workspace.example"
-        ? { ...room, topic: "refunds and billing", canEdit: { name: false, topic: false, avatar: false } }
+        ? { ...room, topic: "refunds and billing", canEdit: { name: false, topic: false, avatar: false, pins: false } }
         : room,
     );
     const fake = fakeConnection({ rooms: readOnlyRooms, timelines: { "!project-x:workspace.example": [] } });
@@ -3743,6 +3745,109 @@ describe("#223 — naming a conversation, setting its topic, and its picture", (
     expect(within(panel).getByTestId("room-settings-topic")).toHaveTextContent("refunds and billing");
     expect(within(panel).queryByTestId("room-settings-topic-edit")).toBeNull();
     expect(within(panel).queryByTestId("room-picture-pick")).toBeNull();
+  });
+});
+
+describe("#292 — forward, pin and select", () => {
+  it("shows a pinned bar for a room with pinned messages, and Unpin asks the workspace to unpin it", async () => {
+    stubDesktop();
+    seedSession();
+    const rooms = roomsFixture().map((room) =>
+      room.roomId === "!project-x:workspace.example" ? { ...room, pinnedEventIds: ["$1"] } : room,
+    );
+    const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const bar = await screen.findByTestId("pinned-bar");
+    expect(bar).toHaveTextContent("1 pinned message");
+    expect(bar).toHaveTextContent("what's our refund policy?");
+
+    fireEvent.click(bar);
+    const dialog = await screen.findByTestId("pinned-messages-dialog");
+    fireEvent.click(within(dialog).getByTestId("pinned-message-unpin"));
+    await waitFor(() => expect(fake.connection.unpin).toHaveBeenCalledWith("!project-x:workspace.example", "$1"));
+  });
+
+  it("pins a message to the room from its own action, when this member may (#223's own power-level convention)", async () => {
+    stubDesktop();
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("what's our refund policy?")).getByTestId("pin-action"));
+    await waitFor(() => expect(fake.connection.pin).toHaveBeenCalledWith("!project-x:workspace.example", "$1"));
+  });
+
+  it("forwards one message to a chosen conversation, saying who it's from and where it came from", async () => {
+    stubDesktop();
+    seedSession();
+    const fake = fakeConnection({
+      rooms: roomsFixture(),
+      timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE], "!announce:workspace.example": [] },
+    });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("Refunds within 30 days, full amount.")).getByTestId("forward-action"));
+    const dialog = await screen.findByTestId("forward-message-dialog");
+    fireEvent.click(within(dialog).getAllByTestId("forward-message-room").find((row) => row.textContent === "announce")!);
+
+    await waitFor(() =>
+      expect(fake.connection.send).toHaveBeenCalledWith(
+        "!announce:workspace.example",
+        "Forwarded from carol's duo in project-x:\nRefunds within 30 days, full amount.",
+      ),
+    );
+    // The dialog closes once the forward lands.
+    await waitFor(() => expect(screen.queryByTestId("forward-message-dialog")).toBeNull());
+  });
+
+  it("selects several messages from their own action and forwards them together, in the order they were said", async () => {
+    stubDesktop();
+    seedSession();
+    const fake = fakeConnection({
+      rooms: roomsFixture(),
+      timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE], "!announce:workspace.example": [] },
+    });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    // Starts selection from the second message's own action, with it already picked...
+    fireEvent.click(within(messageRow("Refunds within 30 days, full amount.")).getByTestId("select-action"));
+    const toolbar = await screen.findByTestId("selection-toolbar");
+    expect(toolbar).toHaveTextContent("1 selected");
+    // ...then adds the first one by its checkbox.
+    fireEvent.click(within(messageRow("what's our refund policy?")).getByTestId("room-message-select-checkbox"));
+    expect(screen.getByTestId("selection-toolbar")).toHaveTextContent("2 selected");
+
+    fireEvent.click(screen.getByTestId("selection-forward"));
+    const dialog = await screen.findByTestId("forward-message-dialog");
+    expect(dialog).toHaveTextContent("all 2 messages");
+    fireEvent.click(within(dialog).getAllByTestId("forward-message-room").find((row) => row.textContent === "announce")!);
+
+    await waitFor(() => expect(fake.connection.send).toHaveBeenCalledTimes(2));
+    // Chronological order (#1 was said first), never selection order.
+    expect(vi.mocked(fake.connection.send).mock.calls[0]).toEqual([
+      "!announce:workspace.example",
+      "Forwarded from Bose in project-x:\nwhat's our refund policy?",
+    ]);
+    expect(vi.mocked(fake.connection.send).mock.calls[1]).toEqual([
+      "!announce:workspace.example",
+      "Forwarded from carol's duo in project-x:\nRefunds within 30 days, full amount.",
+    ]);
+    // Selection mode ends once the forward lands.
+    await waitFor(() => expect(screen.queryByTestId("selection-toolbar")).toBeNull());
   });
 });
 

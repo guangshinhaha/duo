@@ -29,7 +29,7 @@ function room(over: Partial<RoomSummary> & Pick<RoomSummary, "roomId">): RoomSum
     unread: { notifications: 0, mentions: 0 },
     muted: false,
     notifications: "all",
-    canEdit: { name: false, topic: false, avatar: false },
+    canEdit: { name: false, topic: false, avatar: false, pins: false },
     ...over,
   };
 }

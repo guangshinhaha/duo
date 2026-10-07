@@ -139,6 +139,8 @@ export interface RoomEditPermissions {
   readonly name: boolean;
   readonly topic: boolean;
   readonly avatar: boolean;
+  /** #292: whether this member may pin or unpin a message (`m.room.pinned_events`) — the same power-level gate as the other three. */
+  readonly pins: boolean;
 }
 
 /**
@@ -238,6 +240,15 @@ export interface RoomSummary {
    * the type. `markRead` clears it, wherever that's called from.
    */
   readonly markedUnread?: true;
+  /**
+   * #292: this room's pinned messages (`m.room.pinned_events`), oldest
+   * first — the spec's own array, read as-is, with no client-side
+   * reordering. Absent (never an empty array) when the room has pinned
+   * nothing, the same "present only when true" convention `declinedDuos`
+   * and `markedUnread` use above, so an existing fixture that predates
+   * this field still satisfies the type.
+   */
+  readonly pinnedEventIds?: readonly string[];
 }
 
 /**
@@ -755,6 +766,16 @@ export interface WorkspaceConnection {
   react(roomId: string, eventId: string, key: string): Promise<void>;
   /** Takes this member's reaction back: redacts the member's own reaction event, never anyone else's. */
   unreact(roomId: string, eventId: string, key: string): Promise<void>;
+  /**
+   * #292: pins a message to the room — appends its event id to
+   * `m.room.pinned_events`' own array, never replacing what's already
+   * pinned. Already pinned costs nothing to ask again. Gated client-side by
+   * `RoomSummary.canEdit.pins`, the same power-level convention #223 reads
+   * for the room's name, topic and picture.
+   */
+  pin(roomId: string, eventId: string): Promise<void>;
+  /** #292: the reverse of `pin` — removes this one event id from the pinned array, leaving the rest. */
+  unpin(roomId: string, eventId: string): Promise<void>;
   /**
    * Answers inside a message's thread: the reply relates to the root, so
    * the thread owns it — the main flow never shows it as a row.
@@ -1854,7 +1875,20 @@ function editPermissionsOf(room: MatrixRoom, selfId: string): RoomEditPermission
     name: myLevel >= requiredPowerLevelFor(content, EventType.RoomName),
     topic: myLevel >= requiredPowerLevelFor(content, EventType.RoomTopic),
     avatar: myLevel >= requiredPowerLevelFor(content, EventType.RoomAvatar),
+    pins: myLevel >= requiredPowerLevelFor(content, EventType.RoomPinnedEvents),
   };
+}
+
+/**
+ * #292: this room's pinned messages, oldest first — the spec's own
+ * `m.room.pinned_events` array, filtered to strings only (a homeserver that
+ * ever wrote something stranger there is not this client's problem to
+ * guess at). Empty when the room has never pinned anything, or the state
+ * event's content doesn't carry the array the spec promises.
+ */
+function pinnedEventIdsOf(room: MatrixRoom): readonly string[] {
+  const content = room.currentState?.getStateEvents(EventType.RoomPinnedEvents, "")?.getContent() as { pinned?: unknown } | undefined;
+  return Array.isArray(content?.pinned) ? content.pinned.filter((eventId): eventId is string => typeof eventId === "string") : [];
 }
 
 /**
@@ -2131,6 +2165,7 @@ async function projectRoom(
   const members = await projectMemberRefs(client, room, selfId, "join", ownerNameCache, askServer);
   const invitedMembers = await projectMemberRefs(client, room, selfId, "invite", ownerNameCache, askServer);
   const declinedDuos = declinedDuosOf(room);
+  const pinnedEventIds = pinnedEventIdsOf(room);
   return {
     roomId: room.roomId,
     kind: roomKindOf(direct, room.getJoinRule()),
@@ -2157,6 +2192,7 @@ async function projectRoom(
     notifications: mode,
     canEdit: editPermissionsOf(room, selfId),
     ...(markedUnreadOf(room) ? { markedUnread: true as const } : {}),
+    ...(pinnedEventIds.length > 0 ? { pinnedEventIds } : {}),
   };
 }
 
@@ -2860,6 +2896,19 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       if (mineId) {
         await client.redactEvent(roomId, mineId);
       }
+    },
+    pin: async (roomId, eventId) => {
+      const room = client.getRoom(roomId);
+      const existing = room ? pinnedEventIdsOf(room) : [];
+      if (existing.includes(eventId)) {
+        return;
+      }
+      await client.sendStateEvent(roomId, EventType.RoomPinnedEvents, { pinned: [...existing, eventId] }, "");
+    },
+    unpin: async (roomId, eventId) => {
+      const room = client.getRoom(roomId);
+      const existing = room ? pinnedEventIdsOf(room) : [];
+      await client.sendStateEvent(roomId, EventType.RoomPinnedEvents, { pinned: existing.filter((id) => id !== eventId) }, "");
     },
     replyInThread: async (roomId, rootEventId, body) => {
       // The wire shape is the thread relation plus its fallback reply
