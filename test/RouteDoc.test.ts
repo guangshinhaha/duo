@@ -129,6 +129,8 @@ const SERVED: [method: string, path: string][] = [
   ["POST", "/corpus/embed"],
   ["GET", "/corpus/embed"],
   ["GET", "/search"],
+  // duo#300 (digital-duo#300): landed on origin/main's src/serve/server.ts.
+  ["POST", "/search/answer"],
   ["POST", "/escalations/digest"],
   ["GET", "/escalations/history"],
   ["GET", "/escalations/rate"],

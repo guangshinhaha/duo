@@ -1,11 +1,26 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { useState } from "react";
+// Type-only: `WorkspaceSearch.test.tsx`'s structural test walks this file's
+// VALUE imports and refuses any that reach `src/api/*` ("the message search
+// must not reach the daemon's api") — a `type` import carries no record
+// across that boundary (its own words) and the regex that walks the
+// closure excludes it by construction. The actual call, when there's a duo
+// to make it with, is owned by `CommandSearch.tsx` (outside that closure,
+// the same seam `PersonProfile.tsx`'s api calls already sit behind) and
+// handed in as `onAnswer`, a plain function — never `api` itself.
+import type { SearchAnswerHit, SearchAnswerResult } from "../api/types.js";
+import { DuoMessage } from "./DuoMessage.js";
 import { RoomDuoMessage } from "./RoomDuoMessage.js";
 import { RoomPersonMessage } from "./RoomPersonMessage.js";
 import { Timestamp } from "./Timestamp.js";
 import { duoOwnerLabel, isDuoUserId } from "../workspace/identity.js";
 import { roomHref, threadHref } from "../workspace/links.js";
 import { mentionLabelOf } from "../workspace/mentions.js";
+import { filterChips, matchesFilters, withoutFilter, type SearchFilters } from "../workspace/searchQuery.js";
 import type { MessageSearchHit, MessageSearchPage, RoomSummary, SearchContextLine, WorkspaceConnection } from "../workspace/matrix.js";
+
+/** duo#300: how many of the (already homeserver-ranked) filtered hits ride the answer prompt — bounded independently of the daemon's own `MAX_HITS`, so this stays a deliberate choice even if that changes. */
+const ANSWER_MAX_HITS = 8;
 
 /**
  * #70: search what was said, projected. The workspace searches the messages
@@ -30,19 +45,35 @@ import type { MessageSearchHit, MessageSearchPage, RoomSummary, SearchContextLin
  * `CommandSearch` renders this in place of the conversation list once the
  * member picks "Search messages for '…'", exactly the way this file used to
  * show it itself, and `onClear` hands control back the same way.
+ *
+ * duo#300: `filters` (from:/in:/before:/after:, parsed by
+ * `workspace/searchQuery.ts`) narrow the hits this component already has —
+ * never a second ask of the homeserver (see that module's own doc comment
+ * on why: `WorkspaceSearchSeam.test.ts` pins that `searchMessages` takes no
+ * room or sender scoping of its own). `onAnswer` is optional and owned by
+ * `CommandSearch` (never this module — see the import comment above):
+ * `undefined` with no duo paired, the same "nothing to call it with" shape
+ * `onRewrite`/`onFactCheck` already use for Room.tsx's composer.
  */
 export function MessageSearchResults({
   connection,
   query,
+  filters,
+  onFiltersChange,
   rooms,
   titleOf,
   onClear,
+  onAnswer,
 }: {
   connection: WorkspaceConnection;
   query: string;
+  filters: SearchFilters;
+  onFiltersChange: (filters: SearchFilters) => void;
   rooms: readonly RoomSummary[];
   titleOf: (room: RoomSummary) => string;
   onClear: () => void;
+  /** duo#300: `undefined` with no duo paired. Owned by `CommandSearch`, never this module (see the file's own import comment). */
+  onAnswer?: (input: { query: string; hits: readonly SearchAnswerHit[] }) => Promise<SearchAnswerResult>;
 }) {
   const search = useInfiniteQuery({
     // Under the workspace's own key, so signing out (which clears the cache)
@@ -61,9 +92,34 @@ export function MessageSearchResults({
     meta: { target: "workspace" },
   });
   const hits = search.data?.pages.flatMap((page) => page.hits) ?? [];
+  const titleOfRoom = (roomId: string): string => {
+    const room = rooms.find((candidate) => candidate.roomId === roomId);
+    return room ? titleOf(room) : roomId;
+  };
+  const filteredHits = hits.filter((hit) => matchesFilters(hit, titleOfRoom(hit.roomId), filters));
+  const chips = filterChips(filters);
 
   return (
     <div className="mt-3" data-testid="message-search-results">
+      <SearchAnswer onAnswer={onAnswer} query={query} hits={filteredHits} rooms={rooms} titleOf={titleOf} />
+      {chips.length > 0 && (
+        <ul className="mb-2 flex flex-wrap gap-1" data-testid="message-search-filters" aria-label="Search filters">
+          {chips.map((chip) => (
+            <li key={chip.key}>
+              <button
+                className="inline-flex min-h-6 items-center gap-1 rounded-full border border-[var(--edge)] bg-[var(--surface-2)] px-2 type-provenance text-[var(--text)]"
+                data-testid={`message-search-filter-${chip.key}`}
+                onClick={() => onFiltersChange(withoutFilter(filters, chip.key))}
+                type="button"
+              >
+                {chip.label}
+                <span aria-hidden="true">×</span>
+                <span className="sr-only">Remove filter {chip.label}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="flex items-center justify-between gap-2">
         <p className="type-provenance uppercase text-[var(--faint)]">Said in your conversations</p>
         <button
@@ -97,9 +153,14 @@ export function MessageSearchResults({
           Nothing said in your conversations matches that.
         </p>
       )}
-      {hits.length > 0 && (
+      {search.isSuccess && hits.length > 0 && filteredHits.length === 0 && (
+        <p className="mt-2 type-body text-[var(--muted)]" data-testid="message-search-filtered-empty">
+          Nothing matches these filters yet{search.hasNextPage ? " — try Load more, or remove a filter." : "."}
+        </p>
+      )}
+      {filteredHits.length > 0 && (
         <ol className="mt-2 flex flex-col gap-4">
-          {hits.map((hit) => (
+          {filteredHits.map((hit) => (
             <li key={`${hit.roomId}/${hit.eventId}`}>
               <SearchHit hit={hit} rooms={rooms} titleOf={titleOf} />
             </li>
@@ -116,6 +177,111 @@ export function MessageSearchResults({
         >
           {search.isFetchingNextPage ? "Loading…" : "Load more"}
         </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * duo#300: the answer on top — deliberately asked, never automatic. A plain
+ * search only ever asks the workspace (`WorkspaceSearch.test.tsx`'s own
+ * acceptance test pins exactly that: the daemon sees no request at all
+ * until this component's own button is pressed); the member decides
+ * whether running a search was "find a message" or "ask a question", and
+ * only the second one costs an inference call. Asking calls
+ * `POST /search/answer` with exactly the (bounded, already-filtered) hits
+ * this search already has — no corpus, no second search — and renders
+ * through `DuoMessage` (Hairline P1: generated text always sits behind the
+ * line and under its attribution), with its sources as plain links
+ * beneath it, the same `roomHref`/`threadHref` every other hit opens
+ * through. Renders no button at all with no duo paired or no hits to
+ * answer from.
+ */
+function SearchAnswer({
+  onAnswer,
+  query,
+  hits,
+  rooms,
+  titleOf,
+}: {
+  onAnswer?: (input: { query: string; hits: readonly SearchAnswerHit[] }) => Promise<SearchAnswerResult>;
+  query: string;
+  hits: readonly MessageSearchHit[];
+  rooms: readonly RoomSummary[];
+  titleOf: (room: RoomSummary) => string;
+}) {
+  const bounded = hits.slice(0, ANSWER_MAX_HITS);
+  const key = bounded.map((hit) => hit.eventId).join(",");
+  const thisAsk = `${query}\u0000${key}`;
+  // A changed query or filter set is a different question — `asked` only
+  // ever names a result for exactly `thisAsk`, so narrowing or widening the
+  // results after asking returns to the un-asked button rather than
+  // showing a stale answer for a set of hits that's no longer on screen.
+  const [asked, setAsked] = useState<{ key: string; pending: boolean; result: SearchAnswerResult | null } | null>(null);
+
+  if (!onAnswer || bounded.length === 0) {
+    return null;
+  }
+
+  if (asked === null || asked.key !== thisAsk) {
+    return (
+      <button
+        className="mb-3 inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body text-[var(--muted)]"
+        data-testid="message-search-ask-answer"
+        onClick={() => {
+          setAsked({ key: thisAsk, pending: true, result: null });
+          onAnswer({ query, hits: bounded.map((hit) => ({ id: hit.eventId, text: hit.body, from: hit.senderName })) }).then(
+            (outcome) => setAsked((current) => (current?.key === thisAsk ? { key: thisAsk, pending: false, result: outcome } : current)),
+            () => setAsked((current) => (current?.key === thisAsk ? { key: thisAsk, pending: false, result: null } : current)),
+          );
+        }}
+        type="button"
+      >
+        Ask your duo about these results
+      </button>
+    );
+  }
+
+  if (asked.pending) {
+    return (
+      <p className="mb-3 type-body text-[var(--muted)]" data-testid="message-search-answer-loading">
+        Your duo is looking for an answer…
+      </p>
+    );
+  }
+
+  const result = asked.result;
+  // Requires `kind === "answered"` explicitly (not merely "not no_answer")
+  // and a real array for `citedIds`: `apiRequest` casts the daemon's JSON
+  // with no runtime check (`client.ts`'s own doc comment on `ApiRequestError`
+  // says as much), so a malformed or stubbed response must read as "nothing
+  // to show", never crash this surface.
+  if (result === null || result.kind !== "answered" || !Array.isArray(result.citedIds)) {
+    return (
+      <p className="mb-3 type-body text-[var(--muted)]" data-testid="message-search-answer-none">
+        Your duo couldn&apos;t find a direct answer in these results.
+      </p>
+    );
+  }
+  const cited = bounded.filter((hit) => result.citedIds.includes(hit.eventId));
+  return (
+    <div className="mb-3" data-testid="message-search-answer">
+      <DuoMessage>{result.text}</DuoMessage>
+      {cited.length > 0 && (
+        <ul className="mt-1 flex flex-col gap-0.5 pl-1" aria-label="Sources">
+          {cited.map((hit) => {
+            const room = rooms.find((candidate) => candidate.roomId === hit.roomId);
+            const title = room ? titleOf(room) : hit.roomId;
+            const href = hit.threadRootEventId !== null ? threadHref(hit.roomId, hit.threadRootEventId, hit.eventId) : roomHref(hit.roomId, hit.eventId);
+            return (
+              <li key={hit.eventId} className="type-provenance text-[var(--faint)]">
+                <a className="underline" data-testid="message-search-answer-source" href={href}>
+                  {hit.senderName} in {title}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

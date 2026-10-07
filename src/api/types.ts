@@ -65,6 +65,20 @@ export interface ExplainResult {
   readonly sources: readonly DraftSource[];
 }
 
+// `POST /search/answer` (duo#300, digital-duo#300): the answer-on-top for
+// "search what was said" — never the corpus search, and never a second
+// request for content: `hits` in the request body is exactly the set of
+// `MessageSearchHit`s the member's own homeserver search already returned,
+// so the daemon can answer with nothing the member couldn't already read.
+// Mirrors digital-duo's `src/drafting/search-answer.ts`.
+export interface SearchAnswerHit {
+  readonly id: string;
+  readonly text: string;
+  readonly from: string;
+}
+
+export type SearchAnswerResult = { readonly kind: "answered"; readonly text: string; readonly citedIds: readonly string[] } | { readonly kind: "no_answer" };
+
 /**
  * `GET /knowledge/evidence/excluded` (duo#272, digital-duo#288): one past
  * exchange the owner removed from a draft's "Used" list — reversible from
