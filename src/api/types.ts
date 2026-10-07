@@ -54,6 +54,17 @@ export interface FactCheckResult {
   readonly flag: FactCheckFlag | null;
 }
 
+// `POST /compose/explain` (digital-duo duo#283): privately explains a
+// message the member received — not necessarily one the duo wrote or the
+// owner sent — to the owner alone; never posted anywhere. `sources` reuses
+// `DraftSource` above and is only ever what the daemon says it actually
+// drew on (AC2), which may be `[]` when the explanation came from the
+// model's own general knowledge rather than anything in the corpus.
+export interface ExplainResult {
+  readonly explanation: string;
+  readonly sources: readonly DraftSource[];
+}
+
 /**
  * `GET /knowledge/evidence/excluded` (duo#272, digital-duo#288): one past
  * exchange the owner removed from a draft's "Used" list — reversible from

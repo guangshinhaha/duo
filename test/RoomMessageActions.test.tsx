@@ -405,6 +405,96 @@ describe("duo#275 — \"Duo: always answer this way\" (the message action half o
   });
 });
 
+describe("duo#283 — \"Explain this message, privately\"", () => {
+  it("shows the action on anyone's message — unlike pin-answer, it is never gated on `own`", () => {
+    const own = render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$30", senderId: OWNER, body: "the RTO slipped again" })} {...baseProps()} onExplain={vi.fn()} />,
+    );
+    expect(screen.getByTestId("explain-action")).toBeInTheDocument();
+    own.unmount();
+
+    render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$31", senderId: OTHER, body: "the RTO slipped again" })} {...baseProps()} onExplain={vi.fn()} />,
+    );
+    expect(screen.getByTestId("explain-action")).toBeInTheDocument();
+  });
+
+  it("is absent without onExplain", () => {
+    render(<RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$32", senderId: OTHER, body: "the RTO slipped again" })} {...baseProps()} />);
+    expect(screen.queryByTestId("explain-action")).toBeNull();
+  });
+
+  it("is absent on a redacted message, a share, or a pending/failed echo", () => {
+    render(
+      <RoomEntry
+        connection={fakeConnection()}
+        message={messageFor({ eventId: "$33", senderId: OTHER, body: "gone", redacted: true })}
+        {...baseProps()}
+        onExplain={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("explain-action")).toBeNull();
+    cleanup();
+
+    render(
+      <RoomEntry
+        connection={fakeConnection()}
+        message={messageFor({ eventId: "$34", senderId: OWNER, body: "", pending: true })}
+        {...baseProps()}
+        onExplain={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("explain-action")).toBeNull();
+  });
+
+  it("asks the moment it opens, with no form to fill in, and shows the explanation and its sources", async () => {
+    const onExplain = vi.fn(async () => ({ explanation: "RTO means return-to-office.", sources: ["standing order: RTO starts next quarter"] }));
+    render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$35", senderId: OTHER, body: "heads up, RTO slipped again" })} {...baseProps()} onExplain={onExplain} />,
+    );
+    fireEvent.click(screen.getByTestId("explain-action"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("explain-text")).toHaveTextContent("RTO means return-to-office.");
+    expect(within(dialog).getByTestId("explain-sources")).toHaveTextContent("Drew on 1 source");
+    expect(onExplain).toHaveBeenCalledWith("heads up, RTO slipped again", "!project-x:workspace.example");
+  });
+
+  it("states plainly when it drew on nothing from the corpus, rather than omitting the citation", async () => {
+    const onExplain = vi.fn(async () => ({ explanation: "RTO commonly means return-to-office.", sources: [] as readonly string[] }));
+    render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$36", senderId: OTHER, body: "RTO slipped again" })} {...baseProps()} onExplain={onExplain} />,
+    );
+    fireEvent.click(screen.getByTestId("explain-action"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("explain-sources")).toHaveTextContent("general knowledge");
+  });
+
+  it("shows an error, and never the daemon's text, when the duo can't explain it", async () => {
+    const onExplain = vi.fn(async () => {
+      throw new Error("no inference provider configured");
+    });
+    render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$37", senderId: OTHER, body: "RTO slipped again" })} {...baseProps()} onExplain={onExplain} />,
+    );
+    fireEvent.click(screen.getByTestId("explain-action"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("explain-error")).toHaveTextContent("no inference provider configured");
+    expect(within(dialog).queryByTestId("explain-text")).toBeNull();
+  });
+
+  it("closes with Done, never posting anything to the room", async () => {
+    const onExplain = vi.fn(async () => ({ explanation: "RTO means return-to-office.", sources: [] as readonly string[] }));
+    render(
+      <RoomEntry connection={fakeConnection()} message={messageFor({ eventId: "$38", senderId: OTHER, body: "RTO slipped again" })} {...baseProps()} onExplain={onExplain} />,
+    );
+    fireEvent.click(screen.getByTestId("explain-action"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByTestId("explain-done"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(onExplain).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("#291 — react with any emoji, not just six", () => {
   beforeEach(() => {
     localStorage.clear();
