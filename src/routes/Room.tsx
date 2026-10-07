@@ -21,7 +21,9 @@ import { addressed, mentionLabelOf, mentionPillClassName } from "../workspace/me
 import { ChatEditor, type ChatEditorHandle } from "../composer/ChatEditor.js";
 import { FactCheckAssist } from "../composer/FactCheckAssist.js";
 import { mentionCandidatesOf } from "../composer/mentionOffer.js";
+import { parseSlashCommand, type SlashCommand } from "../composer/slashCommandOffer.js";
 import { RewriteMenu } from "../composer/RewriteMenu.js";
+import type { ComposedMessage } from "../composer/serialize.js";
 import type { RewriteInstruction } from "../composer/rewrite.js";
 import { readFactCheckPref } from "../factCheckPrefs.js";
 import { readTypingPref } from "../typingPrefs.js";
@@ -602,6 +604,41 @@ export function Room({
     return startIndex < 0 ? [] : mainFlow.slice(startIndex);
   }, [timeline.data, unreadFoundEventId]);
 
+  // duo#301: "/summarize" — the same catch-up mechanism #280 already
+  // shipped (`onCatchUp`, rendered through the same `CatchUpCard`), asked
+  // on demand instead of only past the unread threshold `unreadMessages`
+  // above gates. A member's own last up-to-20 messages (oldest first, same
+  // order `CatchUpCard` expects), never a second fetch — bounded by what
+  // this device's sync already holds, same stance as `unreadMessages`.
+  const [manualSummaryRequest, setManualSummaryRequest] = useState<readonly RoomMessage[] | null>(null);
+  useEffect(() => setManualSummaryRequest(null), [roomId]);
+
+  /**
+   * duo#301: what "/duo" and "/summarize" do — the two named commands with
+   * somewhere real to go. Returns a notice to show in the composer instead
+   * of acting (never silently doing nothing), or `null` once it has acted.
+   * `RoomComposer` calls this only for a KNOWN, available command — the
+   * other three (no mechanism yet) and anything unrecognised are handled
+   * entirely in its own submit handler, which never reaches here.
+   */
+  const handleSlashCommand = (id: "duo" | "summarize"): string | null => {
+    if (id === "duo") {
+      // #duo is always present, pinned, and "works with no workspace"
+      // (vocabulary.md) — the same address the sidebar's own row uses.
+      window.location.hash = "#duo";
+      return null;
+    }
+    if (!onCatchUp) {
+      return "Your duo isn't paired — there's nothing to summarize with.";
+    }
+    const recent = (timeline.data ?? []).filter((message) => message.threadRootEventId === null).slice(-20);
+    if (recent.length === 0) {
+      return "Nothing here yet to summarize.";
+    }
+    setManualSummaryRequest(recent);
+    return null;
+  };
+
   // #248: the transcript's rows, in order — the beginning-of-history note,
   // either other note, then every main-flow message. Built before any early
   // return so the virtualizer (a hook) always sees the same calls.
@@ -1091,6 +1128,14 @@ export function Room({
                 {typingWords(typingUsers)}
               </p>
             )}
+            {/* duo#301: "/summarize", asked for by hand — the same card
+                #280 shows automatically past the unread threshold, reused
+                rather than a second summary UI. */}
+            {manualSummaryRequest !== null && onCatchUp && (
+              <div className="px-4 pt-3">
+                <CatchUpCard messages={manualSummaryRequest} onCatchUp={onCatchUp} onJumpToMessage={jumpToMessage} roomId={roomId} />
+              </div>
+            )}
             <RoomComposer
               connection={connection}
               roomId={roomId}
@@ -1100,6 +1145,7 @@ export function Room({
               onCancelReply={() => setReplyTarget(null)}
               onFactCheck={onFactCheck}
               onRewrite={onRewrite}
+              onSlashCommand={handleSlashCommand}
             />
           </>
         )
@@ -1951,6 +1997,7 @@ function RoomComposer({
   onCancelReply,
   onRewrite,
   onFactCheck,
+  onSlashCommand,
 }: {
   connection: WorkspaceConnection;
   roomId: string;
@@ -1963,6 +2010,16 @@ function RoomComposer({
   /** #263/#264: `undefined` when there's no paired duo — the rewrite button disabled rather than hidden (see `RewriteMenu`'s own doc comment), and the fact-check assist never calling out. */
   onRewrite?: (text: string, instruction: RewriteInstruction) => Promise<string>;
   onFactCheck?: (text: string, threadContext: string | null) => Promise<{ claim: string; concern: string; sourceLabel: string } | null>;
+  /**
+   * duo#301: dispatches "/duo" or "/summarize" — the two named slash
+   * commands with a real mechanism (`Room`'s `handleSlashCommand`). Returns
+   * a notice to show in place of acting, or `null` once it has acted. The
+   * other three commands, and anything "/"-shaped this product doesn't
+   * recognise, never reach this prop — this composer owns their words
+   * (their own fixed notice, or the confirm-before-send-as-text prompt)
+   * entirely by itself.
+   */
+  onSlashCommand: (id: "duo" | "summarize") => string | null;
 }) {
   const fileInput = useRef<HTMLInputElement | null>(null);
   const form = useRef<HTMLFormElement | null>(null);
@@ -1986,6 +2043,19 @@ function RoomComposer({
   // now — the owner chose not to send them (yet). Open only while there's
   // something to save; `saveLaterOpen` gates the dialog, not the button.
   const [saveLaterOpen, setSaveLaterOpen] = useState(false);
+  // duo#301: "/remind <words>" opens this same dialog on THOSE words
+  // (already captured, the composer about to be cleared) rather than
+  // whatever the button's own `trimmed` happens to hold — `null` means the
+  // dialog, if open at all, is open for the ordinary composer-button path.
+  const [remindDraft, setRemindDraft] = useState<string | null>(null);
+  // duo#301: a "/"-shaped word this product doesn't recognise, captured
+  // whole (body + any live mentions) at the moment Enter was pressed —
+  // AC3's "sent as text only after confirmation". `null` once more: nothing
+  // pending, send proceeds as ordinary text the instant it isn't "/"-shaped.
+  const [pendingUnknownSend, setPendingUnknownSend] = useState<ComposedMessage | null>(null);
+  // duo#301: the fixed word for a command this composer just dispatched or
+  // declined — cleared the moment the member types again.
+  const [commandNotice, setCommandNotice] = useState<string | null>(null);
   const trimmed = text.trim();
   const disabled = (trimmed.length === 0 && attachments.length === 0) || pending;
   const duos = members.filter((member) => isDuoUserId(member.userId));
@@ -2058,23 +2128,156 @@ function RoomComposer({
     // Deliberately once, on mount — `pendingShare` itself never changes.
   }, []);
 
-  // duo#299: saves the composer's own unsent text — a direct read-modify-
-  // write on the account's own record (`connection.later`/`setLater`),
-  // the same door `Room`'s message-save uses, just reached straight from
-  // here rather than through that route's shared `useLaterItems` cache:
-  // this composer has no other reason to hold that whole list in memory.
-  // A connection with neither door (a fixture built before duo#299) throws,
-  // which the dialog turns into its own inline error — the same "degrade,
-  // don't throw past the UI" stance `shell/later.ts` takes everywhere else.
-  const saveComposerToLater = async (remindAt: string | null): Promise<void> => {
-    const body = text.trim();
-    if (body === "" || !connection.later || !connection.setLater) {
+  // duo#299/duo#301: saves one note's words — a direct read-modify-write on
+  // the account's own record (`connection.later`/`setLater`), the same door
+  // `Room`'s message-save uses, just reached straight from here rather than
+  // through that route's shared `useLaterItems` cache: this composer has no
+  // other reason to hold that whole list in memory. The composer's own
+  // button and `/later`/`/remind` all share this one write — a connection
+  // with neither door (a fixture built before duo#299) throws, which the
+  // dialog turns into its own inline error, the same "degrade, don't throw
+  // past the UI" stance `shell/later.ts` takes everywhere else; `/later`'s
+  // own dispatch (no dialog in its path) catches it into `commandNotice`.
+  const saveNoteToLater = async (note: string, remindAt: string | null): Promise<void> => {
+    if (note === "" || !connection.later || !connection.setLater) {
       throw new Error("Nothing here can be saved.");
     }
     const current = await connection.later();
-    await connection.setLater(addLaterItem(current, { kind: "note", roomId, eventId: null, senderId: null, senderName: null, preview: body, remindAt }));
+    await connection.setLater(addLaterItem(current, { kind: "note", roomId, eventId: null, senderId: null, senderName: null, preview: note, remindAt }));
+  };
+
+  // duo#299: saves the composer's own unsent text — the button's path.
+  const saveComposerToLater = async (remindAt: string | null): Promise<void> => {
+    await saveNoteToLater(text.trim(), remindAt);
     editor.current?.clear();
     setText("");
+  };
+
+  /**
+   * The ordinary send — exactly what the form's submit used to do in full,
+   * now a function of its own so a slash command (dispatched instead) and
+   * an unknown "/"-word (sent only once confirmed) can both reach it
+   * without duplicating the share-then-text flow.
+   */
+  const performSend = (message: ComposedMessage): void => {
+    const body = message.body.trim();
+    const toShare = attachments;
+    const livePicks = message.mentions;
+    // #215: captured once, up front — `replyTarget` is `Room`'s state,
+    // and `onCancelReply` below (the same call Cancel makes) asks it to
+    // let go the instant the words are on their way, same as the text
+    // and the attachments do.
+    const replyingTo = replyTarget;
+    setPending(true);
+    setError(null);
+    // The share walks one attachment at a time, in the order staged, so
+    // each upload still starts only once the share ahead of it has left
+    // for the wire — the association convention (core #190) needs that
+    // order, even though none of these sends are awaited for it (#209).
+    void (async () => {
+      let sharedCount = 0;
+      try {
+        for (const staged of toShare) {
+          setStatus(`Uploading ${staged.name}…`);
+          const shared = await connection.uploadFile(staged, (sent, total) => {
+            setStatus(total > 0 ? `Uploading ${staged.name}… ${Math.round((sent / total) * 100)}%` : `Uploading ${staged.name}…`);
+          });
+          setStatus(`Sharing ${staged.name}…`);
+          // #209: handed to the homeserver without waiting on it —
+          // matrix-js-sdk's own local echo puts the share's row in the
+          // timeline the instant this call is made. A refusal shows on
+          // that row (failed, with Retry), not here.
+          connection.sendFile(roomId, shared).catch(() => undefined);
+          sharedCount += 1;
+        }
+        if (body.length > 0) {
+          // The question goes last and contiguous: the association
+          // convention is the asker's own file messages immediately
+          // preceding their text, same sender, same room. Same
+          // fire-and-forget (#209): the row carries its own
+          // "Sending…"/failed state from here on. #215: a reply rides
+          // the same call, as a fourth argument only when it applies —
+          // every other shape of this call (no mentions, no reply)
+          // stays exactly as it was.
+          (replyingTo !== null
+            ? connection.send(roomId, body, livePicks, replyingTo.eventId)
+            : livePicks.length > 0
+              ? connection.send(roomId, body, livePicks)
+              : connection.send(roomId, body)
+          ).catch(() => undefined);
+        }
+        // The words are already on their way — the SDK's own local echo
+        // carries them in the room's timeline — so the composer clears
+        // without waiting on the homeserver (#209).
+        editor.current?.clear();
+        setAttachments([]);
+        onCancelReply?.();
+        // #285: a sent message is the clearest possible "stopped typing" — no reason to wait out the throttle or the server's own timeout.
+        stopTyping();
+      } catch (error) {
+        // Only an upload throws here — a refused send lives on its own
+        // row instead (caught above). The rest stay attached and the
+        // words stay typed: a question sent past a failed share would
+        // ride the wrong set of files (#66 AC4).
+        setAttachments(toShare.slice(sharedCount));
+        setError(
+          `The workspace didn't take ${toShare[sharedCount]!.name}. ${error instanceof Error && error.message.length > 0 ? `${error.message} ` : ""}It's still attached and your words are still here. Try again.`,
+        );
+      } finally {
+        setPending(false);
+        setStatus(null);
+      }
+    })();
+  };
+
+  /**
+   * duo#301: a pick from the "/" typeahead (no `argument` — the dropdown
+   * only shows while the line is still bare "/word", before any space), or
+   * Enter on a fully-typed command, `argument` being whatever followed the
+   * command word — both reach this. A known, available command empties the
+   * editor and dispatches (never sent as text, same posture as a mention
+   * token).
+   *
+   * `/later <words>` and `/remind <words>` reuse duo#299's own mechanism
+   * exactly — `saveNoteToLater` (the same write the composer's own "Save to
+   * Later" button makes) and, for `/remind`, the same `SaveToLaterDialog` —
+   * rather than a second, parallel "later" of this PR's own invention.
+   * `/poll` has no mechanism yet (duo#293 is still open) and says so.
+   * Attachments present at all turns this off entirely — a file staged
+   * alongside "/duo" as its caption is sent exactly as typed, not
+   * intercepted.
+   */
+  const runSlashCommand = (command: SlashCommand, argument = ""): void => {
+    editor.current?.clear();
+    setAttachments([]);
+    onCancelReply?.();
+    if (command.id === "duo" || command.id === "summarize") {
+      setCommandNotice(onSlashCommand(command.id));
+      return;
+    }
+    if (command.id === "later") {
+      const note = argument.trim();
+      if (note === "") {
+        setCommandNotice('Type what to save after "/later", like "/later remember to buy milk".');
+        return;
+      }
+      saveNoteToLater(note, null)
+        .then(() => setCommandNotice("Saved to Later."))
+        .catch(() => setCommandNotice("The workspace didn't take that — try again."));
+      return;
+    }
+    if (command.id === "remind") {
+      const note = argument.trim();
+      if (note === "") {
+        setCommandNotice('Type what to remind you about after "/remind", like "/remind follow up with Bose".');
+        return;
+      }
+      // Opens the same dialog the composer's own button does, over these
+      // words — picking when is the one step `/remind` doesn't shortcut.
+      setRemindDraft(note);
+      return;
+    }
+    setCommandNotice(command.unavailableNotice ?? null);
   };
 
   return (
@@ -2120,73 +2323,22 @@ function RoomComposer({
         // doesn't claim.
         const message = editor.current?.read() ?? { body: text, mentions: [] };
         const body = message.body.trim();
-        const toShare = attachments;
-        const livePicks = message.mentions;
-        // #215: captured once, up front — `replyTarget` is `Room`'s state,
-        // and `onCancelReply` below (the same call Cancel makes) asks it to
-        // let go the instant the words are on their way, same as the text
-        // and the attachments do.
-        const replyingTo = replyTarget;
-        setPending(true);
-        setError(null);
-        // The share walks one attachment at a time, in the order staged, so
-        // each upload still starts only once the share ahead of it has left
-        // for the wire — the association convention (core #190) needs that
-        // order, even though none of these sends are awaited for it (#209).
-        void (async () => {
-          let sharedCount = 0;
-          try {
-            for (const staged of toShare) {
-              setStatus(`Uploading ${staged.name}…`);
-              const shared = await connection.uploadFile(staged, (sent, total) => {
-                setStatus(total > 0 ? `Uploading ${staged.name}… ${Math.round((sent / total) * 100)}%` : `Uploading ${staged.name}…`);
-              });
-              setStatus(`Sharing ${staged.name}…`);
-              // #209: handed to the homeserver without waiting on it —
-              // matrix-js-sdk's own local echo puts the share's row in the
-              // timeline the instant this call is made. A refusal shows on
-              // that row (failed, with Retry), not here.
-              connection.sendFile(roomId, shared).catch(() => undefined);
-              sharedCount += 1;
-            }
-            if (body.length > 0) {
-              // The question goes last and contiguous: the association
-              // convention is the asker's own file messages immediately
-              // preceding their text, same sender, same room. Same
-              // fire-and-forget (#209): the row carries its own
-              // "Sending…"/failed state from here on. #215: a reply rides
-              // the same call, as a fourth argument only when it applies —
-              // every other shape of this call (no mentions, no reply)
-              // stays exactly as it was.
-              (replyingTo !== null
-                ? connection.send(roomId, body, livePicks, replyingTo.eventId)
-                : livePicks.length > 0
-                  ? connection.send(roomId, body, livePicks)
-                  : connection.send(roomId, body)
-              ).catch(() => undefined);
-            }
-            // The words are already on their way — the SDK's own local echo
-            // carries them in the room's timeline — so the composer clears
-            // without waiting on the homeserver (#209).
-            editor.current?.clear();
-            setAttachments([]);
-            onCancelReply?.();
-            // #285: a sent message is the clearest possible "stopped typing" — no reason to wait out the throttle or the server's own timeout.
-            stopTyping();
-          } catch (error) {
-            // Only an upload throws here — a refused send lives on its own
-            // row instead (caught above). The rest stay attached and the
-            // words stay typed: a question sent past a failed share would
-            // ride the wrong set of files (#66 AC4).
-            setAttachments(toShare.slice(sharedCount));
-            setError(
-              `The workspace didn't take ${toShare[sharedCount]!.name}. ${error instanceof Error && error.message.length > 0 ? `${error.message} ` : ""}It's still attached and your words are still here. Try again.`,
-            );
-          } finally {
-            setPending(false);
-            setStatus(null);
+        // duo#301: a "/"-shaped body — typed out and Enter pressed, the
+        // same destination a typeahead pick reaches via `runSlashCommand`
+        // directly. Attachments turn this off entirely (see that
+        // function's own doc comment).
+        if (attachments.length === 0) {
+          const parsed = parseSlashCommand(body);
+          if (parsed.kind === "known") {
+            runSlashCommand(parsed.command, parsed.argument);
+            return;
           }
-        })();
+          if (parsed.kind === "unknown") {
+            setPendingUnknownSend(message);
+            return;
+          }
+        }
+        performSend(message);
       }}
     >
       {dragActive && (
@@ -2296,10 +2448,23 @@ function RoomComposer({
           // #217: a pasted screenshot is a clipboard file — the same `stage`
           // door the picker and a drop use; pasted words go into the editor.
           onFiles={stage}
+          onSlashCommandPick={runSlashCommand}
           onSubmit={() => form.current?.requestSubmit()}
           onTextChange={(body) => {
             setText(body);
             setError(null);
+            // duo#301: typing something new past either state empties it —
+            // a stale confirm or notice must never apply to words that
+            // changed underneath it. Gated on non-empty, deliberately: the
+            // very call that shows a notice (`runSlashCommand`) empties the
+            // editor to do it (`editor.current?.clear()`), and that same
+            // clear fires this handler with `body === ""` — resetting on
+            // an empty body here would race that call and erase the notice
+            // it just set, sometimes before this component ever paints it.
+            if (body.trim().length > 0) {
+              setPendingUnknownSend(null);
+              setCommandNotice(null);
+            }
             // #285: off entirely when this member turned sending off
             // (Settings) — seeing everyone else's typing is unaffected,
             // only this device's own announcement stops.
@@ -2357,7 +2522,58 @@ function RoomComposer({
           {error}
         </p>
       )}
-      <SaveToLaterDialog onOpenChange={setSaveLaterOpen} onSave={saveComposerToLater} open={saveLaterOpen} preview={trimmed} />
+      {/* duo#301: "/remind <words>" opens this exact dialog on `remindDraft`
+          (never the composer's own `trimmed`, which is already empty by the
+          time it opens — `runSlashCommand` cleared it) — the one existing
+          mechanism for "pick when", reused rather than a second one. */}
+      <SaveToLaterDialog
+        onOpenChange={(open) => {
+          setSaveLaterOpen(open);
+          if (!open) {
+            setRemindDraft(null);
+          }
+        }}
+        onSave={remindDraft !== null ? (remindAt) => saveNoteToLater(remindDraft, remindAt) : saveComposerToLater}
+        open={saveLaterOpen || remindDraft !== null}
+        preview={remindDraft ?? trimmed}
+      />
+      {/* duo#301 AC3: a "/"-shaped word this product doesn't recognise is
+          never sent on Enter alone — the member says so first. "Edit"
+          leaves the words exactly as typed; "Send anyway" is the ordinary
+          send, just delayed one click. */}
+      {pendingUnknownSend !== null && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 type-provenance text-[var(--muted)]" data-testid="composer-unknown-command-confirm">
+          <span>&quot;{pendingUnknownSend.body.trim()}&quot; isn&apos;t a command — send it as a message?</span>
+          <button
+            className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] px-2"
+            data-testid="composer-unknown-command-send"
+            onClick={() => {
+              const message = pendingUnknownSend;
+              setPendingUnknownSend(null);
+              performSend(message);
+            }}
+            type="button"
+          >
+            Send anyway
+          </button>
+          <button
+            className="min-h-11 rounded-[var(--r-sm)] px-2 underline"
+            data-testid="composer-unknown-command-edit"
+            onClick={() => setPendingUnknownSend(null)}
+            type="button"
+          >
+            Edit
+          </button>
+        </div>
+      )}
+      {/* duo#301: what "/duo"/"/summarize" did, or the fixed word for a
+          command with no mechanism yet ("/later", "/remind", "/poll") —
+          never a silent no-op. */}
+      {commandNotice !== null && (
+        <p className="mt-2 type-provenance text-[var(--muted)]" data-testid="composer-command-notice">
+          {commandNotice}
+        </p>
+      )}
     </form>
   );
 }

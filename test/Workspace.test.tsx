@@ -4023,3 +4023,100 @@ describe("#244 — Enter sends in the thread composer", () => {
     expect(composerText(field)).toBe("");
   });
 });
+
+describe("duo#301 — slash commands in the conversation composer", () => {
+  it("'/duo' opens Your duo — always, with no duo paired and nothing sent", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "/duo");
+    // Not the shared `pressEnter` helper: picking "/duo" navigates away and
+    // unmounts this composer within the same keydown, and `pressEnter`'s own
+    // trailing `flushEditor` would then run against an already-detached
+    // Lexical root.
+    act(() => {
+      fireEvent.keyDown(field, { key: "Enter", code: "Enter", keyCode: 13 });
+    });
+
+    await waitFor(() => expect(window.location.hash).toBe("#duo"));
+    expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+
+  it("'/summarize' with no duo paired says so, rather than silently doing nothing", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "/summarize");
+    pressEnter(field);
+
+    expect(await screen.findByTestId("composer-command-notice")).toHaveTextContent("Your duo isn't paired — there's nothing to summarize with.");
+    expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+
+  it("'/later', '/remind' and '/poll' name real, coming commands — not built yet, said plainly, nothing sent", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "/later");
+    pressEnter(field);
+    expect(await screen.findByTestId("composer-command-notice")).toHaveTextContent("Later isn't built yet — nothing was sent.");
+    expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+
+  it("AC3: a '/'-shaped word this product doesn't recognise is never sent on Enter alone", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "/ship-it");
+    pressEnter(field);
+
+    const confirm = await screen.findByTestId("composer-unknown-command-confirm");
+    expect(confirm).toHaveTextContent('"/ship-it" isn\'t a command — send it as a message?');
+    expect(fake.connection.send).not.toHaveBeenCalled();
+    // The words are still there to edit, or to send exactly as typed.
+    expect(composerText(field)).toBe("/ship-it");
+
+    fireEvent.click(screen.getByTestId("composer-unknown-command-send"));
+    await waitFor(() => expect(fake.connection.send).toHaveBeenCalledWith("!project-x:workspace.example", "/ship-it"));
+    expect(composerText(field)).toBe("");
+  });
+
+  it("'Edit' leaves the words exactly as typed, confirming nothing", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "/ship-it");
+    pressEnter(field);
+    await screen.findByTestId("composer-unknown-command-confirm");
+
+    fireEvent.click(screen.getByTestId("composer-unknown-command-edit"));
+    expect(screen.queryByTestId("composer-unknown-command-confirm")).toBeNull();
+    expect(composerText(field)).toBe("/ship-it");
+    expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+});
