@@ -8,6 +8,11 @@ describe("the chat-first address grammar (#141)", () => {
     expect(routeFromHash("#nonsense", "duo")).toBe("duo");
   });
 
+  it("#324: #share is its own plain address — where the OS's share sheet lands", () => {
+    expect(routeFromHash("#share")).toBe("share");
+    expect(canonicalHash("share")).toBe("#share");
+  });
+
   it("a chat, an event in it, and a thread each have one address, encoded whole", () => {
     expect(routeFromHash("#chat/!r%3Aw.example")).toEqual({ chat: "!r:w.example" });
     expect(routeFromHash("#chat/!r%3Aw.example/%24ev1")).toEqual({ chat: "!r:w.example", at: "$ev1" });

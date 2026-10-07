@@ -28,6 +28,9 @@ export const NAMED_ROUTES = [
   "settings",
   "onboarding",
   "admin",
+  // #324: where the OS's share sheet lands (`public/sw.js` redirects a
+  // caught share here) — the picker that chooses a conversation or Your duo.
+  "share",
 ] as const;
 
 export type NamedRoute = (typeof NAMED_ROUTES)[number];

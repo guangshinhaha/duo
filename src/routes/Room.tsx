@@ -34,6 +34,7 @@ import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.j
 import { duoConversationOf, questionOutcomes, questionOutcomeWords, type QuestionOutcome } from "../workspace/duoConversation.js";
 import { DuoConversationBanner } from "../components/DuoConversationBanner.js";
 import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
+import { takeShareForRoom } from "../shareTarget.js";
 import { messagePermalink, roomHref, threadHref } from "../workspace/links.js";
 import { firstLinkOf } from "../workspace/linkPreview.js";
 import { readUrlPreviewPref } from "../urlPreviewPrefs.js";
@@ -1994,24 +1995,33 @@ function RoomComposer({
   // #264: this member's own opt-in, read fresh on mount — off unless
   // Settings says otherwise (factCheckPrefs.ts).
   const [factCheckEnabled] = useState<boolean>(readFactCheckPref);
+  // #324: what the share picker (`ShareTargetSheet.tsx`) stashed for THIS
+  // room, if anything — read once, on mount, the same "taken exactly once"
+  // convention `takeShareForRoom` itself keeps, so leaving and returning to
+  // this room without sharing anything new finds nothing waiting.
+  const [pendingShare] = useState(() => takeShareForRoom(roomId));
   // The editor's composed body, mirrored for the one thing the form itself
   // needs to know before Send: whether there's anything to send at all.
-  // duo#290: seeded from the room's own draft, not always "" — the editor
-  // below takes the same `initialText` (its own one-read-only prop, #248's
-  // own convention — see `Composer.tsx`'s identical use of it).
-  const [text, setText] = useState(initialDraft);
+  // duo#290/#324: a pending share (just now, on THIS device, from the OS
+  // share sheet) outranks a cross-device draft — it's the more immediate,
+  // more deliberate "I want to send this" — but either seeds the editor
+  // ahead of starting empty. The editor below takes the same resolved
+  // value as its own one-read-only `initialText` prop (#248's convention
+  // — see `Composer.tsx`'s identical use of it).
+  const [text, setText] = useState(() => pendingShare?.text ?? initialDraft);
   // duo#290: `initialDraft` can still be "" on this very first render even
   // for a room that DOES have one — `timeline` (gating the whole page
   // above) and `rooms` (where `draft` actually lives) are two separate
   // queries, so the page can already be past loading while `rooms` hasn't
   // answered yet. A later prop change can never reach `useState`'s initial
   // value, so this effect is the one place a late-arriving draft still
-  // gets in — once, and only while the member hasn't typed anything of
-  // their own in the meantime (`text === ""` is that "untouched" read; a
-  // member who typed something and deleted it all back to "" in that same
-  // narrow window is a case rare enough, and harmless enough, not to guard
-  // any further than this).
-  const seededLateDraft = useRef(initialDraft !== "");
+  // gets in — once, and only while nothing already seeded the editor
+  // (a pending share, or a draft already available at mount) and the
+  // member hasn't typed anything of their own in the meantime (`text ===
+  // ""` is that "untouched" read; a member who typed something and
+  // deleted it all back to "" in that same narrow window is a case rare
+  // enough, and harmless enough, not to guard any further than this).
+  const seededLateDraft = useRef(Boolean(pendingShare?.text) || initialDraft !== "");
   useEffect(() => {
     if (seededLateDraft.current || initialDraft === "" || text !== "") {
       return;
@@ -2121,6 +2131,18 @@ function RoomComposer({
       }
     })();
   };
+
+  // #324 AC3: a shared file goes through the exact same door above —
+  // `stage` validates and reads it exactly as it would a drop or a picked
+  // file, so a refused one says why in the same banner, never a silent
+  // drop. Runs once, only when the share actually carried a file (`stage`
+  // on an empty list is a harmless no-op either way).
+  useEffect(() => {
+    if (pendingShare && pendingShare.files.length > 0) {
+      stage(pendingShare.files);
+    }
+    // Deliberately once, on mount — `pendingShare` itself never changes.
+  }, []);
 
   // duo#299: saves the composer's own unsent text — a direct read-modify-
   // write on the account's own record (`connection.later`/`setLater`),
@@ -2370,11 +2392,13 @@ function RoomComposer({
         <ChatEditor
           ariaLabel={`Message ${roomName}`}
           editorRef={editor}
-          // duo#290: the one read, the one time — same convention
+          // duo#290/#324: the one read, the one time, the same resolved
+          // value `text`'s own initial state takes above (a pending share
+          // ahead of a cross-device draft) — same convention
           // `Composer.tsx`'s `initialQuestion` already takes; `Room`'s own
           // `key={roomId}` on this whole component is what makes this value
           // (and the editor state it seeds) specific to the room on screen.
-          initialText={initialDraft}
+          initialText={pendingShare?.text ?? initialDraft}
           mentionCandidates={mentionCandidates}
           mode="markdown"
           placeholder={`Message ${roomName}`}
