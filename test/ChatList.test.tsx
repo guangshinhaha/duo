@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DuoApiConfig } from "../src/api/client.js";
 import { ChatList } from "../src/shell/ChatList.js";
 import type { Route } from "../src/shell/routes.js";
-import type { RoomSummary, WorkspaceConnection } from "../src/workspace/matrix.js";
+import type { ChatSection, RoomSummary, WorkspaceConnection } from "../src/workspace/matrix.js";
 
 /*
  * The chat list (#141, docs/design-language.md §6.2): people, groups and
@@ -43,6 +43,26 @@ function connectionWith(rooms: RoomSummary[]): WorkspaceConnection {
     },
     searchPeople: async () => [],
     getProfile: async () => null,
+  } as unknown as WorkspaceConnection;
+}
+
+/** #296: `connectionWith` plus a real, in-memory `duo.sidebar.sections` door — close enough to the real account-data round trip for the sidebar's own behaviour, without touching matrix.ts at all. */
+function connectionWithSections(rooms: RoomSummary[], initial: ChatSection[] = []): WorkspaceConnection {
+  let stored = initial;
+  const handlers = new Set<(sections: readonly ChatSection[]) => void>();
+  return {
+    ...connectionWith(rooms),
+    sections: async () => stored,
+    setSections: async (next: readonly ChatSection[]) => {
+      stored = next;
+      for (const handler of handlers) {
+        handler(stored);
+      }
+    },
+    subscribeSections: (handler: (sections: readonly ChatSection[]) => void) => {
+      handlers.add(handler);
+      return () => handlers.delete(handler);
+    },
   } as unknown as WorkspaceConnection;
 }
 
@@ -397,5 +417,98 @@ describe("#298 — Unread, Mentions and Duos narrow the list, each with a count"
     fireEvent.click(screen.getByTestId("all-chip"));
     await waitFor(() => expect(screen.getAllByTestId("room-title").map((t) => t.textContent)).toEqual(["general", "Ana", "Bose", "carol's duo"]));
     expect(localStorage.getItem("duo.chat-filter")).toBe("all");
+  });
+});
+
+describe("#296 — the owner's own sections and folders, with unread counts", () => {
+  it("with no folders yet, the sidebar renders exactly as it always did — no folder header anywhere", async () => {
+    renderList({ connection: connectionWithSections([room("!a:w", { name: "a" })]) });
+    await screen.findByTestId("conversations-room");
+    expect(screen.queryByTestId(/^chat-folder-/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-section-direct-messages")).toBeInTheDocument();
+  });
+
+  it("create, rename, reorder and delete — all from the Folders dialog (AC1)", async () => {
+    renderList({ connection: connectionWithSections([room("!a:w", { name: "a" })]) });
+    fireEvent.click(await screen.findByTestId("chat-list-folders"));
+    const dialog = await screen.findByTestId("folders-dialog");
+
+    fireEvent.change(within(dialog).getByTestId("new-folder-name"), { target: { value: "Ops" } });
+    fireEvent.click(within(dialog).getByTestId("new-folder-add"));
+    await waitFor(() => expect(within(dialog).getAllByTestId("folders-row")).toHaveLength(1));
+
+    fireEvent.change(within(dialog).getByTestId("new-folder-name"), { target: { value: "Later" } });
+    fireEvent.click(within(dialog).getByTestId("new-folder-add"));
+    await waitFor(() => expect(within(dialog).getAllByTestId("folders-row")).toHaveLength(2));
+    let names = within(dialog).getAllByTestId("folder-name-input").map((input) => (input as HTMLInputElement).value);
+    expect(names).toEqual(["Ops", "Later"]);
+
+    // Reorder: "Later" moves ahead of "Ops".
+    fireEvent.click(within(dialog).getAllByTestId("folder-move-up")[1]!);
+    await waitFor(() => {
+      names = within(dialog).getAllByTestId("folder-name-input").map((input) => (input as HTMLInputElement).value);
+      expect(names).toEqual(["Later", "Ops"]);
+    });
+
+    // Rename "Ops" (now second) to "Operations".
+    const opsInput = within(dialog).getAllByTestId("folder-name-input")[1]!;
+    fireEvent.change(opsInput, { target: { value: "Operations" } });
+    fireEvent.blur(opsInput);
+    await waitFor(() => expect(within(dialog).getAllByTestId("folder-name-input")[1]).toHaveValue("Operations"));
+
+    // Delete "Later" (now first).
+    fireEvent.click(within(dialog).getAllByTestId("folder-delete")[0]!);
+    await waitFor(() => expect(within(dialog).getAllByTestId("folders-row")).toHaveLength(1));
+    expect(within(dialog).getByTestId("folder-name-input")).toHaveValue("Operations");
+  });
+
+  it("moving a conversation into a folder takes it off the ordinary shelves and under the folder instead (AC2)", async () => {
+    renderList({ connection: connectionWithSections([room("!a:w", { name: "a" })], [{ id: "ops", name: "Ops", collapsed: false, roomIds: [] }]) });
+    const entry = await screen.findByTestId("conversations-entry");
+    fireEvent.click(within(entry).getByTestId("room-more"));
+    const select = await screen.findByTestId("room-folder");
+    expect(select).toHaveValue("");
+
+    fireEvent.change(select, { target: { value: "ops" } });
+
+    await waitFor(() => expect(screen.getByTestId("chat-folder-ops")).toBeInTheDocument());
+    const folderHeader = screen.getByTestId("chat-folder-ops");
+    expect(folderHeader).toHaveTextContent("Ops");
+    // The room now renders exactly once, after the folder header, not under any ordinary shelf.
+    expect(screen.getAllByTestId("conversations-room")).toHaveLength(1);
+    expect(screen.queryByTestId("chat-section-direct-messages")).not.toBeInTheDocument();
+
+    // "No folder" ungroups it back — the "more" panel is still open from above.
+    fireEvent.change(screen.getByTestId("room-folder"), { target: { value: "" } });
+    await waitFor(() => expect(screen.getByTestId("chat-section-direct-messages")).toBeInTheDocument());
+  });
+
+  it("a folder's own unread count sums its rooms' (AC3), and collapsing hides its rows without losing the count", async () => {
+    renderList({
+      connection: connectionWithSections(
+        [room("!a:w", { name: "a", unread: { notifications: 3, mentions: 0 } }), room("!b:w", { name: "b", unread: { notifications: 2, mentions: 0 } })],
+        [{ id: "ops", name: "Ops", collapsed: false, roomIds: ["!a:w", "!b:w"] }],
+      ),
+    });
+    const folderHeader = await screen.findByTestId("chat-folder-ops");
+    expect(within(folderHeader).getByTestId("chat-folder-ops-unread")).toHaveTextContent("5");
+    expect(screen.getAllByTestId("conversations-room")).toHaveLength(2);
+
+    fireEvent.click(folderHeader);
+    await waitFor(() => expect(screen.queryAllByTestId("conversations-room")).toHaveLength(0));
+    // The count is still there, even though its rows are hidden.
+    expect(within(screen.getByTestId("chat-folder-ops")).getByTestId("chat-folder-ops-unread")).toHaveTextContent("5");
+  });
+
+  it("folders sync across devices: another write to the account's own data is reflected without a reload", async () => {
+    const connection = connectionWithSections([room("!a:w", { name: "a" })]);
+    renderList({ connection });
+    await screen.findByTestId("conversations-room");
+    expect(screen.queryByTestId(/^chat-folder-/)).not.toBeInTheDocument();
+
+    // A second device writes a folder through the very same account-data door.
+    await connection.setSections!([{ id: "remote", name: "From my Mac", collapsed: false, roomIds: [] }]);
+
+    expect(await screen.findByTestId("chat-folder-remote")).toHaveTextContent("From my Mac");
   });
 });

@@ -279,6 +279,25 @@ export interface ChannelSummary {
 }
 
 /**
+ * #296: a folder the owner made in their own sidebar — a project, a team,
+ * whatever grouping matches how they work. Held as this account's own data
+ * (`duo.sidebar.sections`, below), never this device's opinion, so a folder
+ * made on one device, in the order it was left, is the same folder on every
+ * other. A conversation belongs to at most one: moving it into a second one
+ * is read as taking it out of the first (`moveRoomToSection` in
+ * `shell/sections.ts`), the same single-placement rule Slack's own sections
+ * keep.
+ */
+export interface ChatSection {
+  readonly id: string;
+  readonly name: string;
+  /** Hidden to a glance when true — its rows still exist, just not shown. Synced like everything else here: collapsing a folder on one device collapses it everywhere. */
+  readonly collapsed: boolean;
+  /** This folder's own order, the owner's to set (`reorderSection`) — never resorted by activity or name. */
+  readonly roomIds: readonly string[];
+}
+
+/**
  * #219: a link's title, description and image, as the homeserver's own
  * `/preview_url` returned them (Open Graph-ish fields; absent ones read as
  * null, never as an empty string a card would render as blank space). The
@@ -962,6 +981,32 @@ export interface WorkspaceConnection {
    * names, not every room at once. Optional, same reasoning as `sendTyping`.
    */
   subscribeTyping?(roomId: string, handler: (typing: readonly TypingMember[]) => void): () => void;
+  /**
+   * #296: the owner's own sidebar folders, read from this account's data
+   * (`duo.sidebar.sections`) — the same record every signed-in device
+   * reads, so a folder made on one device, in the order it was left,
+   * appears the same way on every other. Empty where the account has
+   * never made one. Optional, same reasoning as `sendTyping`: every
+   * fixture built before #296 lacks it, and a caller without one simply
+   * shows no folders — the plain list it already rendered.
+   */
+  sections?(): Promise<readonly ChatSection[]>;
+  /**
+   * Replaces the whole set in one write. Folders are edited rarely, and as
+   * a whole (made, renamed, reordered, deleted, a conversation moved in or
+   * out) — a single record read-modify-written here is simpler than a
+   * per-field merge and still race-free enough: the last write any device
+   * made wins, the same rule every other account-data write in this seam
+   * already lives by (`writeDirectRoom`'s `m.direct`).
+   */
+  setSections?(sections: readonly ChatSection[]): Promise<void>;
+  /**
+   * Hears this account's folders change — including a write from ANOTHER
+   * device syncing in — so the sidebar never needs to poll to notice one.
+   * Fires with the next read's answer, not a diff. Optional, same
+   * reasoning as `sendTyping`.
+   */
+  subscribeSections?(handler: (sections: readonly ChatSection[]) => void): () => void;
   /** Stops the connection. Idempotent. */
   stop(): Promise<void>;
 }
@@ -1825,6 +1870,40 @@ async function writeDirectRoom(client: MatrixClient, otherUserId: string, roomId
     return;
   }
   await client.setAccountData("m.direct", { ...content, [otherUserId]: [...existing, roomId] });
+}
+
+/** #296: this account's own sidebar folders — the event type under which `sections()`/`setSections()` read and write `duo.sidebar.sections`, the same account-data door `m.direct` already stands behind. */
+const CHAT_SECTIONS_ACCOUNT_DATA_TYPE = "duo.sidebar.sections";
+
+/**
+ * A single folder, read back off the wire as defensively as every other
+ * account-data read in this seam (`notificationModeOf`, `markedUnreadOf`):
+ * a shape from before this field existed, or written by some other client
+ * entirely, reads as "not a folder" rather than crashing the sidebar.
+ */
+function isChatSection(value: unknown): value is ChatSection {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const { id, name, collapsed, roomIds } = value as Record<string, unknown>;
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    typeof name === "string" &&
+    typeof collapsed === "boolean" &&
+    Array.isArray(roomIds) &&
+    roomIds.every((roomId) => typeof roomId === "string")
+  );
+}
+
+/** This account's folders, as `duo.sidebar.sections` currently holds them — never thrown for a reader to catch, the same stance every other account-data read here takes. */
+function readChatSections(client: MatrixClient): readonly ChatSection[] {
+  try {
+    const content = client.getAccountData(CHAT_SECTIONS_ACCOUNT_DATA_TYPE)?.getContent() as { sections?: unknown } | undefined;
+    return Array.isArray(content?.sections) ? content.sections.filter(isChatSection) : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -3259,6 +3338,23 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       snapshot();
       return () => {
         client.off(RoomMemberEvent.Typing, listener);
+      };
+    },
+    sections: async () => readChatSections(client),
+    setSections: async (sections) => {
+      await client.setAccountData(CHAT_SECTIONS_ACCOUNT_DATA_TYPE, { sections });
+    },
+    subscribeSections: (handler) => {
+      const listener = (event: MatrixEvent): void => {
+        if (event.getType() !== CHAT_SECTIONS_ACCOUNT_DATA_TYPE) {
+          return;
+        }
+        const content = event.getContent() as { sections?: unknown } | undefined;
+        handler(Array.isArray(content?.sections) ? content.sections.filter(isChatSection) : []);
+      };
+      client.on(ClientEvent.AccountData, listener);
+      return () => {
+        client.off(ClientEvent.AccountData, listener);
       };
     },
     stop: async () => {
