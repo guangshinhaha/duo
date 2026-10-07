@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, AtSign, ChevronDown, ChevronRight, Ellipsis, FolderPlus, Settings as SettingsIcon, SquarePen, Trash2, UsersRound } from "lucide-react";
+import { ArrowDown, ArrowUp, AtSign, ChevronDown, ChevronRight, Ellipsis, FolderPlus, Pencil, Settings as SettingsIcon, SquarePen, Trash2, UsersRound } from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
 import { usePendingT4, useRecordOutcome } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
@@ -752,6 +752,12 @@ export function ChatList({
       // never below the member's own "Summaries" setting, and null below
       // #281's own unread threshold (see unreadSummary.ts).
       const summary = readCatchUpEnabled() ? oneLineUnreadSummary(room) : null;
+      // duo#290: the member's own typed-but-unsent words for this room
+      // (`RoomSummary.draft`) — shown only below a draft tray preview and
+      // #281's own summary, same priority order as the ordinary last-word
+      // preview this replaces, since both of those already say something
+      // more urgent than "you were in the middle of typing something".
+      const draftPreview = room.draft !== undefined && room.draft.trim() !== "" ? room.draft : null;
       return (
         <Row
           active={activeRoom === room.roomId}
@@ -816,6 +822,17 @@ export function ChatList({
               <span data-testid="room-unread-summary">
                 <span aria-hidden="true">✦ Summary: </span>
                 {summary}
+              </span>
+            ) : draftPreview !== null ? (
+              // duo#290: a pencil, not the word "Draft" — `vocabulary.md`
+              // already spends that noun on the duo's own object (the
+              // hairline preview right above this branch), and this is the
+              // member's own typed-but-unsent words, not anything the duo
+              // wrote. Italic is the one marker Telegram and Granola both
+              // already use for "this isn't what was actually said yet".
+              <span data-testid="room-draft-preview">
+                <Pencil aria-label="Unsent" className="mr-1 inline size-3 align-[-1px] text-[var(--muted)]" />
+                <span className="italic">{plainPreview(draftPreview)}</span>
               </span>
             ) : (
               <>

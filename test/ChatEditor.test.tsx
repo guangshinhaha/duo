@@ -255,6 +255,17 @@ describe("#248 — the handle", () => {
     const { field } = renderEditor({ initialText: "kept\nacross a route switch", mode: "plain" });
     expect(composerText(field)).toBe("kept\nacross a route switch");
   });
+
+  it("duo#290: setText replaces the whole document, lines kept, and reports the new body", () => {
+    const { field, handle, onTextChange } = renderEditor();
+    typeInto(field, "old words");
+    act(() => handle.current!.setText("a draft\nfrom another device"));
+    expect(composerText(field)).toBe("a draft\nfrom another device");
+    expect(onTextChange).toHaveBeenLastCalledWith("a draft\nfrom another device");
+    // Still a live, typeable editor afterward — not left in some half state.
+    typeInto(field, " more");
+    expect(composerText(field)).toBe("a draft\nfrom another device more");
+  });
 });
 
 describe("#263 — the rewrite primitives", () => {

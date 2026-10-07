@@ -93,6 +93,8 @@ export interface ChatEditorHandle {
   read(): ComposedMessage;
   /** Empties the editor (after a send). */
   clear(): void;
+  /** duo#290: replaces the whole document with plain text — a late-arriving draft seeding the editor after it has already mounted, when a prop alone can no longer reach the state `initialText` only ever reads once. One undoable step, the same as `applyRewrite`'s whole-document fallback. */
+  setText(text: string): void;
   focus(): void;
   /** #263: toggles whether the editor accepts input — used to lock it while a rewrite is pending or its before/after panel is open, so the range `applyRewrite` replaces can never go stale underneath it. */
   setEditable(editable: boolean): void;
@@ -303,6 +305,26 @@ function HandlePlugin({ handleRef }: { handleRef?: Ref<ChatEditorHandle> }) {
             root.clear();
             root.append($createParagraphNode());
             root.selectStart();
+          },
+          { discrete: true },
+        );
+      },
+      setText: (text) => {
+        editor.update(
+          () => {
+            const root = $getRoot();
+            root.clear();
+            const paragraph = $createParagraphNode();
+            text.split("\n").forEach((line, index) => {
+              if (index > 0) {
+                paragraph.append($createLineBreakNode());
+              }
+              if (line.length > 0) {
+                paragraph.append($createTextNode(line));
+              }
+            });
+            root.append(paragraph);
+            root.selectEnd();
           },
           { discrete: true },
         );
