@@ -1,12 +1,12 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AtSign, Ellipsis, Settings as SettingsIcon, SquarePen, UsersRound } from "lucide-react";
+import { ArrowDown, ArrowUp, AtSign, ChevronDown, ChevronRight, Ellipsis, FolderPlus, Settings as SettingsIcon, SquarePen, Trash2, UsersRound } from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
 import { usePendingT4, useRecordOutcome } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
 import { CommandSearch } from "../components/CommandSearch.js";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "../components/primitives/Dialog.js";
 import { useHeld } from "../components/primitives/useHeld.js";
 import { TickingCount, useLingering } from "../components/TickingCount.js";
 import { NewConversationDialog } from "../components/NewConversationDialog.js";
@@ -21,9 +21,23 @@ import { HostedWorkspaceStatus } from "../components/HostedWorkspaceStatus.js";
 import { isHostedAccess, useWorkspaceAccess } from "../workspace/access.js";
 import { plainPreview } from "../workspace/duoAnswer.js";
 import { roomHref } from "../workspace/links.js";
-import type { NotificationMode, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
+import type { ChatSection, NotificationMode, RoomSummary, WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.js";
 import type { Route } from "./routes.js";
 import { latestMessageDuoLabel, roomTitle, soleDuoLabel } from "./roomTitle.js";
+import {
+  createSection,
+  deleteSection,
+  loadSections,
+  moveRoomToSection,
+  moveSection,
+  renameSection,
+  roomIdsInSections,
+  saveSections,
+  sectionIdForRoom,
+  sectionUnreadCount,
+  setSectionCollapsed,
+  watchSections,
+} from "./sections.js";
 import { bridgedHref, bridgedTitle, useBridgedChats, type BridgedChat } from "./bridged.js";
 import { SourceBadge } from "./BridgedChat.js";
 import { useWaitingItems, waitingWords, swipeActionsOf, type WaitingItem } from "./waiting.js";
@@ -220,6 +234,30 @@ function SectionHeader({ label, testId }: { label: string; testId: string }) {
 }
 
 /**
+ * #296: one of the owner's own folders, above its rows — a name, an unread
+ * count (AC3, hidden at zero: the same "nothing to add" rule every other
+ * badge in this list follows), and a chevron that shows or hides its rows.
+ * Unlike `SectionHeader` above, this one is never hidden for being empty —
+ * an empty folder is still a folder the owner made, and hiding it would
+ * look like it had quietly been lost.
+ */
+function FolderHeader({ collapsed, name, onToggle, testId, unread }: { collapsed: boolean; name: string; onToggle: () => void; testId: string; unread: number }) {
+  return (
+    <button
+      aria-expanded={!collapsed}
+      className="flex min-h-9 w-full items-center gap-1 rounded-[var(--r-sm)] px-2 pt-3 pb-1 text-left type-provenance uppercase tracking-wide text-[var(--faint)]"
+      data-testid={testId}
+      onClick={onToggle}
+      type="button"
+    >
+      {collapsed ? <ChevronRight aria-hidden="true" size={12} /> : <ChevronDown aria-hidden="true" size={12} />}
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      {unread > 0 && <CountPill label={`${unread} unread`} n={unread} testId={`${testId}-unread`} />}
+    </button>
+  );
+}
+
+/**
  * The list a person lives in (docs/design-language.md §6.2): people, groups
  * and colleagues' duos, one list, with the owner's own duo pinned first —
  * even with no workspace, so there is always something to talk to. The
@@ -281,6 +319,9 @@ export function ChatList({
     setSectionFilterState(filter);
     writeChatSectionFilter(filter);
   };
+  // #296: the owner's own sidebar folders — managed from their own dialog, not the "more" panel of any one row.
+  const [foldersOpen, setFoldersOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
 
   // Live arrivals refresh the list the same way every other reader does:
   // invalidation, never a second copy of the data.
@@ -299,6 +340,35 @@ export function ChatList({
     enabled: connection !== null,
     meta: { target: "workspace" },
   });
+
+  // #296: the owner's own folders — this account's own data, read once and
+  // then kept current by `watchSections`, the same "subscribe, never poll"
+  // shape `connection.subscribe` above already uses for everything else
+  // this account holds.
+  const sectionsQuery = useQuery({
+    queryKey: ["workspace", "sections"],
+    queryFn: () => loadSections(connection),
+    enabled: connection !== null,
+    meta: { target: "workspace" },
+  });
+  useEffect(() => {
+    return watchSections(connection, (next) => {
+      queryClient.setQueryData(["workspace", "sections"], next);
+    });
+  }, [connection, queryClient]);
+  const chatSections = sectionsQuery.data ?? [];
+  // Applied on screen the instant the owner acts, and written back for real
+  // right after — the same optimistic-then-persist shape every other
+  // account-data write in this list already takes (`setMode`, `markRead`).
+  // A write that doesn't take is re-read from the account rather than left
+  // showing a folder structure the account never actually agreed to.
+  const updateSections = (next: readonly ChatSection[]): void => {
+    queryClient.setQueryData(["workspace", "sections"], next);
+    saveSections(connection, next).catch(() => {
+      setActionError("The workspace didn't take that — try again.");
+      void queryClient.invalidateQueries({ queryKey: ["workspace", "sections"] });
+    });
+  };
 
   const refresh = (): void => {
     void queryClient.invalidateQueries({ queryKey: ["workspace", "rooms"] });
@@ -379,6 +449,7 @@ export function ChatList({
   const bridged = useBridgedChats(api).chats;
   const bridgedWaiting = useMemo(() => new Map(waiting.items.filter((item) => item.kind === "bridged").map((item) => [item.key, item])), [waiting.items]);
   const roomRows = rooms.data ?? [];
+  const roomsById = useMemo(() => new Map(roomRows.map((room) => [room.roomId, room])), [roomRows]);
   // #298: each chip's own count — how many rooms it would narrow the list
   // to — read off the full list, never the currently filtered one, the same
   // way the Waiting and Confirmations chips' own counts hold steady while
@@ -390,13 +461,44 @@ export function ChatList({
     () => (sectionFilter === "all" ? roomRows : roomRows.filter((room) => matchesSectionFilter(sectionFilter, room))),
     [roomRows, sectionFilter],
   );
+  // #296: a conversation claimed by one of the owner's own folders leaves
+  // the sidebar's ordinary shelves below — it still renders, just once,
+  // under its folder instead. Filtered the same way the shelves are (#298):
+  // an active chip narrows a folder's own rows exactly as it narrows the
+  // shelves, so the two combine rather than one overriding the other.
+  const foldedRoomIds = useMemo(() => roomIdsInSections(chatSections), [chatSections]);
+  const shelvedRoomRows = useMemo(() => filteredRoomRows.filter((room) => !foldedRoomIds.has(room.roomId)), [filteredRoomRows, foldedRoomIds]);
   // #208: grouped the way the list itself renders — Channels, then Direct
   // messages, then Duos — so ⌘1–9 and J/K (below) walk the rows in the same
   // order the eye does, never the server's flat recency order. #298: the
   // active chip narrows this same list before it's grouped, so a filter
   // combines with the sections rather than replacing them.
-  const sections = useMemo(() => sectionsOf(filteredRoomRows), [filteredRoomRows]);
-  const sectionedRoomRows = useMemo(() => [...sections.channels, ...sections.directs, ...sections.duos], [sections]);
+  const sections = useMemo(() => sectionsOf(shelvedRoomRows), [shelvedRoomRows]);
+  // #296: each folder's own rows, narrowed by the active filter chip the
+  // same way the shelves above are — a folder with nothing left to show
+  // under the current chip renders no rows (the render below hides its
+  // header too in that case), never a row the chip would otherwise hide.
+  const visibleFolderRooms = useMemo(
+    () =>
+      chatSections.map((section) => ({
+        section,
+        rooms: section.roomIds
+          .map((roomId) => roomsById.get(roomId))
+          .filter((room): room is RoomSummary => room !== undefined && (sectionFilter === "all" || matchesSectionFilter(sectionFilter, room))),
+      })),
+    [chatSections, roomsById, sectionFilter],
+  );
+  // A folder's own rows, in the owner's own order, skipped while collapsed —
+  // walked by J/K and ⌘1–9 ahead of the ordinary shelves below, the same
+  // order they render in.
+  const folderRoomRows = useMemo(
+    () => visibleFolderRooms.filter(({ section }) => !section.collapsed).flatMap(({ rooms }) => rooms),
+    [visibleFolderRooms],
+  );
+  const sectionedRoomRows = useMemo(
+    () => [...folderRoomRows, ...sections.channels, ...sections.directs, ...sections.duos],
+    [folderRoomRows, sections],
+  );
   const activeRoom = typeof route === "object" && "chat" in route ? route.chat : typeof route === "object" && "thread" in route ? route.thread.roomId : null;
 
   // The addresses in list order — what J/K and ⌘1–9 walk.
@@ -443,7 +545,6 @@ export function ChatList({
 
   const duoActive = route === "duo" || (typeof route === "object" && "profile" in route);
 
-  const roomsById = new Map(roomRows.map((room) => [room.roomId, room]));
   const activeDraft = typeof route === "object" && "draft" in route ? route.draft : null;
   const renderWaiting = (): ReactNode => {
     // Beside an open pane, its headline says "Nothing waiting on you."; the list only says it when it is the whole page.
@@ -722,6 +823,23 @@ export function ChatList({
                 <option value="mentions">Mentions</option>
                 <option value="nothing">Nothing</option>
               </select>
+              {/* #296: which of the owner's own folders this conversation lives in — "No folder" puts it back on the ordinary shelves above. Shown only once the owner has made at least one; there is nothing to choose among otherwise. */}
+              {chatSections.length > 0 && (
+                <select
+                  aria-label={`Folder for ${title}`}
+                  className="min-h-11 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 type-provenance text-[var(--muted)]"
+                  data-testid="room-folder"
+                  onChange={(e) => updateSections(moveRoomToSection(chatSections, room.roomId, e.target.value === "" ? null : e.target.value))}
+                  value={sectionIdForRoom(chatSections, room.roomId) ?? ""}
+                >
+                  <option value="">No folder</option>
+                  {chatSections.map((section) => (
+                    <option key={section.id} value={section.id}>
+                      {section.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               {/* #220: read/unread from the list — the account's own flag either way, so it's never just this device's opinion. */}
               <button
                 aria-label={`Mark ${title} as read`}
@@ -795,6 +913,23 @@ export function ChatList({
           </p>
         ) : (
           <div className="mt-2 flex flex-col gap-1" data-testid="conversations-list">
+            {/* #296: the owner's own folders, in their own order, each above the rows it claims — ahead of the sidebar's ordinary shelves, which only ever show what no folder has taken. */}
+            {chatSections.map((section) => (
+              <Fragment key={section.id}>
+                <FolderHeader
+                  collapsed={section.collapsed}
+                  name={section.name}
+                  onToggle={() => updateSections(setSectionCollapsed(chatSections, section.id, !section.collapsed))}
+                  testId={`chat-folder-${section.id}`}
+                  unread={sectionUnreadCount(section, roomsById)}
+                />
+                {!section.collapsed &&
+                  section.roomIds
+                    .map((roomId) => roomsById.get(roomId))
+                    .filter((room): room is RoomSummary => room !== undefined)
+                    .map(renderRoomRow)}
+              </Fragment>
+            ))}
             {sections.channels.length > 0 && (
               <>
                 <SectionHeader label="Channels" testId="chat-section-channels" />
@@ -844,6 +979,17 @@ export function ChatList({
               type="button"
             >
               <UsersRound aria-label="New group or channel" size={18} />
+            </button>
+          )}
+          {connection && (
+            <button
+              aria-label="Folders"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--muted)]"
+              data-testid="chat-list-folders"
+              onClick={() => setFoldersOpen(true)}
+              type="button"
+            >
+              <FolderPlus aria-label="Folders" size={18} />
             </button>
           )}
           {connection && (
@@ -995,6 +1141,97 @@ export function ChatList({
             </div>
           </DialogContent>
         )}
+      </Dialog>
+      {/* #296: create, rename, reorder and delete the owner's own folders — moving a conversation into one happens at the conversation's own row (`room-folder` above), not here. */}
+      <Dialog onOpenChange={setFoldersOpen} open={foldersOpen}>
+        <DialogContent data-testid="folders-dialog">
+          <DialogTitle>Folders</DialogTitle>
+          <DialogDescription>Group your conversations your own way — the same folders, in the same order, on every device you sign in to.</DialogDescription>
+          <div className="flex flex-col gap-2" data-testid="folders-list">
+            {chatSections.length === 0 && <p className="type-body text-[var(--muted)]">No folders yet.</p>}
+            {chatSections.map((section, i) => (
+              <div className="flex items-center gap-1" data-testid="folders-row" key={section.id}>
+                <input
+                  aria-label={`Rename ${section.name}`}
+                  className="min-h-11 min-w-0 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 type-body"
+                  data-testid="folder-name-input"
+                  defaultValue={section.name}
+                  key={`${section.id}:${section.name}`}
+                  onBlur={(e) => updateSections(renameSection(chatSections, section.id, e.target.value))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  type="text"
+                />
+                <button
+                  aria-label={`Move ${section.name} up`}
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-sm)] text-[var(--muted)] disabled:opacity-40"
+                  data-testid="folder-move-up"
+                  disabled={i === 0}
+                  onClick={() => updateSections(moveSection(chatSections, section.id, "up"))}
+                  type="button"
+                >
+                  <ArrowUp aria-hidden="true" size={16} />
+                </button>
+                <button
+                  aria-label={`Move ${section.name} down`}
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-sm)] text-[var(--muted)] disabled:opacity-40"
+                  data-testid="folder-move-down"
+                  disabled={i === chatSections.length - 1}
+                  onClick={() => updateSections(moveSection(chatSections, section.id, "down"))}
+                  type="button"
+                >
+                  <ArrowDown aria-hidden="true" size={16} />
+                </button>
+                <button
+                  aria-label={`Delete ${section.name}`}
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-sm)] text-[var(--muted)]"
+                  data-testid="folder-delete"
+                  onClick={() => updateSections(deleteSection(chatSections, section.id))}
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              updateSections(createSection(chatSections, newFolderName));
+              setNewFolderName("");
+            }}
+          >
+            <input
+              aria-label="New folder name"
+              className="min-h-11 min-w-0 flex-1 rounded-[var(--r-sm)] border border-[var(--edge)] bg-[var(--surface)] px-2 type-body"
+              data-testid="new-folder-name"
+              onChange={(e) => setNewFolderName(e.target.value)}
+              placeholder="New folder"
+              type="text"
+              value={newFolderName}
+            />
+            <button
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 type-body text-[var(--bg)] disabled:opacity-40"
+              data-testid="new-folder-add"
+              disabled={newFolderName.trim() === ""}
+              type="submit"
+            >
+              Add
+            </button>
+          </form>
+          <div className="flex justify-end">
+            <DialogClose
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body"
+              data-testid="folders-done"
+            >
+              Done
+            </DialogClose>
+          </div>
+        </DialogContent>
       </Dialog>
     </div>
   );
