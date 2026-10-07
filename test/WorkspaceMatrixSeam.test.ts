@@ -43,6 +43,11 @@ vi.mock("matrix-js-sdk", () => ({
   NotificationCountType: { Highlight: "highlight", Total: "total" },
   Preset: { PrivateChat: "private_chat", TrustedPrivateChat: "trusted_private_chat", PublicChat: "public_chat" },
   PushRuleKind: { Override: "override", ContentSpecific: "content", RoomSpecific: "room", SenderSpecific: "sender", Underride: "underride" },
+  // #310: keyword alerts' content rules carry `notify` — the one action name
+  // this seam ever writes (never `dont_notify`/`coalesce`, which stay real
+  // SDK values the mock never needs to answer).
+  PushRuleActionName: { DontNotify: "dont_notify", Notify: "notify", Coalesce: "coalesce" },
+  TweakName: { Highlight: "highlight", Sound: "sound" },
   EventType: {
     RoomMessage: "m.room.message",
     Reaction: "m.reaction",
@@ -1510,6 +1515,51 @@ describe("the rooms projection the conversation list reads (#63)", () => {
       { userId: "@carol:workspace.example", name: "Carol" },
       { userId: "@duo-carol:workspace.example", name: "duo-carol" }, // display name absent: the localpart, never a blank
     ]);
+  });
+
+  it("#310: keyword alerts are this account's own content push rules, under an opaque namespace and server-side (so every device agrees)", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.addKeywordAlert!("Launch");
+    expect(client.addPushRule).toHaveBeenCalledWith("global", "content", "duo.keyword.launch", {
+      pattern: "Launch",
+      actions: ["notify", { set_tweak: "highlight", value: true }],
+    });
+
+    // Reading back: the homeserver's own content rules, filtered to this
+    // app's namespace — a default or another client's own content rule
+    // (no `duo.keyword.` prefix) never leaks into this list.
+    client.getPushRules.mockResolvedValueOnce({
+      global: {
+        content: [
+          { rule_id: "duo.keyword.launch", pattern: "Launch", enabled: true, default: false, actions: [] },
+          { rule_id: ".m.rule.contains_user_name", pattern: "bose", enabled: true, default: true, actions: [] },
+          { rule_id: "duo.keyword.budget", pattern: "budget", enabled: true, default: false, actions: [] },
+        ],
+      },
+    });
+    await expect(connection.keywordAlerts!()).resolves.toEqual(["budget", "Launch"]);
+
+    await connection.removeKeywordAlert!("Launch");
+    expect(client.deletePushRule).toHaveBeenCalledWith("global", "content", "duo.keyword.launch");
+
+    // Trimmed to nothing is a no-op, never a request to the homeserver.
+    client.addPushRule.mockClear();
+    client.deletePushRule.mockClear();
+    await connection.addKeywordAlert!("   ");
+    await connection.removeKeywordAlert!("   ");
+    expect(client.addPushRule).not.toHaveBeenCalled();
+    expect(client.deletePushRule).not.toHaveBeenCalled();
+  });
+
+  it("#310: a failed read of keyword alerts answers 'none known', never a rejection", async () => {
+    const client = fakeClient();
+    client.getPushRules.mockRejectedValueOnce(new Error("offline"));
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    await expect(connection.keywordAlerts!()).resolves.toEqual([]);
   });
 
   it("a member whose display name equals their own user id falls back to the localpart, never the raw id (#208)", async () => {

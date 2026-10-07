@@ -21,15 +21,23 @@ describe("#309 — notification categories, each with its own immediate/batched/
       passedOn: "immediate",
       mentions: "immediate",
       directMessages: "immediate",
+      keywordAlerts: "immediate",
     });
     expect(readNotificationCategorySetting("mentions")).toBe("immediate");
   });
 
   it("round-trips a member's choice through this device's storage", () => {
-    const next: NotificationCategoryPrefs = { draftsReady: "batched", passedOn: "off", mentions: "immediate", directMessages: "batched" };
+    const next: NotificationCategoryPrefs = {
+      draftsReady: "batched",
+      passedOn: "off",
+      mentions: "immediate",
+      directMessages: "batched",
+      keywordAlerts: "off",
+    };
     writeNotificationCategoryPrefs(next);
     expect(readNotificationCategoryPrefs()).toEqual(next);
     expect(readNotificationCategorySetting("passedOn")).toBe("off");
+    expect(readNotificationCategorySetting("keywordAlerts")).toBe("off");
   });
 
   it("corrupt storage reads as every category's default, never as a crash", () => {
@@ -39,6 +47,7 @@ describe("#309 — notification categories, each with its own immediate/batched/
       passedOn: "immediate",
       mentions: "immediate",
       directMessages: "immediate",
+      keywordAlerts: "immediate",
     });
   });
 
@@ -49,6 +58,18 @@ describe("#309 — notification categories, each with its own immediate/batched/
       passedOn: "immediate",
       mentions: "off",
       directMessages: "immediate",
+      keywordAlerts: "immediate",
+    });
+  });
+
+  it("#310: a partial record naming only keywordAlerts keeps every other category at its default", () => {
+    localStorage.setItem(NOTIFICATION_CATEGORY_STORAGE_KEY, JSON.stringify({ keywordAlerts: "batched" }));
+    expect(readNotificationCategoryPrefs()).toEqual({
+      draftsReady: "immediate",
+      passedOn: "immediate",
+      mentions: "immediate",
+      directMessages: "immediate",
+      keywordAlerts: "batched",
     });
   });
 });

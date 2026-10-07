@@ -11,6 +11,7 @@ import {
   NotificationCountType,
   PendingEventOrdering,
   Preset,
+  PushRuleActionName,
   PushRuleKind,
   ReceiptType,
   RelationType,
@@ -20,6 +21,7 @@ import {
   TweakName,
   type INotification,
   type INotificationsResponse,
+  type PushRuleAction,
   type MatrixClient,
   type MatrixEvent,
   type Room as MatrixRoom,
@@ -914,6 +916,29 @@ export interface WorkspaceConnection {
    * to write again.
    */
   setNotificationMode(roomId: string, mode: NotificationMode): Promise<void>;
+  /**
+   * #310: every keyword the member has asked to always hear about, read
+   * from this account's own Matrix content push rules (`duo.keyword.*`,
+   * `PushRuleKind.ContentSpecific`) — server-side state, so the list (and
+   * what it alerts on) is the same on every device the account signs into,
+   * the same "server push rules" story `setNotificationMode` above already
+   * tells for a room's mode. Sorted for a stable list; never invented
+   * client-side. Optional: absent on a minimal test stub that never
+   * exercises keyword alerts (same stance `renewToken` above takes).
+   */
+  keywordAlerts?(): Promise<readonly string[]>;
+  /**
+   * Adds one keyword alert (#310): a content push rule this account's
+   * every device will notify on — a plain draft's rule carries `notify`
+   * and a highlight tweak, the same actions shape the spec's own
+   * `.m.rule.contains_user_name` default uses for "this names me,
+   * surface it". Idempotent under the same trimmed, case-folded keyword
+   * (rule ids collapse case, `pattern` keeps what the member typed for
+   * display). Trimming to nothing is a no-op, never a request.
+   */
+  addKeywordAlert?(keyword: string): Promise<void>;
+  /** Removes one keyword alert (#310). Idempotent: a keyword already gone costs nothing to remove again. */
+  removeKeywordAlert?(keyword: string): Promise<void>;
   /**
    * Searches the workspace's people directory (#207: the one search box's
    * People section, and the pencil dialog before it): three sources merged
@@ -2300,6 +2325,33 @@ async function mutedRoomIdsOf(client: MatrixClient, cachedOnly = false): Promise
 }
 
 /**
+ * #310: keyword alerts live as `content` push rules under this account's
+ * own opaque namespace, never the bare keyword — a plain `rule_id` with no
+ * prefix risks colliding with a rule some other client (or a future
+ * default) already owns. Case-folded so "Launch" and "launch" are one
+ * alert; `pattern` keeps what the member actually typed, for the list
+ * Settings shows.
+ */
+const KEYWORD_RULE_PREFIX = "duo.keyword.";
+
+function keywordRuleId(keyword: string): string {
+  return `${KEYWORD_RULE_PREFIX}${keyword.trim().toLowerCase()}`;
+}
+
+/**
+ * The actions a keyword alert's content rule carries: `notify` plus a
+ * highlight tweak — the same shape the spec's own `.m.rule.contains_user_name`
+ * default uses for "this is about you, surface it everywhere", so any
+ * Matrix client (not just this one) honors it on every device (#310 AC3).
+ * A function, not a module-level constant: evaluated only when a keyword
+ * is actually added, so a test's stand-in for matrix-js-sdk needs
+ * `PushRuleActionName`/`TweakName` only where this is exercised.
+ */
+function keywordAlertActions(): PushRuleAction[] {
+  return [PushRuleActionName.Notify, { set_tweak: TweakName.Highlight, value: true }];
+}
+
+/**
  * #288: a client over matrix-js-sdk's own `IndexedDBStore` — the room list,
  * room state, membership and the recent timeline of every joined room,
  * persisted per account (`workspaceCacheName`) so the next cold open reads it
@@ -3161,6 +3213,33 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       // error worth surfacing for a setting that changed nothing.
       await client.deletePushRule("global", PushRuleKind.RoomSpecific, roomId).catch(() => undefined);
       await client.setRoomAccountData(roomId, "duo.notifications", { mode });
+    },
+    keywordAlerts: async () => {
+      const pushRules = await client.getPushRules().catch(() => undefined);
+      return (pushRules?.global.content ?? [])
+        .filter((rule) => rule.rule_id.startsWith(KEYWORD_RULE_PREFIX) && typeof rule.pattern === "string" && rule.pattern !== "")
+        .map((rule) => rule.pattern!)
+        .sort((a, b) => a.localeCompare(b));
+    },
+    addKeywordAlert: async (keyword) => {
+      const trimmed = keyword.trim();
+      if (trimmed === "") {
+        return; // nothing typed — not a request
+      }
+      await client.addPushRule("global", PushRuleKind.ContentSpecific, keywordRuleId(trimmed), {
+        pattern: trimmed,
+        actions: keywordAlertActions(),
+      });
+    },
+    removeKeywordAlert: async (keyword) => {
+      const trimmed = keyword.trim();
+      if (trimmed === "") {
+        return;
+      }
+      // Idempotent, same stance `setNotificationMode` already takes on its
+      // own delete: a keyword another device already removed costs
+      // nothing to remove again.
+      await client.deletePushRule("global", PushRuleKind.ContentSpecific, keywordRuleId(trimmed)).catch(() => undefined);
     },
     searchPeople: async (query) => {
       const term = query.trim();

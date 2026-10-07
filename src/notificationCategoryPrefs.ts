@@ -15,6 +15,13 @@
  * - **mentions**: a live arrival that names the member (`LiveArrival.mentionsMe`).
  * - **directMessages**: a live arrival in a direct conversation (`RoomSummary.kind === "direct"`)
  *   that isn't already a mention (mentions take the more specific category).
+ * - **keywordAlerts** (#310): a live arrival matching one of the member's own
+ *   keyword alerts (`App.tsx`'s `dispatchArrival`, `keywordAlertMatch.ts`) —
+ *   the one category that also bypasses a room's own mute or mentions-only
+ *   mode, because that is the whole point of a standing keyword alert
+ *   ("I catch topics I own" regardless of what else is quiet). This
+ *   setting still governs immediate/batched/off exactly like the other
+ *   four; only the per-room mode is what it overrides.
  *
  * Each category is **immediate** (today's behaviour, and the default — a
  * new setting must never silently change what already ships), **batched**
@@ -23,7 +30,7 @@
  * `notifyCategory` is what reads it and decides what a firing site does.
  */
 
-export type NotificationCategory = "draftsReady" | "passedOn" | "mentions" | "directMessages";
+export type NotificationCategory = "draftsReady" | "passedOn" | "mentions" | "directMessages" | "keywordAlerts";
 
 export type CategorySetting = "immediate" | "batched" | "off";
 
@@ -37,6 +44,7 @@ export const NOTIFICATION_CATEGORIES: readonly { readonly id: NotificationCatego
   { id: "mentions", label: "Mentions" },
   { id: "passedOn", label: "Passed-on questions" },
   { id: "directMessages", label: "Direct messages" },
+  { id: "keywordAlerts", label: "Keyword alerts" },
 ];
 
 /** Immediate everywhere — a new setting must never change what already ships until the member turns something off or batches it. */
@@ -45,6 +53,7 @@ const DEFAULT_PREFS: NotificationCategoryPrefs = {
   passedOn: "immediate",
   mentions: "immediate",
   directMessages: "immediate",
+  keywordAlerts: "immediate",
 };
 
 function isCategorySetting(value: unknown): value is CategorySetting {
@@ -64,6 +73,7 @@ export function readNotificationCategoryPrefs(): NotificationCategoryPrefs {
       passedOn: isCategorySetting(parsed.passedOn) ? parsed.passedOn : DEFAULT_PREFS.passedOn,
       mentions: isCategorySetting(parsed.mentions) ? parsed.mentions : DEFAULT_PREFS.mentions,
       directMessages: isCategorySetting(parsed.directMessages) ? parsed.directMessages : DEFAULT_PREFS.directMessages,
+      keywordAlerts: isCategorySetting(parsed.keywordAlerts) ? parsed.keywordAlerts : DEFAULT_PREFS.keywordAlerts,
     };
   } catch {
     return DEFAULT_PREFS;

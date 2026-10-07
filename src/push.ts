@@ -1,6 +1,7 @@
 import { apiRequest, type DuoApiConfig } from "./api/client.js";
 import { readDndPrefs, type DndPrefs } from "./notificationPrefs.js";
 import { getPlatform } from "./platform/index.js";
+import { mirrorCredentialForServiceWorker } from "./credentialMirror.js";
 
 /**
  * #308: web push — the delivery path that works while the app is fully
@@ -176,6 +177,14 @@ export async function subscribeToPush(api: DuoApiConfig): Promise<void> {
       quietHours: toServerQuietHours(readDndPrefs()),
     }),
   });
+
+  // #311: mirrors this device's own credential for `public/sw.js` — only
+  // now, because there is nothing for the service worker to act on from a
+  // draft notification this device was never going to receive in the
+  // first place. Best-effort (see credentialMirror.ts's own doc comment):
+  // a failed mirror costs the service worker its notification actions,
+  // never this subscription, which is already registered above.
+  await mirrorCredentialForServiceWorker(api);
 }
 
 /**
@@ -211,5 +220,11 @@ export async function unsubscribeFromPush(api: DuoApiConfig | null): Promise<voi
   } catch {
     // Never let a failed unsubscribe interrupt the sign-out or settings
     // toggle that triggered it.
+  } finally {
+    // #311: cleared unconditionally, in `finally` — a device that is
+    // unsubscribing (or was never subscribed) should never be left
+    // holding a mirrored credential the service worker could still act
+    // on. Best-effort, same as the mirror's own write.
+    await mirrorCredentialForServiceWorker(null);
   }
 }
