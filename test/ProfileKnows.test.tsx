@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Knows } from "../src/profile/Knows.js";
-import type { DuoKnowledge, ExcludedEvidence, TopicCoverageReport } from "../src/api/types.js";
+import type { DuoKnowledge, ExcludedEvidence, KnowledgeRecord, TopicCoverageReport } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import { readComposerBuffer, writeComposerBuffer } from "../src/composerBuffer.js";
 
@@ -92,6 +92,9 @@ function stubKnowledge(knowledge: DuoKnowledge, excluded: ExcludedEvidence[] = [
       }
       if (path === "/knowledge/coverage") {
         return new Response(JSON.stringify(coverage), { status: 200 });
+      }
+      if (path.startsWith("/knowledge/records")) {
+        return new Response(JSON.stringify({ records: [], nextCursor: null }), { status: 200 });
       }
       return new Response(JSON.stringify(knowledge), { status: 200 });
     }),
@@ -253,6 +256,9 @@ describe("Knows tab — removed from citation (duo#272)", () => {
         if (path === "/knowledge/evidence/excluded") {
           return new Response(JSON.stringify({ excluded }), { status: 200 });
         }
+        if (path.startsWith("/knowledge/records")) {
+          return new Response(JSON.stringify({ records: [], nextCursor: null }), { status: 200 });
+        }
         return new Response(JSON.stringify(knowledgeFor()), { status: 200 });
       }),
     );
@@ -280,6 +286,9 @@ describe("Knows tab — removed from citation (duo#272)", () => {
           return new Response(JSON.stringify({ excluded: [{ recordId: "e1", excludedAt: "2026-09-20T00:00:00.000Z", label: "past exchange: refund policy" }] }), {
             status: 200,
           });
+        }
+        if (path.startsWith("/knowledge/records")) {
+          return new Response(JSON.stringify({ records: [], nextCursor: null }), { status: 200 });
         }
         return new Response(JSON.stringify(knowledgeFor()), { status: 200 });
       }),
@@ -378,5 +387,157 @@ describe("Knows tab — coverage and gaps to teach (duo#277)", () => {
     renderWithClient(<Knows api={api} />);
     await waitFor(() => expect(screen.getByTestId("coverage-empty")).toBeInTheDocument());
     expect(screen.queryByTestId("coverage-gap")).toBeNull();
+  });
+});
+
+/*
+ * digital-duo#286 (duo#273): "a plain list of facts … editable and
+ * deletable" — the record browser under "Browse what it has read".
+ * `GET /knowledge/records` lists individual records (not just counts);
+ * `PUT /knowledge/records/:id` edits one in place; removing one reuses
+ * duo#272's exact `POST /knowledge/evidence/:recordId/exclude` — these
+ * tests pin that reuse, not a second delete path.
+ */
+describe("Knows tab — browse, edit and remove individual records (digital-duo#286)", () => {
+  function recordFixture(over: Partial<KnowledgeRecord> = {}): KnowledgeRecord {
+    return {
+      id: "rec-1",
+      source: "claude-export",
+      sourceRef: null,
+      kind: "my_answer",
+      author: "me",
+      text: "five days per quarter",
+      timestamp: "2026-09-10T00:00:00.000Z",
+      threadId: null,
+      audience: "channel",
+      classification: "unknown",
+      topics: [],
+      editedAt: null,
+      excluded: false,
+      excludedAt: null,
+      ...over,
+    };
+  }
+
+  function stubBrowse(records: unknown[], extra?: (path: string, init?: RequestInit) => Response | undefined) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const path = String(url).replace("http://test", "");
+        const handled = extra?.(path, init);
+        if (handled) {
+          return handled;
+        }
+        if (path === "/channels") {
+          return new Response("[]", { status: 200 });
+        }
+        if (path === "/knowledge/evidence/excluded") {
+          return new Response(JSON.stringify({ excluded: [] }), { status: 200 });
+        }
+        if (path === "/knowledge/coverage") {
+          return new Response(JSON.stringify(coverageFor()), { status: 200 });
+        }
+        if (path.startsWith("/knowledge/records")) {
+          return new Response(JSON.stringify({ records, nextCursor: null }), { status: 200 });
+        }
+        return new Response(JSON.stringify(knowledgeFor()), { status: 200 });
+      }),
+    );
+  }
+
+  it("lists each record's own text, source and timestamp", async () => {
+    stubBrowse([recordFixture({ id: "rec-1", text: "five days per quarter" })]);
+    renderWithClient(<Knows api={api} />);
+    const card = await waitFor(() => screen.getByTestId("knowledge-record-card"));
+    expect(card).toHaveTextContent("five days per quarter");
+    expect(card).toHaveTextContent("claude-export");
+  });
+
+  it("says plainly when nothing has been imported yet", async () => {
+    stubBrowse([]);
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knowledge-record-empty")).toBeInTheDocument());
+  });
+
+  it("searching sends q to the daemon and renders only what it sends back", async () => {
+    let lastUrl = "";
+    stubBrowse([recordFixture({ id: "rec-1", text: "deploys freeze on Fridays" })], (path) => {
+      if (path.startsWith("/knowledge/records")) {
+        lastUrl = path;
+      }
+      return undefined;
+    });
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knowledge-record-card")).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId("knowledge-record-search"), { target: { value: "deploys" } });
+    await waitFor(() => expect(lastUrl).toContain("q=deploys"));
+  });
+
+  it("editing a record calls PUT with the new text and the card reflects it", async () => {
+    let stored = recordFixture({ id: "rec-1", text: "five days per quarter" });
+    stubBrowse([stored], (path, init) => {
+      if (path === "/knowledge/records/rec-1" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { text: string };
+        stored = { ...stored, text: body.text, editedAt: "2026-09-20T00:00:00.000Z" };
+        return new Response(JSON.stringify(stored), { status: 200 });
+      }
+      if (path.startsWith("/knowledge/records")) {
+        return new Response(JSON.stringify({ records: [stored], nextCursor: null }), { status: 200 });
+      }
+      return undefined;
+    });
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knowledge-record-card")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("knowledge-record-edit"));
+    const textarea = screen.getByTestId("knowledge-record-text-input");
+    fireEvent.change(textarea, { target: { value: "ten days per quarter" } });
+    fireEvent.click(screen.getByTestId("knowledge-record-save"));
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        "http://test/knowledge/records/rec-1",
+        expect.objectContaining({ method: "PUT", body: JSON.stringify({ text: "ten days per quarter" }) }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByTestId("knowledge-record-text")).toHaveTextContent("ten days per quarter"));
+  });
+
+  it("Remove calls the same exclude route duo#272's Why-panel Remove uses, and the card shows it won't be used again", async () => {
+    let excluded = false;
+    stubBrowse([recordFixture({ id: "rec-1" })], (path, init) => {
+      if (path === "/knowledge/evidence/rec-1/exclude" && init?.method === "POST") {
+        excluded = true;
+        return new Response(JSON.stringify({ excluded: true }), { status: 200 });
+      }
+      if (path.startsWith("/knowledge/records")) {
+        return new Response(JSON.stringify({ records: [recordFixture({ id: "rec-1", excluded, excludedAt: excluded ? "2026-09-20T00:00:00.000Z" : null })], nextCursor: null }), {
+          status: 200,
+        });
+      }
+      return undefined;
+    });
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("knowledge-record-remove")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("knowledge-record-remove"));
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith("http://test/knowledge/evidence/rec-1/exclude", expect.objectContaining({ method: "POST" })),
+    );
+    await waitFor(() => expect(screen.getByTestId("knowledge-record-excluded-note")).toBeInTheDocument());
+    expect(screen.getByTestId("knowledge-record-restore")).toBeInTheDocument();
+  });
+
+  it("filtering by source sends it to the daemon", async () => {
+    let lastUrl = "";
+    stubBrowse([recordFixture({ id: "rec-1" })], (path) => {
+      if (path.startsWith("/knowledge/records")) {
+        lastUrl = path;
+      }
+      return undefined;
+    });
+    renderWithClient(
+      <Knows api={api} />,
+    );
+    await waitFor(() => expect(screen.getByTestId("knowledge-record-source-filter")).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId("knowledge-record-source-filter"), { target: { value: "markdown" } });
+    await waitFor(() => expect(lastUrl).toContain("source=markdown"));
   });
 });

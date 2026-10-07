@@ -156,17 +156,19 @@ describe("#47 AC1 — configured channels list with the daemon's own strings", (
     expect(within(section).queryByRole("link", { name: /connect|authori[sz]e|add|set up/i })).toBeNull();
   });
 
-  it("asks the daemon for the knowledge, the excluded evidence, and the channel list — and nothing else — on open", async () => {
+  it("asks the daemon for the knowledge, the excluded evidence, the channel list, the coverage, and the record browser's own page — and nothing else — on open", async () => {
     const calls = stubDaemon([connected]);
     renderWithClient(<Knows api={api} />);
     await screen.findByTestId("channel");
     // duo#272 (digital-duo#288): the Knows tab now also reads back what the
     // owner has removed from citation, a third GET alongside the two this
-    // test already pinned.
-    await waitFor(() => expect(calls).toHaveLength(3));
+    // test already pinned. digital-duo#286 (duo#273) adds the coverage read
+    // and the record browser's own `GET /knowledge/records` on open.
+    await waitFor(() => expect(calls).toHaveLength(5));
     expect(calls).toContainEqual({ method: "GET", path: "/knowledge", body: undefined });
     expect(calls).toContainEqual({ method: "GET", path: "/channels", body: undefined });
     expect(calls).toContainEqual({ method: "GET", path: "/knowledge/evidence/excluded", body: undefined });
+    expect(calls.some((c: { method: string; path: string }) => c.method === "GET" && c.path.startsWith("/knowledge/records"))).toBe(true);
   });
 });
 

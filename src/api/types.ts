@@ -608,6 +608,28 @@ export interface CorpusRecord {
 }
 
 /**
+ * `GET /knowledge/records` (digital-duo#286, duo#273): one record as the
+ * Knows tab's browser lists it — every `CorpusRecord` field, plus
+ * `editedAt` (null until the owner corrects its text through `PUT
+ * /knowledge/records/:id`) and the same `excluded`/`excludedAt` pair
+ * `ExcludedEvidence` already carries, joined in by the daemon so the
+ * browser's own "Remove"/"Restore" can be the exact `useExcludeEvidence`/
+ * `useRestoreEvidence` mutations duo#272 already shipped — there is no
+ * second, parallel delete for a record browsed from here.
+ */
+export interface KnowledgeRecord extends CorpusRecord {
+  editedAt: string | null;
+  excluded: boolean;
+  excludedAt: string | null;
+}
+
+/** `GET /knowledge/records` (digital-duo#286) — paged newest-first; `nextCursor` is the offset for the next page, null once the page came up short (same end-of-history signal `/escalations/history` uses). */
+export interface KnowledgeRecordsPage {
+  records: KnowledgeRecord[];
+  nextCursor: number | null;
+}
+
+/**
  * `GET /search?q=` — `duo search`'s hybrid retrieval, verbatim. `rank` is
  * the result's position in the full fused list, stable across pages (the
  * cursor pages by "last rank + 1"); `warning` is the daemon's own
