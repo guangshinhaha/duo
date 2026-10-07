@@ -15,9 +15,11 @@ import { OwnerMessage } from "../components/OwnerMessage.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SourceList } from "../components/SourceList.js";
+import { FollowUpChips, StarterChips } from "../components/SuggestionChips.js";
 import { StructuredText } from "../components/StructuredText.js";
 import { Timestamp } from "../components/Timestamp.js";
 import { TrainingCards } from "../components/TrainingCards.js";
+import { WhyButton } from "../components/WhyButton.js";
 import { isOwnTurn } from "../workspace/drafts.js";
 import { InfoButton } from "../shell/InfoButton.js";
 
@@ -108,8 +110,35 @@ function LiveTurn({ question, chunks }: { question: string; chunks: readonly str
  * decided — what your duo said, behind its line with what it drew on
  * beneath. A turn still waiting on you has its answer right under your
  * question, with Keep, Edit and Dismiss under it (#182).
+ *
+ * duo#306: a settled turn keeps one of that trio around — Why? — the same
+ * `WhyButton` the pending tray already offers (`draft-tray-why`'s own
+ * row), so a duo message in this chat always carries at least one real
+ * action, decided or not, never just inert text once the tray is gone.
+ * Send/Edit don't carry over: both are decisions about a draft, and a
+ * settled turn has already been decided — there is nothing left to send
+ * or edit, only to understand.
+ *
+ * duo#305: `isLatest` names the one turn that may offer follow-ups — never
+ * the whole history on every mount, only the answer that just landed.
  */
-function Turn({ api, draft, keyboard }: { api: DuoApiConfig; draft: DraftRecord; keyboard: boolean }) {
+function Turn({
+  api,
+  draft,
+  keyboard,
+  isLatest,
+  onAsk,
+  onChunk,
+  onAskFailed,
+}: {
+  api: DuoApiConfig;
+  draft: DraftRecord;
+  keyboard: boolean;
+  isLatest: boolean;
+  onAsk: (question: string) => void;
+  onChunk: (text: string) => void;
+  onAskFailed: () => void;
+}) {
   const pending = draft.outcome === null && !(draft.escalated && draft.refused);
   return (
     <div className="flex flex-col gap-2" data-testid="thread-entry">
@@ -140,8 +169,23 @@ function Turn({ api, draft, keyboard }: { api: DuoApiConfig; draft: DraftRecord;
             {outcomeLabel(draft)}
             {draft.threadContext ? ` · about ${draft.threadContext}` : ""}
           </p>
+          <div className="flex flex-wrap items-center gap-x-2 type-provenance text-[var(--muted)]" data-testid="settled-turn-actions">
+            <WhyButton api={api} draft={draft} />
+          </div>
           {/* #259 → #269: the offer the tray opened stays here once the dismissal lands and the tray is gone. */}
           {draft.outcome === "discarded" && openNeverAnswerOffers.has(draft.id) && <NeverAnswerOffer api={api} draftId={draft.id} />}
+          {/* duo#305 AC2: up to three follow-ups, offered once for the answer that just landed — never an escalation (passed-on/refused), which isn't an answer to follow up on. */}
+          {isLatest && !draft.escalated && (
+            <FollowUpChips
+              answer={responseText(draft)}
+              api={api}
+              onAsk={onAsk}
+              onAskFailed={onAskFailed}
+              onChunk={onChunk}
+              question={draft.question}
+              questionKey={draft.id}
+            />
+          )}
         </>
       )}
     </div>
@@ -186,6 +230,13 @@ export function Duo({ api }: { api: DuoApiConfig }) {
   // the ordinary feed refresh/`draft-ready` push and this effect still
   // clears the live bubble in favor of it.
   const [live, setLive] = useState<{ question: string; chunks: readonly string[] } | null>(null);
+  // duo#305: one set of ask callbacks, shared by the typed composer and
+  // every suggestion chip (`StarterChips`/`FollowUpChips`) — a tapped chip
+  // streams in behind the hairline exactly like a typed question, through
+  // the same live bubble.
+  const handleAsk = (question: string) => setLive({ question, chunks: [] });
+  const handleAskFailed = () => setLive(null);
+  const handleChunk = (text: string) => setLive((prev) => (prev ? { ...prev, chunks: [...prev.chunks, text] } : prev));
   useEffect(() => {
     if (live && turns.some((draft) => draft.question === live.question)) {
       setLive(null);
@@ -256,8 +307,12 @@ export function Duo({ api }: { api: DuoApiConfig }) {
           </button>
         ) : null}
         {turns.length === 0 && live === null ? (
-          <div className="p-6 text-[var(--muted)]" data-testid="duo-empty">
-            Ask your duo anything below. What you ask and what it answers read here, and only you can see this chat.
+          <div data-testid="duo-empty">
+            <div className="p-6 text-[var(--muted)]">
+              Ask your duo anything below. What you ask and what it answers read here, and only you can see this chat.
+            </div>
+            {/* duo#305 AC1: starters for an empty chat — coverage gaps and recent activity, composed daemon-side. */}
+            <StarterChips api={api} onAsk={handleAsk} onAskFailed={handleAskFailed} onChunk={handleChunk} />
           </div>
         ) : (
           // #33: gap-5 is Part 4's density — 20px between speakers, the air that makes a handful of considered turns read as considered.
@@ -269,7 +324,15 @@ export function Duo({ api }: { api: DuoApiConfig }) {
               return (
                 <div className="flex flex-col gap-5" key={draft.id}>
                   {divider && <p className="self-center type-identifier text-[var(--faint)]">{day}</p>}
-                  <Turn api={api} draft={draft} keyboard={draft.id === waiting[0]?.id} />
+                  <Turn
+                    api={api}
+                    draft={draft}
+                    isLatest={live === null && draft.id === lastId}
+                    keyboard={draft.id === waiting[0]?.id}
+                    onAsk={handleAsk}
+                    onAskFailed={handleAskFailed}
+                    onChunk={handleChunk}
+                  />
                 </div>
               );
             })}
@@ -282,13 +345,7 @@ export function Duo({ api }: { api: DuoApiConfig }) {
           <TrainingCards api={api} />
         </div>
       </div>
-      <Composer
-        api={api}
-        onAsk={(question) => setLive({ question, chunks: [] })}
-        onAskFailed={() => setLive(null)}
-        onChunk={(text) => setLive((prev) => (prev ? { ...prev, chunks: [...prev.chunks, text] } : prev))}
-        thread={null}
-      />
+      <Composer api={api} onAsk={handleAsk} onAskFailed={handleAskFailed} onChunk={handleChunk} thread={null} />
     </div>
   );
 }
