@@ -35,7 +35,7 @@ export function OffTheRecordControl({ api, roomId }: { api: DuoApiConfig; roomId
   if (status.data.offTheRecord) {
     return (
       <span className="flex items-center gap-2" data-testid="off-the-record-marker">
-        <span className="inline-flex items-center gap-1 rounded-[var(--r-sm)] border border-[var(--edge)] px-2 py-0.5 type-provenance text-[var(--muted)]">
+        <span className="inline-flex items-center gap-1 rounded-[var(--r-sm)] border border-[var(--edge)] px-2 py-1 type-provenance text-[var(--muted)]">
           <EyeOff aria-hidden="true" size={13} />
           Off the record — your duo doesn't learn from this
         </span>
