@@ -197,6 +197,27 @@ describe("#69 AC3 — the duo's own acts carry their own words", () => {
   });
 });
 
+describe("#309 — which category a draft-ready push falls under", () => {
+  it("a plain draft is draftsReady", async () => {
+    vi.resetModules();
+    const { draftArrivalCategory } = await import("../src/notifications.js");
+    expect(draftArrivalCategory({ escalated: false, refused: false })).toBe("draftsReady");
+  });
+
+  it("an escalation and a refusal are both passedOn — the duo's own act on the same wire event", async () => {
+    vi.resetModules();
+    const { draftArrivalCategory } = await import("../src/notifications.js");
+    expect(draftArrivalCategory({ escalated: true, refused: false })).toBe("passedOn");
+    expect(draftArrivalCategory({ escalated: true, refused: true })).toBe("passedOn");
+  });
+
+  it("a record that couldn't be fetched reads the conservative way, as a plain draft", async () => {
+    vi.resetModules();
+    const { draftArrivalCategory } = await import("../src/notifications.js");
+    expect(draftArrivalCategory(null)).toBe("draftsReady");
+  });
+});
+
 describe("#52 — a confirmation is waiting: notified natively, and the click only navigates", () => {
   beforeEach(async () => {
     vi.resetModules();

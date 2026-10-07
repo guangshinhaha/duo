@@ -12,6 +12,7 @@ import type { DuoApiConfig } from "../src/api/client.js";
 
 vi.mock("../src/notifications.js", () => ({
   draftArrivalBody: vi.fn(() => null),
+  draftArrivalCategory: vi.fn(() => "draftsReady"),
   notifyDraftReady: vi.fn(),
   postNotification: vi.fn(),
   wireNotificationClicks: vi.fn(() => Promise.resolve(() => {})),
