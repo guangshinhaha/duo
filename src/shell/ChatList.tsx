@@ -34,6 +34,7 @@ import { DuoLine } from "../components/DuoLine.js";
 import { useSyncStatus } from "../sync.js";
 import { useTrainingCount } from "../components/TrainingCards.js";
 import type { HairlineState } from "../components/ConfidenceHairline.js";
+import { readChatSectionFilter, writeChatSectionFilter, type ChatSectionFilter } from "./chatFilterPrefs.js";
 
 function initialsOf(title: string): string {
   const words = title.split(/[\s,]+/).filter(Boolean);
@@ -171,6 +172,27 @@ function CountPill({ n, label, testId, prefix = "" }: { n: number; label: string
  * sort is stable (`Array.prototype.sort` has been since ES2019), so "muted
  * last" never reshuffles the recency order within either half.
  */
+/**
+ * Whether a room answers one of the sidebar's quick filters (#298): Unread
+ * reads the server's own unread accounting (a notification, or the member's
+ * own "come back to this" flag — #220), Mentions the same accounting's
+ * narrower count, and Duos the room's own `soleDuoLabel` — the same fact
+ * `sectionsOf` already sorts a room by. "All" answers everything, so the
+ * filter row's own default chip needs no branch here.
+ */
+function matchesSectionFilter(filter: ChatSectionFilter, room: RoomSummary): boolean {
+  switch (filter) {
+    case "unread":
+      return room.unread.notifications > 0 || room.markedUnread === true;
+    case "mentions":
+      return room.unread.mentions > 0;
+    case "duos":
+      return soleDuoLabel(room) !== null;
+    default:
+      return true;
+  }
+}
+
 function sectionsOf(rooms: readonly RoomSummary[]): { channels: RoomSummary[]; directs: RoomSummary[]; duos: RoomSummary[] } {
   const channels: RoomSummary[] = [];
   const directs: RoomSummary[] = [];
@@ -251,6 +273,14 @@ export function ChatList({
   const [busyRoomId, setBusyRoomId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [openMore, setOpenMore] = useState<string | null>(null);
+  // #298: Unread, Mentions, Duos — remembered on this device, read once at
+  // mount so a remount (a phone leaving and returning to the list) picks up
+  // whatever the owner last chose rather than resetting to All.
+  const [sectionFilter, setSectionFilterState] = useState<ChatSectionFilter>(readChatSectionFilter);
+  const setSectionFilter = (filter: ChatSectionFilter): void => {
+    setSectionFilterState(filter);
+    writeChatSectionFilter(filter);
+  };
 
   // Live arrivals refresh the list the same way every other reader does:
   // invalidation, never a second copy of the data.
@@ -349,10 +379,23 @@ export function ChatList({
   const bridged = useBridgedChats(api).chats;
   const bridgedWaiting = useMemo(() => new Map(waiting.items.filter((item) => item.kind === "bridged").map((item) => [item.key, item])), [waiting.items]);
   const roomRows = rooms.data ?? [];
+  // #298: each chip's own count — how many rooms it would narrow the list
+  // to — read off the full list, never the currently filtered one, the same
+  // way the Waiting and Confirmations chips' own counts hold steady while
+  // another filter is active.
+  const unreadCount = useMemo(() => roomRows.filter((room) => matchesSectionFilter("unread", room)).length, [roomRows]);
+  const mentionsCount = useMemo(() => roomRows.filter((room) => matchesSectionFilter("mentions", room)).length, [roomRows]);
+  const duosCount = useMemo(() => roomRows.filter((room) => matchesSectionFilter("duos", room)).length, [roomRows]);
+  const filteredRoomRows = useMemo(
+    () => (sectionFilter === "all" ? roomRows : roomRows.filter((room) => matchesSectionFilter(sectionFilter, room))),
+    [roomRows, sectionFilter],
+  );
   // #208: grouped the way the list itself renders — Channels, then Direct
   // messages, then Duos — so ⌘1–9 and J/K (below) walk the rows in the same
-  // order the eye does, never the server's flat recency order.
-  const sections = useMemo(() => sectionsOf(roomRows), [roomRows]);
+  // order the eye does, never the server's flat recency order. #298: the
+  // active chip narrows this same list before it's grouped, so a filter
+  // combines with the sections rather than replacing them.
+  const sections = useMemo(() => sectionsOf(filteredRoomRows), [filteredRoomRows]);
   const sectionedRoomRows = useMemo(() => [...sections.channels, ...sections.directs, ...sections.duos], [sections]);
   const activeRoom = typeof route === "object" && "chat" in route ? route.chat : typeof route === "object" && "thread" in route ? route.thread.roomId : null;
 
@@ -742,6 +785,14 @@ export function ChatList({
           <p className="p-4 type-body text-[var(--muted)]" data-testid="conversations-empty">
             No conversations yet. When someone messages you, it appears here.
           </p>
+        ) : filteredRoomRows.length === 0 ? (
+          // #298: the workspace has conversations, but none answer the chip
+          // that's on — a different empty state from having none at all.
+          <p className="p-4 type-body text-[var(--muted)]" data-testid="conversations-filter-empty">
+            {sectionFilter === "unread" && "No unread conversations."}
+            {sectionFilter === "mentions" && "No mentions."}
+            {sectionFilter === "duos" && "No colleagues' duos here yet."}
+          </p>
         ) : (
           <div className="mt-2 flex flex-col gap-1" data-testid="conversations-list">
             {sections.channels.length > 0 && (
@@ -828,13 +879,17 @@ export function ChatList({
       <div className="flex flex-wrap items-center gap-2 px-4 pb-2" role="group" aria-label="Filter chats">
         <a
           aria-current={route === "chats" ? "page" : undefined}
-          className={`inline-flex min-h-8 items-center rounded-full border border-[var(--edge)] px-3 type-provenance ${!filterWaiting ? "bg-[var(--surface-2)] text-[var(--text)]" : "text-[var(--muted)]"}`}
+          className={`inline-flex min-h-8 items-center rounded-full border border-[var(--edge)] px-3 type-provenance ${!filterWaiting && sectionFilter === "all" ? "bg-[var(--surface-2)] text-[var(--text)]" : "text-[var(--muted)]"}`}
           data-testid="all-chip"
           href="#chats"
+          onClick={() => setSectionFilter("all")}
         >
           All
         </a>
+        <SectionFilterChip active={!filterWaiting && sectionFilter === "unread"} count={unreadCount} filter="unread" label="Unread" onSelect={setSectionFilter} />
+        <SectionFilterChip active={!filterWaiting && sectionFilter === "mentions"} count={mentionsCount} filter="mentions" label="Mentions" onSelect={setSectionFilter} />
         {api && <WaitingChip active={filterWaiting} count={waiting.count} current={route === "waiting"} />}
+        <SectionFilterChip active={!filterWaiting && sectionFilter === "duos"} count={duosCount} filter="duos" label="Duos" onSelect={setSectionFilter} />
         {api && <ConfirmationsChip api={api} active={route === "confirmations"} />}
       </div>
       <nav aria-label="Chats" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -942,6 +997,43 @@ export function ChatList({
         )}
       </Dialog>
     </div>
+  );
+}
+
+/**
+ * One of the sidebar's "narrow the room sections" chips (#298) — Unread,
+ * Mentions, Duos. Selecting one both remembers it (`chatFilterPrefs.ts`)
+ * and, via its own `href="#chats"`, leaves "Waiting on you" or
+ * "Confirmations" for the room list it narrows.
+ */
+function SectionFilterChip({
+  filter,
+  label,
+  active,
+  count,
+  onSelect,
+}: {
+  filter: ChatSectionFilter;
+  label: string;
+  active: boolean;
+  count: number;
+  onSelect: (filter: ChatSectionFilter) => void;
+}) {
+  return (
+    <a
+      aria-current={active ? "page" : undefined}
+      className={`inline-flex min-h-8 items-center gap-2 rounded-full border border-[var(--edge)] px-3 type-provenance ${active ? "bg-[var(--surface-2)] text-[var(--text)]" : "text-[var(--muted)]"}`}
+      data-testid={`${filter}-chip`}
+      href="#chats"
+      onClick={() => onSelect(filter)}
+    >
+      {label}
+      {count > 0 && (
+        <span className="type-identifier text-[var(--accent)]" data-testid={`${filter}-chip-count`}>
+          {count}
+        </span>
+      )}
+    </a>
   );
 }
 

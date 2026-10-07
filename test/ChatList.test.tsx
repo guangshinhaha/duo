@@ -68,12 +68,14 @@ function renderList(props: Partial<Parameters<typeof ChatList>[0]> = {}, route: 
 
 beforeEach(() => {
   window.location.hash = "";
+  localStorage.clear();
   vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
 });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   window.location.hash = "";
+  localStorage.clear();
 });
 
 describe("#141 — your duo is pinned first, and is never a person", () => {
@@ -312,5 +314,88 @@ describe("#143 — Waiting on you is a count and a filter", () => {
     const link = await screen.findByTestId("conversations-room");
     await waitFor(() => expect(within(link).getByTestId("room-preview")).toHaveTextContent("Draft ready"));
     expect(within(link).getByTestId("waiting-count")).toHaveTextContent("1");
+  });
+});
+
+describe("#298 — Unread, Mentions and Duos narrow the list, each with a count", () => {
+  const channel = room("!c:w", { kind: "channel", name: "general", members: [{ userId: "@dee:workspace.example", name: "Dee" }] });
+  const unread = room("!u:w", {
+    kind: "direct",
+    name: null,
+    members: [{ userId: "@ana:workspace.example", name: "Ana" }],
+    unread: { notifications: 2, mentions: 0 },
+  });
+  const mentioned = room("!m:w", {
+    kind: "direct",
+    name: null,
+    members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+    unread: { notifications: 1, mentions: 1 },
+  });
+  const duo = room("!d:w", { kind: "direct", name: null, members: [{ userId: "@duo-carol:workspace.example", name: "duo-carol" }] });
+  const all = [channel, unread, mentioned, duo];
+
+  it("shows each chip's own count, from the full list — not the one narrowed by another chip", async () => {
+    renderList({ connection: connectionWith(all), session: {} as never });
+    await screen.findAllByTestId("conversations-room");
+    expect(screen.getByTestId("unread-chip-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("mentions-chip-count")).toHaveTextContent("1");
+    expect(screen.getByTestId("duos-chip-count")).toHaveTextContent("1");
+  });
+
+  it("Unread narrows the sections to rooms with something unread, and hides the sections that have none left", async () => {
+    renderList({ connection: connectionWith(all), session: {} as never });
+    await screen.findAllByTestId("conversations-room");
+    fireEvent.click(screen.getByTestId("unread-chip"));
+    // Ana's unread room and Bose's mentioned-and-unread room both qualify; Dee's channel and carol's duo don't — their sections disappear.
+    await waitFor(() => expect(screen.getAllByTestId("room-title").map((t) => t.textContent)).toEqual(["Ana", "Bose"]));
+    expect(screen.queryByTestId("chat-section-channels")).toBeNull();
+    expect(screen.queryByTestId("chat-section-duos")).toBeNull();
+    expect(screen.getByTestId("unread-chip")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("Mentions narrows to rooms the member was mentioned in", async () => {
+    renderList({ connection: connectionWith(all), session: {} as never });
+    await screen.findAllByTestId("conversations-room");
+    fireEvent.click(screen.getByTestId("mentions-chip"));
+    await waitFor(() => expect(screen.getAllByTestId("room-title").map((t) => t.textContent)).toEqual(["Bose"]));
+  });
+
+  it("Duos narrows to colleagues' duos, combined with the section it already has", async () => {
+    renderList({ connection: connectionWith(all), session: {} as never });
+    await screen.findAllByTestId("conversations-room");
+    fireEvent.click(screen.getByTestId("duos-chip"));
+    await waitFor(() => expect(screen.getAllByTestId("room-title").map((t) => t.textContent)).toEqual(["carol's duo"]));
+    expect(screen.getByTestId("chat-section-duos")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-section-channels")).toBeNull();
+    expect(screen.queryByTestId("chat-section-direct-messages")).toBeNull();
+  });
+
+  it("says so, distinctly from having no conversations at all, when a filter matches nothing", async () => {
+    renderList({ connection: connectionWith([channel]), session: {} as never });
+    await screen.findAllByTestId("conversations-room");
+    fireEvent.click(screen.getByTestId("duos-chip"));
+    expect(await screen.findByTestId("conversations-filter-empty")).toHaveTextContent("No colleagues' duos here yet.");
+  });
+
+  it("remembers the last-used filter across a remount — a reload, or a phone leaving and returning to the list", async () => {
+    renderList({ connection: connectionWith(all), session: {} as never });
+    await screen.findAllByTestId("conversations-room");
+    fireEvent.click(screen.getByTestId("duos-chip"));
+    await waitFor(() => expect(screen.getByTestId("duos-chip")).toHaveAttribute("aria-current", "page"));
+    expect(localStorage.getItem("duo.chat-filter")).toBe("duos");
+    cleanup();
+    renderList({ connection: connectionWith(all), session: {} as never });
+    await screen.findAllByTestId("conversations-room");
+    expect(screen.getByTestId("duos-chip")).toHaveAttribute("aria-current", "page");
+    expect(screen.getAllByTestId("room-title").map((t) => t.textContent)).toEqual(["carol's duo"]);
+  });
+
+  it("All clears a remembered filter back to the whole list", async () => {
+    localStorage.setItem("duo.chat-filter", "duos");
+    renderList({ connection: connectionWith(all), session: {} as never });
+    await waitFor(() => expect(screen.getAllByTestId("room-title").map((t) => t.textContent)).toEqual(["carol's duo"]));
+    fireEvent.click(screen.getByTestId("all-chip"));
+    await waitFor(() => expect(screen.getAllByTestId("room-title").map((t) => t.textContent)).toEqual(["general", "Ana", "Bose", "carol's duo"]));
+    expect(localStorage.getItem("duo.chat-filter")).toBe("all");
   });
 });
