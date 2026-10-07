@@ -292,7 +292,7 @@ function FolderHeader({ collapsed, name, onToggle, testId, unread }: { collapsed
       onClick={onToggle}
       type="button"
     >
-      {collapsed ? <ChevronRight aria-hidden="true" size={12} /> : <ChevronDown aria-hidden="true" size={12} />}
+      {collapsed ? <ChevronRight aria-label="Collapsed" size={12} /> : <ChevronDown aria-label="Expanded" size={12} />}
       <span className="min-w-0 flex-1 truncate">{name}</span>
       {unread > 0 && <CountPill label={`${unread} unread`} n={unread} testId={`${testId}-unread`} />}
     </button>
@@ -1009,7 +1009,7 @@ export function ChatList({
                   onClick={() => setPinned(room, !room.pinned)}
                   type="button"
                 >
-                  {room.pinned ? <PinOff aria-hidden="true" size={14} /> : <Pin aria-hidden="true" size={14} />}
+                  {room.pinned ? <PinOff aria-label="Unpin" size={14} /> : <Pin aria-label="Pin" size={14} />}
                   {room.pinned ? "Unpin" : "Pin"}
                 </button>
               )}
@@ -1023,7 +1023,7 @@ export function ChatList({
                   onClick={() => setArchived(room, !room.archived)}
                   type="button"
                 >
-                  {room.archived ? <ArchiveRestore aria-hidden="true" size={14} /> : <ArchiveIcon aria-hidden="true" size={14} />}
+                  {room.archived ? <ArchiveRestore aria-label="Unarchive" size={14} /> : <ArchiveIcon aria-label="Archive" size={14} />}
                   {room.archived ? "Unarchive" : "Archive"}
                 </button>
               )}
@@ -1407,7 +1407,7 @@ export function ChatList({
                   onClick={() => updateSections(moveSection(chatSections, section.id, "up"))}
                   type="button"
                 >
-                  <ArrowUp aria-hidden="true" size={16} />
+                  <ArrowUp aria-label="Move up" size={16} />
                 </button>
                 <button
                   aria-label={`Move ${section.name} down`}
@@ -1417,7 +1417,7 @@ export function ChatList({
                   onClick={() => updateSections(moveSection(chatSections, section.id, "down"))}
                   type="button"
                 >
-                  <ArrowDown aria-hidden="true" size={16} />
+                  <ArrowDown aria-label="Move down" size={16} />
                 </button>
                 <button
                   aria-label={`Delete ${section.name}`}
@@ -1426,7 +1426,7 @@ export function ChatList({
                   onClick={() => updateSections(deleteSection(chatSections, section.id))}
                   type="button"
                 >
-                  <Trash2 aria-hidden="true" size={16} />
+                  <Trash2 aria-label="Delete" size={16} />
                 </button>
               </div>
             ))}
