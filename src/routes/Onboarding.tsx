@@ -13,10 +13,12 @@ import {
   useStartEmbed,
 } from "../api/queries.js";
 import type { ClaudeImportSummary, DeriveJobStatus, DeriveStage, DuoKnowledge, EmbedJobStatus, PasteImportSummary } from "../api/types.js";
+import { DuoLine } from "../components/DuoLine.js";
 import { MeterBar } from "../components/MeterBar.js";
 import { MutationError } from "../components/MutationError.js";
 import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
+import { getPlatform } from "../platform/index.js";
 import { isDuoKnowledgeShape } from "../profile/knowledgeWords.js";
 
 /**
@@ -44,6 +46,141 @@ export function isEmptyDuo(knowledge: DuoKnowledge): boolean {
 type StepState = "done" | "current" | "waiting";
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
+/**
+ * duo#317: whether this device has already dismissed the sample-duo demo.
+ * Purely cosmetic and local — unlike every step below it, nothing here is
+ * read off the daemon (`isEmptyDuo` above stays the sole "first run" fact).
+ * A device that never dismisses it just keeps seeing the sample; that is a
+ * safe default, never a block on the real steps underneath it.
+ */
+const SAMPLE_SEEN_KEY = "duo.onboarding.sampleSeen";
+
+function useSampleSeen(): readonly [boolean, () => void] {
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void getPlatform()
+      .storage.get(SAMPLE_SEEN_KEY)
+      .then((value) => {
+        if (live && value === "1") {
+          setSeen(true);
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const dismiss = () => {
+    setSeen(true);
+    void getPlatform().storage.set(SAMPLE_SEEN_KEY, "1");
+  };
+  return [seen, dismiss] as const;
+}
+
+/** A sample duo's answer, scripted — never read live, never a daemon call (#317: "could be static/scripted, not a real daemon call"). */
+const SAMPLE = {
+  question: "How do I get read-only access to the deploy dashboard?",
+  draft: "Request read-only access through the Access Portal, under “Deploy Dashboard” — approvals usually clear within a day.",
+  trust: "Confident — you've sent this same answer 12 times without an edit.",
+  standingOrder: "“Deploy access questions — point to the Access Portal.”",
+  sources: "2 of your own past answers, 1 runbook page",
+};
+
+/**
+ * duo#317 step 1: before anything is imported, show what a duo does — a
+ * draft, its Why, and Send — so a new owner trusts the shape of the thing
+ * before handing it their own history. Scripted, not a real draft: the
+ * block renders through `DuoLine` (the same component a real draft uses,
+ * AR-13's structural labelling) so it reads exactly like the real product,
+ * but Send and Why here only ever flip local state — no daemon call, no
+ * import, nothing that needs real data to exist yet. Dismissing it is
+ * purely a client-side preference (`useSampleSeen`); it never gates the
+ * real steps below, which work immediately whether or not this ran.
+ */
+function SampleDuoSection() {
+  const [seen, dismiss] = useSampleSeen();
+  const [why, setWhy] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  if (seen) {
+    return null;
+  }
+
+  return (
+    <section className="shape-container flex flex-col gap-4 p-4" data-testid="onboarding-sample">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h2 className="type-heading">Meet a sample duo</h2>
+          <p className="type-provenance text-[var(--muted)]">
+            Before you import anything: a sample of what your duo will do once it has read your own history. Nothing here is real — no colleague
+            asked this, and nothing is sent.
+          </p>
+        </div>
+        <button
+          className="inline-flex min-h-11 shrink-0 items-center px-1 type-provenance text-[var(--muted)] underline"
+          data-testid="onboarding-sample-skip"
+          onClick={dismiss}
+          type="button"
+        >
+          Skip
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <p className="type-provenance text-[var(--muted)]">A colleague asks</p>
+        <p className="type-body">{SAMPLE.question}</p>
+      </div>
+
+      <DuoLine attributionTestId="onboarding-sample-attribution" label="Your duo" meta="draft" state="confident" testId="onboarding-sample-draft">
+        <p>{SAMPLE.draft}</p>
+      </DuoLine>
+
+      <div className="flex items-center gap-3">
+        {sent ? (
+          <p className="type-provenance text-[var(--muted)]" data-testid="onboarding-sample-sent" role="status">
+            Sent — in a real chat, nothing goes out until you choose Send. This was only a sample.
+          </p>
+        ) : (
+          <button
+            className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] bg-[var(--accent)] px-3 text-[var(--bg)]"
+            data-testid="onboarding-sample-send"
+            onClick={() => setSent(true)}
+            type="button"
+          >
+            Send
+          </button>
+        )}
+        <button
+          aria-expanded={why}
+          className="inline-flex min-h-11 items-center px-1 type-provenance text-[var(--muted)] underline"
+          data-testid="onboarding-sample-why"
+          onClick={() => setWhy((open) => !open)}
+          type="button"
+        >
+          Why?
+        </button>
+      </div>
+
+      {why && (
+        <div className="flex flex-col gap-1 rounded-[var(--r-sm)] border border-[var(--edge)] p-3" data-testid="onboarding-sample-why-panel">
+          <p className="type-provenance text-[var(--muted)]">Trust reading: {SAMPLE.trust}</p>
+          <p className="type-provenance text-[var(--muted)]">Standing order hit: {SAMPLE.standingOrder}</p>
+          <p className="type-provenance text-[var(--muted)]">Drew on {SAMPLE.sources}.</p>
+        </div>
+      )}
+
+      <button
+        className="inline-flex min-h-11 items-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body"
+        data-testid="onboarding-sample-continue"
+        onClick={dismiss}
+        type="button"
+      >
+        Got it — let's build mine
+      </button>
+    </section>
+  );
+}
 
 /** The import's outcome in the daemon's own counts (`PasteImportSummary`, verbatim) — never a success story for an import that wrote nothing. */
 function importSentence(result: PasteImportSummary): string {
@@ -497,6 +634,9 @@ export function Onboarding({ api, onFinish, pollMs = POLL_MS }: { api: DuoApiCon
           Import your history, let your duo read it and work out rules, then approve or reject what your duo learned. You never write it — you approve a draft of it.
         </p>
       </header>
+      <div className="max-w-xl">
+        <SampleDuoSection />
+      </div>
       <ol aria-label="Steps" className="flex max-w-xl flex-col gap-4">
         <ImportStep api={api} state={importState} />
         <EmbedStep api={api} imported={imported} state={embedState} status={embed.data} />

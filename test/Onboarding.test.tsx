@@ -761,3 +761,49 @@ describe("#239 — uploading the Claude export zip directly", () => {
     expect(screen.queryByTestId("mutation-error")).not.toBeInTheDocument();
   });
 });
+
+describe("duo#317 — meet a sample duo before importing anything", () => {
+  it("shows a scripted draft with Why and Send, makes no daemon call, and never blocks the real import step underneath it", async () => {
+    const daemon = fakeDaemon({ knowledge: emptyDuo, embedGet: () => idle });
+    renderOnboarding();
+
+    expect(await screen.findByTestId("onboarding-sample")).toBeInTheDocument();
+    expect(screen.getByTestId("onboarding-sample-draft")).toHaveTextContent(/deploy dashboard/i);
+    // The real import step is right there and fully usable — the sample never gates it.
+    expect(screen.getByRole("textbox", { name: /conversation export/i })).toBeEnabled();
+
+    // Why? reveals the scripted panel — no network call, in words, no percentage.
+    expect(screen.queryByTestId("onboarding-sample-why-panel")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("onboarding-sample-why"));
+    const why = screen.getByTestId("onboarding-sample-why-panel");
+    expect(why).toHaveTextContent(/trust reading/i);
+    expect(why.textContent).not.toMatch(/%/);
+
+    // Send only ever flips local state — never a draft to decide, never a daemon call of its own.
+    const callsBeforeSend = daemon.calls.length;
+    fireEvent.click(screen.getByTestId("onboarding-sample-send"));
+    expect(screen.getByTestId("onboarding-sample-sent")).toHaveTextContent(/only a sample/i);
+    expect(daemon.calls.length).toBe(callsBeforeSend);
+  });
+
+  it("is skippable, and the skip is remembered so it doesn't come back on this device", async () => {
+    fakeDaemon({ knowledge: emptyDuo, embedGet: () => idle });
+    const { unmount } = renderWithClient(<Onboarding api={api} onFinish={vi.fn()} pollMs={POLL_MS} />);
+
+    fireEvent.click(await screen.findByTestId("onboarding-sample-skip"));
+    expect(screen.queryByTestId("onboarding-sample")).not.toBeInTheDocument();
+    unmount();
+
+    renderWithClient(<Onboarding api={api} onFinish={vi.fn()} pollMs={POLL_MS} />);
+    await screen.findByTestId("onboarding-step-import");
+    expect(screen.queryByTestId("onboarding-sample")).not.toBeInTheDocument();
+  });
+
+  it("'Got it — let's build mine' dismisses it the same way Skip does", async () => {
+    fakeDaemon({ knowledge: emptyDuo, embedGet: () => idle });
+    renderOnboarding();
+
+    fireEvent.click(await screen.findByTestId("onboarding-sample-continue"));
+    expect(screen.queryByTestId("onboarding-sample")).not.toBeInTheDocument();
+  });
+});
