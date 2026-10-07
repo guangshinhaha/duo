@@ -50,6 +50,7 @@ import type {
   DraftPipelineResult,
   DraftRecord,
   DuoKnowledge,
+  TopicCoverageReport,
   DuoRequest,
   ExcludedEvidence,
   FactCheckResult,
@@ -148,6 +149,12 @@ export const queryKeys = {
   // #52: the staged irreversible steps awaiting the owner's confirmation.
   t4Pending: ["actions", "t4", "pending"] as const,
   knowledge: ["knowledge"] as const,
+  // duo#277: the coverage report — its own route, its own daemon
+  // computation, read separately from GET /knowledge. Nested under the
+  // ["knowledge"] root so it refreshes alongside it, but addressable on
+  // its own: coming back from Rules (where "Teach" sends the owner)
+  // refetches just this key, not the whole Knows tab.
+  knowledgeCoverage: ["knowledge", "coverage"] as const,
   // #47: what this duo is reachable through — the mute routes invalidate it, since `muted` on each row is the daemon's re-read of the policy.
   channels: ["channels"] as const,
   // #54: the two read-only escalation routes — nothing this client writes
@@ -288,6 +295,10 @@ export function useDecideCandidate(api: DuoApiConfig) {
       // one action writes two surfaces; miss the second and the Mirror
       // shows a rule count the daemon no longer has).
       queryClient.invalidateQueries({ queryKey: queryKeys.mirrorRules });
+      // duo#277 AC3: this is the teaching loop's own "approve" — a
+      // standing-order candidate becoming a confirmed, approved rule is
+      // exactly what turns a coverage gap into covered.
+      queryClient.invalidateQueries({ queryKey: queryKeys.knowledgeCoverage });
     },
   });
 }
@@ -467,6 +478,11 @@ export function useMirrorRule(api: DuoApiConfig, id: string, enabled: boolean) {
 /** #45: what this duo knows, in one read (digital-duo #175's composition). Read-only — no client route writes it, so nothing invalidates it but a refetch. */
 export function useKnowledge(api: DuoApiConfig, options?: Partial<UseQueryOptions<DuoKnowledge>>) {
   return useQuery({ queryKey: queryKeys.knowledge, queryFn: () => apiRequest<DuoKnowledge>(api, "/knowledge"), ...options });
+}
+
+/** duo#277: what your duo can and can't answer yet — every topic from the owner's own question history, covered or a gap. Read-only, same as `useKnowledge`. */
+export function useKnowledgeCoverage(api: DuoApiConfig) {
+  return useQuery({ queryKey: queryKeys.knowledgeCoverage, queryFn: () => apiRequest<TopicCoverageReport>(api, "/knowledge/coverage") });
 }
 
 /** #47: what this duo is reachable through (digital-duo #171) — one row per bridged channel, every display string the adapter's own. An empty list is a supported configuration, not an error. */
@@ -998,6 +1014,10 @@ export function useRuleAction(api: DuoApiConfig) {
       apiRequest<Rule>(api, `/mirror/rules/${ruleId}/${action}`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.mirrorRules });
+      // duo#277 AC3: approving (or rejecting/promoting) a rule is exactly
+      // what moves a topic between "gap" and "covered" on the daemon's
+      // side — the coverage report is stale the moment this lands.
+      queryClient.invalidateQueries({ queryKey: queryKeys.knowledgeCoverage });
     },
   });
 }

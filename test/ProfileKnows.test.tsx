@@ -2,8 +2,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Knows } from "../src/profile/Knows.js";
-import type { DuoKnowledge, ExcludedEvidence } from "../src/api/types.js";
+import type { DuoKnowledge, ExcludedEvidence, TopicCoverageReport } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
+import { readComposerBuffer, writeComposerBuffer } from "../src/composerBuffer.js";
 
 const api: DuoApiConfig = { baseUrl: "http://test", token: "tok" };
 
@@ -65,7 +66,20 @@ function knowledgeFor(over?: Partial<DuoKnowledge>): DuoKnowledge {
   };
 }
 
-function stubKnowledge(knowledge: DuoKnowledge, excluded: ExcludedEvidence[] = []) {
+/** duo#277: the empty, honest default — no history, nothing thin to call out. Tests that don't care about coverage get this; tests that do pass their own via `stubKnowledge`'s fourth argument. */
+function coverageFor(over?: Partial<TopicCoverageReport>): TopicCoverageReport {
+  return {
+    totalQuestions: 0,
+    tooThin: true,
+    minimumQuestionsToCharacterize: 10,
+    coveredShare: 0,
+    topics: [],
+    gaps: [],
+    ...over,
+  };
+}
+
+function stubKnowledge(knowledge: DuoKnowledge, excluded: ExcludedEvidence[] = [], coverage: TopicCoverageReport = coverageFor()) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
@@ -76,6 +90,9 @@ function stubKnowledge(knowledge: DuoKnowledge, excluded: ExcludedEvidence[] = [
       if (path === "/knowledge/evidence/excluded") {
         return new Response(JSON.stringify({ excluded }), { status: 200 });
       }
+      if (path === "/knowledge/coverage") {
+        return new Response(JSON.stringify(coverage), { status: 200 });
+      }
       return new Response(JSON.stringify(knowledge), { status: 200 });
     }),
   );
@@ -84,6 +101,8 @@ function stubKnowledge(knowledge: DuoKnowledge, excluded: ExcludedEvidence[] = [
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  window.location.hash = "";
+  writeComposerBuffer("");
 });
 
 describe("#45 — the Knows tab says what your duo knows", () => {
@@ -270,5 +289,94 @@ describe("Knows tab — removed from citation (duo#272)", () => {
     fireEvent.click(screen.getByTestId("knows-removed-restore"));
     await waitFor(() => expect(screen.getByTestId("mutation-error")).toHaveTextContent("Missing bearer token."));
     expect(screen.getByTestId("knows-removed-row")).toBeInTheDocument();
+  });
+});
+
+/*
+ * duo#277: "what your duo can and can't answer yet" — the Knows tab's
+ * coverage section, read from its own route (`GET /knowledge/coverage`,
+ * separate from `GET /knowledge` itself).
+ */
+describe("Knows tab — coverage and gaps to teach (duo#277)", () => {
+  it("AC1: says so in words when there isn't enough history to characterise, same bar the portrait uses — no breakdown, no gaps", async () => {
+    stubKnowledge(knowledgeFor(), [], coverageFor({ tooThin: true, totalQuestions: 4, minimumQuestionsToCharacterize: 10 }));
+    renderWithClient(<Knows api={api} />);
+    const thin = await waitFor(() => screen.getByTestId("coverage-thin"));
+    expect(thin.textContent).toContain("10");
+    expect(thin.textContent).toContain("4");
+    expect(screen.queryByTestId("coverage-gap")).toBeNull();
+    expect(screen.queryByTestId("coverage-summary")).toBeNull();
+  });
+
+  it("past the bar: a summary bar (counts, never a percentage) plus every gap, most-asked first, each with a Teach action", async () => {
+    stubKnowledge(
+      knowledgeFor(),
+      [],
+      coverageFor({
+        tooThin: false,
+        totalQuestions: 10,
+        coveredShare: 0.6,
+        topics: [
+          { topicId: "t-leave", label: "Leave policy", questionCount: 6, share: 0.6, covered: true, ruleStatus: "confirmed", reviewStatus: "approved" },
+          { topicId: "t-printer", label: "Printer issues", questionCount: 3, share: 0.3, covered: false, ruleStatus: "weak_signal", reviewStatus: "pending" },
+          { topicId: "t-onboard", label: "Onboarding", questionCount: 1, share: 0.1, covered: false, ruleStatus: "none", reviewStatus: "none" },
+        ],
+        gaps: [
+          { topicId: "t-printer", label: "Printer issues", questionCount: 3, share: 0.3, covered: false, ruleStatus: "weak_signal", reviewStatus: "pending" },
+          { topicId: "t-onboard", label: "Onboarding", questionCount: 1, share: 0.1, covered: false, ruleStatus: "none", reviewStatus: "none" },
+        ],
+      }),
+    );
+    renderWithClient(<Knows api={api} />);
+    const summary = await waitFor(() => screen.getByTestId("coverage-summary"));
+    expect(summary.textContent).toContain("6 of 10");
+    expect(screen.getByTestId("coverage-share-fill")).toBeInTheDocument();
+
+    const gaps = screen.getAllByTestId("coverage-gap");
+    expect(gaps).toHaveLength(2);
+    // Most-asked first, exactly the order the daemon sent.
+    expect(gaps[0]).toHaveTextContent("Printer issues");
+    expect(gaps[1]).toHaveTextContent("Onboarding");
+    expect(gaps[0]).toHaveTextContent("3×");
+
+    // §1.6: no percentage numeral anywhere in this section.
+    expect(screen.getByTestId("knows-coverage").textContent).not.toMatch(/\d+(\.\d+)?\s?%/);
+  });
+
+  it("AC2: Teach opens Your duo with the gap's own label already in the composer", async () => {
+    stubKnowledge(
+      knowledgeFor(),
+      [],
+      coverageFor({
+        tooThin: false,
+        totalQuestions: 3,
+        coveredShare: 0,
+        topics: [{ topicId: "t-printer", label: "Printer issues", questionCount: 3, share: 1, covered: false, ruleStatus: "none", reviewStatus: "none" }],
+        gaps: [{ topicId: "t-printer", label: "Printer issues", questionCount: 3, share: 1, covered: false, ruleStatus: "none", reviewStatus: "none" }],
+      }),
+    );
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("coverage-gap-teach")).toBeInTheDocument());
+    expect(readComposerBuffer()).toBe("");
+    fireEvent.click(screen.getByTestId("coverage-gap-teach"));
+    expect(readComposerBuffer()).toContain("Printer issues");
+    expect(window.location.hash).toBe("#duo");
+  });
+
+  it("nothing thin right now: every topic asked about already has an approved answer behind it, and no gap renders", async () => {
+    stubKnowledge(
+      knowledgeFor(),
+      [],
+      coverageFor({
+        tooThin: false,
+        totalQuestions: 6,
+        coveredShare: 1,
+        topics: [{ topicId: "t-leave", label: "Leave policy", questionCount: 6, share: 1, covered: true, ruleStatus: "confirmed", reviewStatus: "approved" }],
+        gaps: [],
+      }),
+    );
+    renderWithClient(<Knows api={api} />);
+    await waitFor(() => expect(screen.getByTestId("coverage-empty")).toBeInTheDocument());
+    expect(screen.queryByTestId("coverage-gap")).toBeNull();
   });
 });

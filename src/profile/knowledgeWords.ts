@@ -1,4 +1,4 @@
-import type { DuoKnowledge } from "../api/types.js";
+import type { DuoKnowledge, TopicCoverageReport } from "../api/types.js";
 
 function formatDate(iso: string | null): string {
   return iso ? new Date(iso).toLocaleDateString() : "—";
@@ -46,4 +46,23 @@ export function isDuoKnowledgeShape(value: unknown): value is DuoKnowledge {
   return [candidate.records, candidate.corpus, candidate.rules, candidate.providers, candidate.sharedUsage].every(
     (section) => section !== null && typeof section === "object",
   );
+}
+
+/** Same braces-and-belt guard as `isDuoKnowledgeShape`, for `GET /knowledge/coverage`'s own cache entry (duo#277). */
+export function isTopicCoverageShape(value: unknown): value is TopicCoverageReport {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as TopicCoverageReport;
+  return Array.isArray(candidate.topics) && Array.isArray(candidate.gaps) && typeof candidate.tooThin === "boolean";
+}
+
+/**
+ * The coverage verdict in words, thin case only (duo#277) — the same
+ * threshold and the same "not enough history yet" argument `corpusSentence`
+ * already makes, because it is the same corpus: a coverage view has nothing
+ * to characterise before the portrait itself does.
+ */
+export function coverageThinSentence(coverage: TopicCoverageReport): string {
+  return `Not enough history yet to say what it can and can't answer — your duo starts to get a picture of you at ${coverage.minimumQuestionsToCharacterize} questions, and it has ${coverage.totalQuestions}.`;
 }

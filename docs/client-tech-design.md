@@ -150,6 +150,7 @@ domain types.
 | `POST` | `/review/:id/reject` | `{ candidate }` (#173) | `corrections/review` |
 | `GET` | `/mirror/portrait` | `InterruptionPortrait` | `derivation/portrait` |
 | `GET` | `/knowledge` | `DuoKnowledge` — what this duo knows and which providers it was wired with (#175) | `duo/knowledge-summary` |
+| `GET` | `/knowledge/coverage` | `TopicCoverageReport` — what your duo can and can't confidently answer yet: every topic from the owner's own question history, each joined against whatever rule backs it, `covered` true only once that rule is `approved`; `gaps` is the uncovered subset, most-asked first (duo#277) | `derivation/coverage` |
 | `POST` | `/knowledge/evidence/:recordId/exclude` | `{ excluded: true }` — a retrieved past exchange the owner removed inline from a draft's or sent answer's Used list; idempotent, and stops the record being cited in any future draft without touching the draft already shown (duo#272, digital-duo#288) | `drafting/evidence-exclusions` |
 | `POST` | `/knowledge/evidence/:recordId/restore` | `{ excluded: false }` — undoes an exclusion, same idempotent shape as a rule's approve/reject; offered from the Knows tab's "Removed from citation" (duo#272, digital-duo#288) | `drafting/evidence-exclusions` |
 | `GET` | `/knowledge/evidence/excluded` | `{ excluded: ExcludedEvidence[] }` — every exclusion, newest first; each row's `label` is the record's own text truncated, or `null` once the record itself is gone (the exclusion still holds) (duo#272, digital-duo#288) | `drafting/evidence-exclusions` |
