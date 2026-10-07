@@ -27,14 +27,20 @@ vi.mock("matrix-js-sdk", () => ({
     this.startup = vi.fn(async () => undefined);
     this.destroy = vi.fn(async () => undefined);
   }),
-  ClientEvent: { Sync: "sync" },
+  // #287: Event carries presence (and the SDK's own generic `event`
+  // stream); AccountData is #296's own door, reused for `duo.status` and
+  // `duo.presence.hidden`.
+  ClientEvent: { Sync: "sync", Event: "event", AccountData: "accountData" },
+  // #287: the one lever this seam has over its OWN visible presence —
+  // `connect()` calls this at least once on every connect.
+  SetPresence: { Offline: "offline", Online: "online", Unavailable: "unavailable" },
   // #211: backward-pagination token checks (`loadOlder`) read this.
   Direction: { Backward: "b", Forward: "f" },
   // #209: LocalEchoUpdated alongside Timeline — the seam's `subscribe`
   // listens for both (room news with no arrival vs. a message's arrival).
   // #286: Receipt too — another member's read receipt arriving is room
   // news the same way.
-  RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated", Receipt: "Room.receipt" },
+  RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated", Receipt: "Room.receipt", Tags: "Room.tags" },
   // #285: the member-level typing signal — a client.on/off target, never a RoomEvent.
   RoomMemberEvent: { Typing: "RoomMember.typing" },
   SyncState: { Prepared: "PREPARED", Error: "ERROR" },
@@ -59,6 +65,8 @@ vi.mock("matrix-js-sdk", () => ({
     RoomPinnedEvents: "m.room.pinned_events",
     RoomJoinRules: "m.room.join_rules",
     SpaceChild: "m.space.child",
+    // #287: a colleague's presence, read off the generic `event` stream.
+    Presence: "m.presence",
   },
   RelationType: { Annotation: "m.annotation", Replace: "m.replace", Thread: "m.thread", Reference: "m.reference" },
   // #209: Detached pending-event ordering (startClient) and the local-echo
@@ -77,12 +85,12 @@ vi.mock("matrix-js-sdk", () => ({
   },
 }));
 
-import { ClientEvent, createClient, EventStatus, EventType, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent, RoomMemberEvent } from "matrix-js-sdk";
+import { ClientEvent, createClient, EventStatus, EventType, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent, RoomMemberEvent, SetPresence } from "matrix-js-sdk";
 import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import { enqueuePendingMessage, outboxKeyOf, pendingMessagesInOrder } from "../src/workspace/outbox.js";
 import { workspaceCacheName } from "../src/workspace/cache.js";
 import { writePrivateReceiptsPref } from "../src/readReceiptPrefs.js";
-import type { MatrixClient, MatrixEvent, Room, RoomMember } from "matrix-js-sdk";
+import type { MatrixClient, MatrixEvent, Room, RoomMember, User } from "matrix-js-sdk";
 
 const SESSION = {
   homeserverUrl: "https://workspace.example",
@@ -216,6 +224,8 @@ type FakeClient = MatrixClient & {
   getUrlPreview: ReturnType<typeof vi.fn>;
   setRoomName: ReturnType<typeof vi.fn>;
   setRoomTopic: ReturnType<typeof vi.fn>;
+  setRoomTag: ReturnType<typeof vi.fn>;
+  deleteRoomTag: ReturnType<typeof vi.fn>;
   sendStateEvent: ReturnType<typeof vi.fn>;
   resendEvent: ReturnType<typeof vi.fn>;
   cancelPendingEvent: ReturnType<typeof vi.fn>;
@@ -225,6 +235,11 @@ type FakeClient = MatrixClient & {
   setDisplayName: ReturnType<typeof vi.fn>;
   setAvatarUrl: ReturnType<typeof vi.fn>;
   getRoomHierarchy: ReturnType<typeof vi.fn>;
+  // #287: presence — a colleague's own (read via `getUser`), and this
+  // account's own (written via `setPresence`/`setSyncPresence`).
+  getUser: ReturnType<typeof vi.fn>;
+  setPresence: ReturnType<typeof vi.fn>;
+  setSyncPresence: ReturnType<typeof vi.fn>;
 };
 
 /**
@@ -295,6 +310,8 @@ function fakeClient(
     })),
     setRoomName: vi.fn(async () => ({})),
     setRoomTopic: vi.fn(async () => ({})),
+    setRoomTag: vi.fn(async () => ({})),
+    deleteRoomTag: vi.fn(async () => ({})),
     sendStateEvent: vi.fn(async () => ({})),
     resendEvent: vi.fn(async () => ({})),
     cancelPendingEvent: vi.fn(() => {}),
@@ -306,6 +323,12 @@ function fakeClient(
     // #214: the org Space's children — empty unless a test lists some.
     getRoomHierarchy: vi.fn(async () => ({ rooms: [] })),
     getDomain: () => "workspace.example",
+    // #287: nobody known unless a test says otherwise, and this account's
+    // own presence writes are plain no-ops — most tests here never touch
+    // presence at all, so the common fixture stays quiet about it.
+    getUser: vi.fn(() => null),
+    setPresence: vi.fn(async () => undefined),
+    setSyncPresence: vi.fn(async () => undefined),
   };
   return client as unknown as FakeClient;
 }
@@ -352,6 +375,8 @@ function summaryRoom(shape: {
   receipts?: Record<string, string>;
   /** #292: `m.room.pinned_events`' own array, as the room's state carries it — absent (never pinned anything) unless a test says otherwise. */
   pinnedEventIds?: readonly string[];
+  /** #297: the account's own room tags (`m.favourite`, `m.lowpriority`) — absent (plain, unpinned, unarchived) unless a test says otherwise. */
+  tags?: Record<string, Record<string, unknown>>;
 }): Room {
   const lastEventTs = shape.events.length > 0 ? shape.events[shape.events.length - 1]!.getTs() : 0;
   const memberOf = (member: (typeof shape.members)[number]) => ({
@@ -423,6 +448,7 @@ function summaryRoom(shape: {
     },
     getLastActiveTimestamp: () => lastEventTs,
     loadMembersIfNeeded: vi.fn(async () => true),
+    tags: shape.tags ?? {},
     getDMInviter: () => shape.dmInviter,
     // #207's findRooms: for a direct room, guessed from its one other
     // member, the way the real SDK's `guessDMUserId` reads a two-person room.
@@ -2093,6 +2119,92 @@ describe("#292 — pinning a message to the room", () => {
     const plain = await connectPrepared(plainClient);
     const [member] = await plain.rooms();
     expect(member?.canEdit.pins).toBe(false);
+  });
+});
+
+describe("#297 — pin a conversation to the top, archive one, via the spec's own room tags", () => {
+  it("projects m.favourite as pinned and m.lowpriority as archived, absent on a room with neither", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!pinned:workspace.example",
+          name: "pinned",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          tags: { "m.favourite": {} },
+        }),
+        summaryRoom({
+          roomId: "!archived:workspace.example",
+          name: "archived",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          tags: { "m.lowpriority": {} },
+        }),
+        summaryRoom({
+          roomId: "!plain:workspace.example",
+          name: "plain",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [pinned, archived, plain] = await connection.rooms();
+    expect(pinned?.pinned).toBe(true);
+    expect(pinned?.archived).toBeUndefined();
+    expect(archived?.archived).toBe(true);
+    expect(archived?.pinned).toBeUndefined();
+    expect(plain?.pinned).toBeUndefined();
+    expect(plain?.archived).toBeUndefined();
+  });
+
+  it("setPinned(true) writes the m.favourite tag; setPinned(false) deletes it, costing nothing when it was never set", async () => {
+    const client = fakeClient({ rooms: [summaryRoom({ roomId: "!r:workspace.example", name: "r", joinRule: "invite", members: [], notificationCount: 0, highlightCount: 0, events: [] })] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.setPinned!("!r:workspace.example", true);
+    expect(client.setRoomTag).toHaveBeenCalledWith("!r:workspace.example", "m.favourite");
+
+    await connection.setPinned!("!r:workspace.example", false);
+    expect(client.deleteRoomTag).toHaveBeenCalledWith("!r:workspace.example", "m.favourite");
+  });
+
+  it("setArchived(true) writes the m.lowpriority tag; setArchived(false) deletes it", async () => {
+    const client = fakeClient({ rooms: [summaryRoom({ roomId: "!r:workspace.example", name: "r", joinRule: "invite", members: [], notificationCount: 0, highlightCount: 0, events: [] })] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.setArchived!("!r:workspace.example", true);
+    expect(client.setRoomTag).toHaveBeenCalledWith("!r:workspace.example", "m.lowpriority");
+
+    await connection.setArchived!("!r:workspace.example", false);
+    expect(client.deleteRoomTag).toHaveBeenCalledWith("!r:workspace.example", "m.lowpriority");
+  });
+
+  it("subscribe fires on a tag change (Room.tags) — a pin or archive from this device or another is room news", async () => {
+    const client = fakeClient({ rooms: [summaryRoom({ roomId: "!r:workspace.example", name: "r", joinRule: "invite", members: [], notificationCount: 0, highlightCount: 0, events: [] })] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const handler = vi.fn();
+    connection.subscribe(handler);
+    const tagsCall = client.on.mock.calls.find((call) => call[0] === "Room.tags");
+    expect(tagsCall).toBeDefined();
+    const tagsListener = tagsCall![1] as (event: unknown, room: { roomId: string }) => void;
+    tagsListener(undefined, { roomId: "!r:workspace.example" });
+    expect(handler).toHaveBeenCalledWith("!r:workspace.example");
   });
 });
 
@@ -4085,5 +4197,343 @@ describe("the seam stays the SDK's only door", () => {
       /from\s+"(\.\.?\/)+(.*\/)?api\/[^"]+"/.test(readFileSync(join(root, relative), "utf8")),
     );
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("#287 — a colleague's presence, and this account's own status and hidden choice", () => {
+  /** A bare-bones `User`-shaped object — only the fields `presenceOf`/`statusMessageOf` read. */
+  function fakeUser(presence: string, statusMsg?: string): User {
+    return { presence, presenceStatusMsg: statusMsg } as unknown as User;
+  }
+
+  /** A bare-bones `MatrixEvent`-shaped stand-in for an account-data read — only `getContent` is read here. */
+  function accountDataEvent(content: unknown): MatrixEvent {
+    return { getContent: () => content } as unknown as MatrixEvent;
+  }
+
+  it("presenceOf reads Matrix's three words in plain words, and null for a user this account has never heard about", async () => {
+    const client = fakeClient();
+    client.getUser = vi.fn((userId: string) =>
+      userId === "@bose:workspace.example"
+        ? fakeUser("online")
+        : userId === "@carol:workspace.example"
+          ? fakeUser("unavailable")
+          : userId === "@duo-carol:workspace.example"
+            ? fakeUser("offline")
+            : null,
+    );
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.presenceOf?.("@bose:workspace.example")).toBe("online");
+    expect(connection.presenceOf?.("@carol:workspace.example")).toBe("away");
+    expect(connection.presenceOf?.("@duo-carol:workspace.example")).toBe("offline");
+    // Nobody this account has ever synced presence for — null, not "offline".
+    expect(connection.presenceOf?.("@nobody:workspace.example")).toBeNull();
+  });
+
+  it("statusMessageOf reads a colleague's own status line, and null for an empty or absent one", async () => {
+    const client = fakeClient();
+    client.getUser = vi.fn((userId: string) =>
+      userId === "@bose:workspace.example" ? fakeUser("online", "In a meeting") : userId === "@carol:workspace.example" ? fakeUser("online", "") : null,
+    );
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(connection.statusMessageOf?.("@bose:workspace.example")).toBe("In a meeting");
+    // An empty string is Matrix's own "nothing set" — read the same as absent.
+    expect(connection.statusMessageOf?.("@carol:workspace.example")).toBeNull();
+    expect(connection.statusMessageOf?.("@nobody:workspace.example")).toBeNull();
+  });
+
+  it("subscribePresence hears a colleague's presence change off the generic event stream, filtering out everything that isn't m.presence", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const heard: Array<{ userId: string; presence: string; statusMessage: string | null }> = [];
+    const unsubscribe = connection.subscribePresence?.((userId, presence, statusMessage) => heard.push({ userId, presence, statusMessage }));
+    const listener = client.on.mock.calls.find(([event]) => event === ClientEvent.Event)?.[1] as (event: MatrixEvent) => void;
+
+    listener(fakeEvent({ type: "m.presence", sender: "@bose:workspace.example", ts: 1, body: undefined }));
+    // The fake event helper above doesn't carry presence/status_msg, so build one by hand for this.
+    listener({
+      getType: () => "m.presence",
+      getSender: () => "@carol:workspace.example",
+      getContent: () => ({ presence: "unavailable", status_msg: "Lunch until 1pm" }),
+    } as unknown as MatrixEvent);
+    // A different event type: ignored.
+    listener({ getType: () => "m.room.message", getSender: () => "@bose:workspace.example", getContent: () => ({}) } as unknown as MatrixEvent);
+
+    expect(heard).toEqual([
+      { userId: "@bose:workspace.example", presence: "offline", statusMessage: null },
+      { userId: "@carol:workspace.example", presence: "away", statusMessage: "Lunch until 1pm" },
+    ]);
+
+    unsubscribe?.();
+    expect(client.off).toHaveBeenCalledWith(ClientEvent.Event, listener);
+  });
+
+  it("status() answers null with nothing stored, and the stored line once set", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.status?.()).toBeNull();
+
+    const until = new Date(Date.now() + 60_000).toISOString();
+    client.getAccountData = vi.fn((type: string) =>
+      type === "duo.status" ? accountDataEvent({ message: "In a meeting", until }) : undefined,
+    );
+    expect(await connection.status?.()).toEqual({ message: "In a meeting", until });
+  });
+
+  it("status() reads an already-past `until` as null, exactly as if nothing had been set", async () => {
+    const client = fakeClient();
+    const until = new Date(Date.now() - 1_000).toISOString();
+    client.getAccountData = vi.fn((type: string) =>
+      type === "duo.status" ? accountDataEvent({ message: "In a meeting", until }) : undefined,
+    );
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.status?.()).toBeNull();
+  });
+
+  it("setStatus writes the structured record and pushes the line onto this account's own presence in one call", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const until = new Date(Date.now() + 60_000).toISOString();
+    await connection.setStatus?.({ message: "In a meeting", until });
+
+    expect(client.setAccountData).toHaveBeenCalledWith("duo.status", { message: "In a meeting", until });
+    expect(client.setPresence).toHaveBeenCalledWith({ presence: "online", status_msg: "In a meeting" });
+  });
+
+  it("setStatus(null) clears both the record and the presence line", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.setStatus?.(null);
+
+    expect(client.setAccountData).toHaveBeenCalledWith("duo.status", {});
+    expect(client.setPresence).toHaveBeenCalledWith({ presence: "online", status_msg: "" });
+  });
+
+  it("a status set with an end time already in the past clears itself the moment the connection is made — nobody has to open the app at exactly 3pm", async () => {
+    const client = fakeClient();
+    const until = new Date(Date.now() - 1_000).toISOString();
+    client.getAccountData = vi.fn((type: string) =>
+      type === "duo.status" ? accountDataEvent({ message: "In a meeting", until }) : undefined,
+    );
+    vi.mocked(createClient).mockReturnValue(client);
+    await connectPrepared(client);
+
+    await vi.waitFor(() => expect(client.setPresence).toHaveBeenCalledWith({ presence: "online", status_msg: "" }));
+    expect(client.setAccountData).toHaveBeenCalledWith("duo.status", {});
+  });
+
+  it("a status still ahead of its end time clears itself on its own once that time arrives, with no further call from a caller", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = fakeClient();
+      const until = new Date(Date.now() + 5_000).toISOString();
+      client.getAccountData = vi.fn((type: string) =>
+        type === "duo.status" ? accountDataEvent({ message: "In a meeting", until }) : undefined,
+      );
+      vi.mocked(createClient).mockReturnValue(client);
+      await connectPrepared(client);
+
+      expect(client.setPresence).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(client.setPresence).toHaveBeenCalledWith({ presence: "online", status_msg: "" });
+      expect(client.setAccountData).toHaveBeenCalledWith("duo.status", {});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("subscribeStatus hears another device's write (or clear) and reports it already expiry-checked", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const heard: Array<{ message: string; until: string } | null> = [];
+    connection.subscribeStatus?.((status) => heard.push(status));
+    // `connect()` itself already registered its own AccountData listener
+    // (the auto-clear scheduler) — this subscription's is the latest one.
+    const listener = client.on.mock.calls.filter(([event]) => event === ClientEvent.AccountData).at(-1)?.[1] as (event: MatrixEvent) => void;
+
+    const until = new Date(Date.now() + 60_000).toISOString();
+    listener({ getType: () => "duo.status", getContent: () => ({ message: "In a meeting", until }) } as unknown as MatrixEvent);
+    listener({ getType: () => "duo.status", getContent: () => ({}) } as unknown as MatrixEvent);
+    // A write for a different account-data type is not this subscription's news.
+    listener({ getType: () => "duo.sidebar.sections", getContent: () => ({ sections: [] }) } as unknown as MatrixEvent);
+
+    expect(heard).toEqual([{ message: "In a meeting", until }, null]);
+  });
+
+  it("presenceHidden() reads this account's own choice, defaulting to false", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.presenceHidden?.()).toBe(false);
+
+    client.getAccountData = vi.fn((type: string) => (type === "duo.presence.hidden" ? accountDataEvent({ hidden: true }) : undefined));
+    expect(await connection.presenceHidden?.()).toBe(true);
+  });
+
+  it("connect() applies this account's stored hidden choice to this device's OWN sync at once", async () => {
+    const client = fakeClient();
+    client.getAccountData = vi.fn((type: string) => (type === "duo.presence.hidden" ? accountDataEvent({ hidden: true }) : undefined));
+    vi.mocked(createClient).mockReturnValue(client);
+
+    await connectPrepared(client);
+
+    expect(client.setSyncPresence).toHaveBeenCalledWith(SetPresence.Offline);
+  });
+
+  it("setPresenceHidden writes the choice and applies it to this device's own sync in the same call", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    vi.mocked(client.setSyncPresence).mockClear();
+
+    await connection.setPresenceHidden?.(true);
+    expect(client.setAccountData).toHaveBeenCalledWith("duo.presence.hidden", { hidden: true });
+    expect(client.setSyncPresence).toHaveBeenCalledWith(SetPresence.Offline);
+
+    await connection.setPresenceHidden?.(false);
+    expect(client.setSyncPresence).toHaveBeenCalledWith(SetPresence.Online);
+  });
+
+  it("another device's hidden-choice write applies to THIS device's own sync too, live", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    await connectPrepared(client);
+    vi.mocked(client.setSyncPresence).mockClear();
+
+    const listener = client.on.mock.calls.find(([event]) => event === ClientEvent.AccountData)?.[1] as (event: MatrixEvent) => void;
+    listener({ getType: () => "duo.presence.hidden", getContent: () => ({ hidden: true }) } as unknown as MatrixEvent);
+
+    expect(client.setSyncPresence).toHaveBeenCalledWith(SetPresence.Offline);
+  });
+
+  it("stop() clears the status timer and stops listening for account-data — no late write reaches a closed connection", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = fakeClient();
+      const until = new Date(Date.now() + 5_000).toISOString();
+      client.getAccountData = vi.fn((type: string) =>
+        type === "duo.status" ? accountDataEvent({ message: "In a meeting", until }) : undefined,
+      );
+      vi.mocked(createClient).mockReturnValue(client);
+      const connection = await connectPrepared(client);
+
+      await connection.stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(client.setPresence).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("duo#299: Later — the account-data door", () => {
+  it("later() reads this account's own `duo.later.items`, filtering out a shape that isn't one", async () => {
+    const saved = {
+      id: "l1",
+      kind: "message",
+      roomId: "!r:workspace.example",
+      eventId: "$1",
+      senderId: "@bose:workspace.example",
+      senderName: "Bose",
+      preview: "Ship it Friday",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      remindAt: null,
+      done: false,
+      firedAt: null,
+    };
+    const client = fakeClient();
+    client.getAccountData.mockImplementation((type: string) =>
+      type === "duo.later.items" ? { getContent: () => ({ items: [saved, { not: "a later item" }] }) } : undefined,
+    );
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.later!()).toEqual([saved]);
+  });
+
+  it("later() with nothing ever saved reads as an empty list, never a throw", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    expect(await connection.later!()).toEqual([]);
+  });
+
+  it("setLater() writes the whole set back to `duo.later.items`", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const items = [
+      {
+        id: "l1",
+        kind: "note" as const,
+        roomId: "!r:workspace.example",
+        eventId: null,
+        senderId: null,
+        senderName: null,
+        preview: "a reply I wasn't ready to send",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        remindAt: "2026-10-02T09:00:00.000Z",
+        done: false,
+        firedAt: null,
+      },
+    ];
+    await connection.setLater!(items);
+    expect(client.setAccountData).toHaveBeenCalledWith("duo.later.items", { items });
+  });
+
+  it("subscribeLater hears another device's write, and the unsubscribe stops it", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const saved = {
+      id: "l1",
+      kind: "note",
+      roomId: "!r:workspace.example",
+      eventId: null,
+      senderId: null,
+      senderName: null,
+      preview: "a reply I wasn't ready to send",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      remindAt: null,
+      done: false,
+      firedAt: null,
+    };
+    const seen: unknown[] = [];
+    const unsubscribe = connection.subscribeLater!((items) => seen.push(items));
+    // #287: `connect()` now registers its own AccountData listener too (the
+    // status/hidden auto-apply scheduler) — this subscription's is the
+    // latest one, not necessarily the first.
+    const [, listener] = client.on.mock.calls.filter((call) => call[0] === ClientEvent.AccountData).at(-1)!;
+
+    // A write from this device, or another one syncing in — the seam reads
+    // the event's own content, not a second account-data fetch.
+    listener({ getType: () => "duo.later.items", getContent: () => ({ items: [saved] }) } as unknown as MatrixEvent);
+    // An unrelated account-data event (another feature's own type) is not news here.
+    listener({ getType: () => "m.direct", getContent: () => ({}) } as unknown as MatrixEvent);
+
+    expect(seen).toEqual([[saved]]);
+    unsubscribe();
+    expect(client.off).toHaveBeenCalledWith(ClientEvent.AccountData, listener);
   });
 });

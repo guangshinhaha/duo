@@ -10,6 +10,7 @@ import { useDraftReadySocket } from "./api/ws.js";
 import { markDraftArrived } from "./arrivals.js";
 import { SyncStatusProvider } from "./sync.js";
 import { ConfirmationWatcher } from "./components/ConfirmationWatcher.js";
+import { LaterReminderWatcher } from "./components/LaterReminderWatcher.js";
 import { DuoRequestWatcher } from "./components/DuoRequests.js";
 import { draftArrivalBody, draftArrivalCategory, postNotification, wireNotificationClicks } from "./notifications.js";
 import { isDndActive, readDndPrefs, recordMissed } from "./notificationPrefs.js";
@@ -52,6 +53,7 @@ import { OffTheRecordControl } from "./components/OffTheRecordControl.js";
 import { ThreadView } from "./routes/Thread.js";
 import { Duo } from "./routes/Duo.js";
 import { Confirmations } from "./routes/Confirmations.js";
+import { Later } from "./routes/Later.js";
 import { Mentions } from "./routes/Mentions.js";
 import { SearchOverlay } from "./components/SearchOverlay.js";
 import { NoDuoPanel } from "./components/NoDuoPanel.js";
@@ -426,9 +428,10 @@ function routeSurface(route: Route, shell: SurfaceContext) {
     );
   }
   // The routes below this line are the duo's own surfaces (Settings, the
-  // chat list, and Mentions are not — #222's mentions are the member's own
-  // workspace, not a thing their duo does).
-  if (route !== "chats" && route !== "settings" && route !== "mentions" && !shell.api) {
+  // chat list, Mentions and Later are not — #222's mentions and duo#299's
+  // Later are both the member's own workspace data, not a thing their duo
+  // does).
+  if (route !== "chats" && route !== "settings" && route !== "mentions" && route !== "later" && !shell.api) {
     return <NoDuoPanel onPairDuo={shell.onPairDuo} />;
   }
   switch (route) {
@@ -438,6 +441,8 @@ function routeSurface(route: Route, shell: SurfaceContext) {
       return settingsSurface("index", shell);
     case "mentions":
       return <Mentions connection={shell.connection} />;
+    case "later":
+      return <Later connection={shell.connection} />;
     case "admin":
       return <Admin api={shell.api!} origin={shell.admin.origin} orgId={null} role={shell.admin.role} />;
     case "confirmations":
@@ -622,6 +627,14 @@ function AppShell() {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setSearchOpen((open) => !open);
+      }
+      // duo#299: "Web/Mac: ⌘L" opens the owner's saved-for-later list —
+      // the same always-on, no-duo-needed shortcut shape ⌘K and ⌘I
+      // already take here, rather than a per-row binding this app has no
+      // notion of "the focused message" to hang one on.
+      if (e.key === "l" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        window.location.hash = "#later";
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1063,6 +1076,11 @@ function AppShell() {
           confirm anything. */}
       {api && <ConfirmationWatcher api={api} onArrived={() => announce("An action is waiting for your confirmation.")} />}
       {api && <DuoRequestWatcher api={api} />}
+      {/* duo#299: Later's reminders — no duo needed, this account's own
+          saved items (`connection`, never `api`). See the watcher's own
+          doc comment for what "even with the app closed" honestly means
+          here. */}
+      <LaterReminderWatcher connection={connection} />
       {/* #46: over the screen, never instead of it — the main surface stays
           mounted underneath while search is open. */}
       {api && <SearchOverlay api={api} onClose={() => setSearchOpen(false)} open={searchOpen} />}

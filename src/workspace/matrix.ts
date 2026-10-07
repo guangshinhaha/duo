@@ -17,6 +17,7 @@ import {
   RelationType,
   RoomEvent,
   RoomMemberEvent,
+  SetPresence,
   SyncState,
   TweakName,
   type INotification,
@@ -264,6 +265,24 @@ export interface RoomSummary {
    * the instant the words are sent.
    */
   readonly draft?: string;
+  /**
+   * #297: this conversation is pinned to the top of the sidebar — the
+   * spec's own `m.favourite` room tag, the account's own state, so it
+   * syncs the same way on every device. Distinct from `pinnedEventIds`
+   * above (#292's message-pin, a room's own shared state): this is the
+   * member's own ordering preference over their list, never a fact about
+   * the room itself. Present only when true, the same convention
+   * `markedUnread` uses.
+   */
+  readonly pinned?: true;
+  /**
+   * #297: this conversation is archived — the spec's own `m.lowpriority`
+   * room tag — which hides it from the sidebar's ordinary shelves and
+   * folders until new activity mentions the member (`ChatList.tsx`'s own
+   * rule; the tag itself carries no such exception). Present only when
+   * true, the same convention `markedUnread` uses.
+   */
+  readonly archived?: true;
 }
 
 /**
@@ -305,6 +324,40 @@ export interface ChannelSummary {
 }
 
 /**
+ * duo#299: something the owner saved for later — a message someone sent (or
+ * they sent), or the words they were writing in a composer when they chose
+ * not to send them yet. Held as this account's own data
+ * (`duo.later.items`, below), the same door `duo.sidebar.sections` already
+ * stands behind, so a save made on one device — and a reminder fired, or a
+ * snooze, or marking it done — reads the same on every other. `preview` is a
+ * snapshot taken at save time, never re-fetched: a message can be edited or
+ * redacted after it's saved, and the point of Later is what the owner saw
+ * when they saved it, not whatever the room says now.
+ */
+export interface LaterItem {
+  readonly id: string;
+  /** `"message"` for something someone sent (this account included); `"note"` for unsent composer text the owner chose to save instead of sending. */
+  readonly kind: "message" | "note";
+  /** The conversation this was saved from — always present, since there is always a room the composer or the message belonged to. */
+  readonly roomId: string;
+  /** The event this is a snapshot of. Null for a `"note"`: there is no event, only the words. */
+  readonly eventId: string | null;
+  /** Who sent the saved message. Null for a `"note"` (the owner's own unsent words) and for a message from before this field existed. */
+  readonly senderId: string | null;
+  /** The sender's display name, snapshotted alongside `senderId` — rendering a raw user id where a name belongs reads as a bug, not as "unknown". Null exactly where `senderId` is. */
+  readonly senderName: string | null;
+  /** The snapshot itself — the message's body, or the composer's text, at save time. */
+  readonly preview: string;
+  readonly createdAt: string;
+  /** When to remind the owner, or null for no reminder — just a saved item sitting in the list. */
+  readonly remindAt: string | null;
+  /** The owner marked this one done — it stays in the record, filtered out of the default view. */
+  readonly done: boolean;
+  /** Set once a reminder has been shown for this item, so a second device open at the same time (or a missed poll catching up) never shows it twice. Null until it fires, and irrelevant once `remindAt` is null. */
+  readonly firedAt: string | null;
+}
+
+/**
  * #296: a folder the owner made in their own sidebar — a project, a team,
  * whatever grouping matches how they work. Held as this account's own data
  * (`duo.sidebar.sections`, below), never this device's opinion, so a folder
@@ -321,6 +374,31 @@ export interface ChatSection {
   readonly collapsed: boolean;
   /** This folder's own order, the owner's to set (`reorderSection`) — never resorted by activity or name. */
   readonly roomIds: readonly string[];
+}
+
+/**
+ * #287: a colleague's online state, as Matrix's own `m.presence` reads in
+ * plain words — "online" and "unavailable" (Matrix's word for a device that
+ * has gone briefly idle) map onto this product's "online" and "away";
+ * "offline" covers both an explicit offline and "this account has never
+ * heard any presence for them at all" (a homeserver with presence turned
+ * off, or someone this account doesn't yet share a room with), because the
+ * two read identically from here — a caller that needs to tell them apart
+ * uses `presenceOf`'s own `null` for the second case instead.
+ */
+export type PresenceState = "online" | "away" | "offline";
+
+/**
+ * #287: this account's own custom status — a short line colleagues read
+ * beside your name, and when it clears itself (Slack's "in a meeting until
+ * 3pm" shape). `message` rides Matrix's own presence `status_msg`, which is
+ * how colleagues' clients already render it with nothing new taught to
+ * them; `until` has nowhere to ride in that spec, so it travels in this
+ * account's own data instead (`setStatus`, below).
+ */
+export interface OwnStatus {
+  readonly message: string;
+  readonly until: string;
 }
 
 /**
@@ -965,6 +1043,23 @@ export interface WorkspaceConnection {
    */
   setNotificationMode(roomId: string, mode: NotificationMode): Promise<void>;
   /**
+   * #297: pins or unpins a conversation — the spec's own `m.favourite`
+   * room tag, this account's own state, so a pin made on one device holds
+   * on every other. Idempotent, the same stance `setNotificationMode`
+   * above already takes. Optional: absent on a minimal test stub that
+   * never exercises pinning (same stance `renewToken` takes).
+   */
+  setPinned?(roomId: string, pinned: boolean): Promise<void>;
+  /**
+   * #297: archives or restores a conversation — the spec's own
+   * `m.lowpriority` room tag. Archiving says nothing about notifications
+   * or membership; it only asks the sidebar to stop showing the room
+   * until something new mentions the member (`RoomSummary.archived`, read
+   * by `ChatList.tsx`). Idempotent, same stance as `setPinned`. Optional,
+   * same reason.
+   */
+  setArchived?(roomId: string, archived: boolean): Promise<void>;
+  /**
    * #310: every keyword the member has asked to always hear about, read
    * from this account's own Matrix content push rules (`duo.keyword.*`,
    * `PushRuleKind.ContentSpecific`) — server-side state, so the list (and
@@ -1080,6 +1175,99 @@ export interface WorkspaceConnection {
    * reasoning as `sendTyping`.
    */
   subscribeSections?(handler: (sections: readonly ChatSection[]) => void): () => void;
+  /**
+   * #287: a colleague's online state, read synchronously off whatever this
+   * account's own sync has already heard about `userId` — no network round
+   * trip, the same stance `readMarker` takes. Null when this account has
+   * never heard any presence for them at all (never shared a room, or a
+   * homeserver with presence turned off) — distinct from "offline", so a
+   * row can show no dot rather than assert an offline fact it doesn't have.
+   * Optional, same reasoning as `sendTyping`.
+   */
+  presenceOf?(userId: string): PresenceState | null;
+  /**
+   * #287: a colleague's own custom status line (their presence's
+   * `status_msg`, set by any of THEIR signed-in devices through `setStatus`
+   * below) — null when they have none right now. Read the same synchronous
+   * way as `presenceOf`. Optional, same reasoning as `sendTyping`.
+   */
+  statusMessageOf?(userId: string): string | null;
+  /**
+   * Hears every presence change this account's sync has heard about, for
+   * any user it shares a room with — one subscription for every row a
+   * caller is watching (a conversation list), rather than one per id. Fires
+   * per change with that user's id, its new reading, and its status
+   * message (`null` when it has none) — a caller wanting every watched id's
+   * CURRENT value up front calls `presenceOf`/`statusMessageOf` first, then
+   * this for what changes after. Optional, same reasoning as `sendTyping`.
+   */
+  subscribePresence?(handler: (userId: string, presence: PresenceState, statusMessage: string | null) => void): () => void;
+  /**
+   * #287: this account's own status, already past-expiry-checked — a
+   * status whose `until` has passed answers null here, exactly as if it had
+   * never been set (the stored record itself, and the presence line it
+   * pushed, are cleared on their own once this device notices — see
+   * `setStatus`). Optional, same reasoning as `sections`.
+   */
+  status?(): Promise<OwnStatus | null>;
+  /**
+   * Sets or clears this account's own status (`null` clears it). Writes the
+   * structured record (`duo.status`, read by `status()` above) and pushes
+   * the line itself onto this account's live presence (`status_msg`) in the
+   * same call, so colleagues see it change at once. Every signed-in device
+   * that is still connected when the end time arrives clears both on its
+   * own; a device that isn't running simply shows the stale line until it
+   * next connects — the same honesty `AwayStatusLine` already keeps about
+   * what this client can and can't promise offline. Optional, same
+   * reasoning as `sections`.
+   */
+  setStatus?(status: OwnStatus | null): Promise<void>;
+  /**
+   * Hears this account's own status change — written here, written by
+   * another signed-in device, or cleared on its own once its end time
+   * arrives — with the next read's answer, already expiry-checked like
+   * `status()`. Optional, same reasoning as `sections`.
+   */
+  subscribeStatus?(handler: (status: OwnStatus | null) => void): () => void;
+  /**
+   * #287 AC3: whether this account's presence is hidden from colleagues —
+   * read from this account's own data (`duo.presence.hidden`), so the
+   * choice holds on every signed-in device, not just this one. Optional,
+   * same reasoning as `sections`.
+   */
+  presenceHidden?(): Promise<boolean>;
+  /**
+   * Sets the choice above and applies it to THIS device's own sync at once
+   * (`setSyncPresence` — the one lever Matrix gives a client over its own
+   * visible presence: every subsequent sync tells the homeserver to treat
+   * this account as offline). Another signed-in device applies the same
+   * choice to itself on hearing the account-data write go by. Optional,
+   * same reasoning as `sections`.
+   */
+  setPresenceHidden?(hidden: boolean): Promise<void>;
+  /**
+   * duo#299: everything the owner has saved for later, read from this
+   * account's data (`duo.later.items`) — the same record every signed-in
+   * device reads, so a save made on one device, with its reminder, shows
+   * the same way on every other. Empty where the account has never saved
+   * one. Optional, same reasoning as `sendTyping`.
+   */
+  later?(): Promise<readonly LaterItem[]>;
+  /**
+   * Replaces the whole set in one write — the same read-modify-write shape
+   * `setSections` already takes here, for the same reason: Later is edited
+   * one item at a time (saved, snoozed, marked done), rarely all at once,
+   * and the last write any device made winning is race-free enough for
+   * that.
+   */
+  setLater?(items: readonly LaterItem[]): Promise<void>;
+  /**
+   * Hears the owner's saved items change on another device — a save, a
+   * snooze, a reminder another device already fired — so nothing here
+   * needs to poll this account's data to notice one. Fires with the next
+   * read's answer, not a diff. Optional, same reasoning as `sendTyping`.
+   */
+  subscribeLater?(handler: (items: readonly LaterItem[]) => void): () => void;
   /** Stops the connection. Idempotent. */
   stop(): Promise<void>;
 }
@@ -1992,6 +2180,100 @@ function readChatSections(client: MatrixClient): readonly ChatSection[] {
   }
 }
 
+/** #287: the event type under which this account's own status (`OwnStatus`) rides — the same account-data door `duo.sidebar.sections` already stands behind. */
+const STATUS_ACCOUNT_DATA_TYPE = "duo.status";
+
+/** #287: whether this account's presence is hidden from colleagues — its own account-data record, so the choice holds on every signed-in device. */
+const PRESENCE_HIDDEN_ACCOUNT_DATA_TYPE = "duo.presence.hidden";
+
+/** Matrix's three presence values, in this product's plain words — anything else (a homeserver speaking a future value this client doesn't know) reads as "offline" rather than throwing. */
+function presenceStateOf(raw: unknown): PresenceState {
+  return raw === "online" ? "online" : raw === "unavailable" ? "away" : "offline";
+}
+
+/** A non-empty presence `status_msg` — Matrix allows an empty string to mean "none set"; this client treats both the same way, as nothing to show. */
+function presenceStatusMessageOf(raw: unknown): string | null {
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+}
+
+/** `duo.status`'s own shape — a shape from before this field existed, or written by some other client entirely, reads as "no status" rather than crashing a row, the same defensive stance `isChatSection` takes. */
+function isOwnStatus(value: unknown): value is OwnStatus {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const { message, until } = value as Record<string, unknown>;
+  return typeof message === "string" && message.trim() !== "" && typeof until === "string" && !Number.isNaN(new Date(until).getTime());
+}
+
+/** This account's own status, exactly as `duo.status` currently holds it — whether or not its `until` has already passed. `status()`/`setStatus`'s own expiry check happens one level up, not here, so the connect-time scheduler below can still tell "stored but stale" apart from "never set". */
+function readStoredStatus(client: MatrixClient): OwnStatus | null {
+  try {
+    const content = client.getAccountData(STATUS_ACCOUNT_DATA_TYPE)?.getContent();
+    return isOwnStatus(content) ? content : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Milliseconds from now until `iso` — zero or negative reads as already past, same as every other "has this end time arrived" check in this app (`isAwayActive` and friends on the daemon side). */
+function msUntil(iso: string): number {
+  return new Date(iso).getTime() - Date.now();
+}
+
+/** This account's own `duo.presence.hidden` choice — absent (an older account, or one that has never hidden its presence) reads as false, the ordinary default. */
+function readPresenceHidden(client: MatrixClient): boolean {
+  try {
+    const content = client.getAccountData(PRESENCE_HIDDEN_ACCOUNT_DATA_TYPE)?.getContent() as { hidden?: unknown } | undefined;
+    return content?.hidden === true;
+  } catch {
+    return false;
+  }
+}
+
+/** duo#299: this account's own saved-for-later items — the event type under which `later()`/`setLater()` read and write `duo.later.items`, the same account-data door `duo.sidebar.sections` already stands behind. */
+const LATER_ACCOUNT_DATA_TYPE = "duo.later.items";
+
+/**
+ * One saved item, read back off the wire as defensively as every other
+ * account-data read in this seam (`isChatSection` above): a shape from
+ * before this field existed, or written by some other client entirely,
+ * reads as "not a saved item" rather than crashing the list.
+ */
+function isLaterItem(value: unknown): value is LaterItem {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const { id, kind, roomId, eventId, senderId, senderName, preview, createdAt, remindAt, done, firedAt } = value as Record<string, unknown>;
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    (kind === "message" || kind === "note") &&
+    typeof roomId === "string" &&
+    roomId.length > 0 &&
+    (eventId === null || typeof eventId === "string") &&
+    (senderId === null || typeof senderId === "string") &&
+    // #296-era rows never had `senderName` — read as "no name" rather than
+    // rejecting the whole item, the same "a shape from before this field
+    // existed reads as absent, not invalid" stance `isChatSection` takes.
+    (senderName === undefined || senderName === null || typeof senderName === "string") &&
+    typeof preview === "string" &&
+    typeof createdAt === "string" &&
+    (remindAt === null || typeof remindAt === "string") &&
+    typeof done === "boolean" &&
+    (firedAt === null || typeof firedAt === "string")
+  );
+}
+
+/** This account's saved items, as `duo.later.items` currently holds them — never thrown for a reader to catch, the same stance every other account-data read here takes. */
+function readLaterItems(client: MatrixClient): readonly LaterItem[] {
+  try {
+    const content = client.getAccountData(LATER_ACCOUNT_DATA_TYPE)?.getContent() as { items?: unknown } | undefined;
+    return Array.isArray(content?.items) ? content.items.filter(isLaterItem) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * #208/#245: the id this room's one-to-one invite names as the DM partner —
  * whichever side of it carries the spec's own `is_direct` flag. `#208`'s
@@ -2247,6 +2529,8 @@ async function projectRoom(
     ...(markedUnreadOf(room) ? { markedUnread: true as const } : {}),
     ...(pinnedEventIds.length > 0 ? { pinnedEventIds } : {}),
     ...(draftText !== "" ? { draft: draftText } : {}),
+    ...(pinnedOf(room) ? { pinned: true as const } : {}),
+    ...(archivedOf(room) ? { archived: true as const } : {}),
   };
 }
 
@@ -2298,6 +2582,28 @@ function draftTextOf(room: MatrixRoom): string {
     return typeof content?.text === "string" ? content.text : "";
   } catch {
     return "";
+  }
+}
+
+/** The spec's own room-tagging names (#297) — read and written as-is, never a client-invented tag. */
+const FAVOURITE_TAG = "m.favourite";
+const LOW_PRIORITY_TAG = "m.lowpriority";
+
+/** #297: whether this member's account has tagged the room `m.favourite` (pinned) — read as defensively as every other account-state flag above, a fixture with no `tags` at all reading as "not pinned" rather than throwing. */
+function pinnedOf(room: MatrixRoom): boolean {
+  try {
+    return Boolean(room.tags?.[FAVOURITE_TAG]);
+  } catch {
+    return false;
+  }
+}
+
+/** #297: whether this member's account has tagged the room `m.lowpriority` (archived) — same defensive read as `pinnedOf`. */
+function archivedOf(room: MatrixRoom): boolean {
+  try {
+    return Boolean(room.tags?.[LOW_PRIORITY_TAG]);
+  } catch {
+    return false;
   }
 }
 
@@ -2577,6 +2883,56 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
   // header explains why), so this is still the only place an unsent
   // message survives between launches.
   void replayPendingOutbox(client, session);
+  // #287: this device's own half of "a status clears itself" — a single
+  // timer, rescheduled from whatever `duo.status` currently says (by this
+  // connect, by `setStatus` below, or by another device's write arriving
+  // over `ClientEvent.AccountData`). Cleared on `stop()`.
+  let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearStatusTimer = (): void => {
+    if (statusTimer !== null) {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+    }
+  };
+  const pushClearedStatus = async (): Promise<void> => {
+    try {
+      await client.setAccountData(STATUS_ACCOUNT_DATA_TYPE, {});
+      await client.setPresence({ presence: "online", status_msg: "" });
+    } catch {
+      // Best effort: a network hiccup here just leaves the stale line a
+      // beat longer — the next successful write, or the next connect's own
+      // scheduling below, still clears it.
+    }
+  };
+  const scheduleStatusTimer = (stored: OwnStatus | null): void => {
+    clearStatusTimer();
+    if (stored === null) {
+      return;
+    }
+    const remaining = msUntil(stored.until);
+    if (remaining <= 0) {
+      void pushClearedStatus();
+      return;
+    }
+    statusTimer = setTimeout(() => void pushClearedStatus(), remaining);
+  };
+  scheduleStatusTimer(readStoredStatus(client));
+  // #287 AC3: this device's own sync tells the homeserver to treat this
+  // account as offline from the very next poll when the account has asked
+  // to be hidden — applied at connect time, and again live if another
+  // device changes the choice (the account-data listener below).
+  void client.setSyncPresence(readPresenceHidden(client) ? SetPresence.Offline : SetPresence.Online);
+  const onAccountData = (event: MatrixEvent): void => {
+    const type = event.getType();
+    if (type === STATUS_ACCOUNT_DATA_TYPE) {
+      const content = event.getContent();
+      scheduleStatusTimer(isOwnStatus(content) ? content : null);
+    } else if (type === PRESENCE_HIDDEN_ACCOUNT_DATA_TYPE) {
+      const content = event.getContent() as { hidden?: unknown } | undefined;
+      void client.setSyncPresence(content?.hidden === true ? SetPresence.Offline : SetPresence.Online);
+    }
+  };
+  client.on(ClientEvent.AccountData, onAccountData);
   return {
     renewToken: (accessToken) => {
       client.setAccessToken(accessToken);
@@ -3312,6 +3668,23 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       await client.deletePushRule("global", PushRuleKind.RoomSpecific, roomId).catch(() => undefined);
       await client.setRoomAccountData(roomId, "duo.notifications", { mode });
     },
+    // #297: the spec's own room-tagging door. Deleting a tag the account
+    // never set is a no-op on the homeserver side, so unpinning (or
+    // unarchiving) an already-plain room costs nothing to ask again.
+    setPinned: async (roomId, pinned) => {
+      if (pinned) {
+        await client.setRoomTag(roomId, FAVOURITE_TAG);
+      } else {
+        await client.deleteRoomTag(roomId, FAVOURITE_TAG).catch(() => undefined);
+      }
+    },
+    setArchived: async (roomId, archived) => {
+      if (archived) {
+        await client.setRoomTag(roomId, LOW_PRIORITY_TAG);
+      } else {
+        await client.deleteRoomTag(roomId, LOW_PRIORITY_TAG).catch(() => undefined);
+      }
+    },
     keywordAlerts: async () => {
       const pushRules = await client.getPushRules().catch(() => undefined);
       return (pushRules?.global.content ?? [])
@@ -3485,16 +3858,25 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       const accountDataListener = (_event: MatrixEvent, room: MatrixRoom): void => {
         handler(room.roomId);
       };
+      // #297: a pin or an archive — this account's own `m.tag` write,
+      // from this device or another — is room news the same way a name
+      // change is: no arrival, just the roomId, so the sidebar re-reads
+      // `pinned`/`archived` on its next projection.
+      const tagsListener = (_event: MatrixEvent, room: MatrixRoom): void => {
+        handler(room.roomId);
+      };
       client.on(RoomEvent.Timeline, listener);
       client.on(RoomEvent.LocalEchoUpdated, localEchoListener);
       client.on(RoomEvent.Receipt, receiptListener);
       client.on(RoomEvent.AccountData, accountDataListener);
+      client.on(RoomEvent.Tags, tagsListener);
       handlers.add(handler);
       return () => {
         client.off(RoomEvent.Timeline, listener);
         client.off(RoomEvent.LocalEchoUpdated, localEchoListener);
         client.off(RoomEvent.Receipt, receiptListener);
         client.off(RoomEvent.AccountData, accountDataListener);
+        client.off(RoomEvent.Tags, tagsListener);
         handlers.delete(handler);
       };
     },
@@ -3547,7 +3929,92 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         client.off(ClientEvent.AccountData, listener);
       };
     },
+    presenceOf: (userId) => {
+      try {
+        const user = client.getUser(userId);
+        return user ? presenceStateOf(user.presence) : null;
+      } catch {
+        return null;
+      }
+    },
+    statusMessageOf: (userId) => {
+      try {
+        return presenceStatusMessageOf(client.getUser(userId)?.presenceStatusMsg);
+      } catch {
+        return null;
+      }
+    },
+    subscribePresence: (handler) => {
+      const listener = (event: MatrixEvent): void => {
+        if (event.getType() !== EventType.Presence) {
+          return;
+        }
+        const userId = event.getSender();
+        if (!userId) {
+          return;
+        }
+        const content = event.getContent() as { presence?: unknown; status_msg?: unknown } | undefined;
+        handler(userId, presenceStateOf(content?.presence), presenceStatusMessageOf(content?.status_msg));
+      };
+      client.on(ClientEvent.Event, listener);
+      return () => {
+        client.off(ClientEvent.Event, listener);
+      };
+    },
+    status: async () => {
+      const stored = readStoredStatus(client);
+      return stored !== null && msUntil(stored.until) > 0 ? stored : null;
+    },
+    setStatus: async (status) => {
+      if (status === null) {
+        clearStatusTimer();
+        await pushClearedStatus();
+        return;
+      }
+      await client.setAccountData(STATUS_ACCOUNT_DATA_TYPE, { message: status.message, until: status.until });
+      await client.setPresence({ presence: "online", status_msg: status.message });
+      scheduleStatusTimer(status);
+    },
+    subscribeStatus: (handler) => {
+      const listener = (event: MatrixEvent): void => {
+        if (event.getType() !== STATUS_ACCOUNT_DATA_TYPE) {
+          return;
+        }
+        const content = event.getContent();
+        const stored = isOwnStatus(content) ? content : null;
+        scheduleStatusTimer(stored);
+        handler(stored !== null && msUntil(stored.until) > 0 ? stored : null);
+      };
+      client.on(ClientEvent.AccountData, listener);
+      return () => {
+        client.off(ClientEvent.AccountData, listener);
+      };
+    },
+    presenceHidden: async () => readPresenceHidden(client),
+    setPresenceHidden: async (hidden) => {
+      await client.setAccountData(PRESENCE_HIDDEN_ACCOUNT_DATA_TYPE, { hidden });
+      await client.setSyncPresence(hidden ? SetPresence.Offline : SetPresence.Online);
+    },
+    later: async () => readLaterItems(client),
+    setLater: async (items) => {
+      await client.setAccountData(LATER_ACCOUNT_DATA_TYPE, { items });
+    },
+    subscribeLater: (handler) => {
+      const listener = (event: MatrixEvent): void => {
+        if (event.getType() !== LATER_ACCOUNT_DATA_TYPE) {
+          return;
+        }
+        const content = event.getContent() as { items?: unknown } | undefined;
+        handler(Array.isArray(content?.items) ? content.items.filter(isLaterItem) : []);
+      };
+      client.on(ClientEvent.AccountData, listener);
+      return () => {
+        client.off(ClientEvent.AccountData, listener);
+      };
+    },
     stop: async () => {
+      clearStatusTimer();
+      client.off(ClientEvent.AccountData, onAccountData);
       await client.stopClient();
       // #288: let go of the cache's database too, so a sign-out's wipe
       // (`forgetWorkspaceCache`) is never left waiting on this connection.
