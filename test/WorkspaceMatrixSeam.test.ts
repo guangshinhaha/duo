@@ -56,6 +56,7 @@ vi.mock("matrix-js-sdk", () => ({
     RoomTopic: "m.room.topic",
     RoomAvatar: "m.room.avatar",
     RoomPowerLevels: "m.room.power_levels",
+    RoomPinnedEvents: "m.room.pinned_events",
     RoomJoinRules: "m.room.join_rules",
     SpaceChild: "m.space.child",
   },
@@ -76,7 +77,7 @@ vi.mock("matrix-js-sdk", () => ({
   },
 }));
 
-import { ClientEvent, createClient, EventStatus, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent, RoomMemberEvent } from "matrix-js-sdk";
+import { ClientEvent, createClient, EventStatus, EventType, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent, RoomMemberEvent } from "matrix-js-sdk";
 import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import { enqueuePendingMessage, outboxKeyOf, pendingMessagesInOrder } from "../src/workspace/outbox.js";
 import { workspaceCacheName } from "../src/workspace/cache.js";
@@ -349,6 +350,8 @@ function summaryRoom(shape: {
   isSpace?: boolean;
   /** #286: each member's current read-up-to event id (`Room.getEventReadUpTo`'s answer) — absent (no receipt at all) unless a test says otherwise. */
   receipts?: Record<string, string>;
+  /** #292: `m.room.pinned_events`' own array, as the room's state carries it — absent (never pinned anything) unless a test says otherwise. */
+  pinnedEventIds?: readonly string[];
 }): Room {
   const lastEventTs = shape.events.length > 0 ? shape.events[shape.events.length - 1]!.getTs() : 0;
   const memberOf = (member: (typeof shape.members)[number]) => ({
@@ -411,6 +414,9 @@ function summaryRoom(shape: {
         }
         if (type === "m.room.power_levels") {
           return shape.powerLevels === undefined ? null : ({ getContent: () => shape.powerLevels } as MatrixEvent);
+        }
+        if (type === "m.room.pinned_events") {
+          return shape.pinnedEventIds === undefined ? null : ({ getContent: () => ({ pinned: shape.pinnedEventIds }) } as MatrixEvent);
         }
         return null;
       },
@@ -1279,7 +1285,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         unread: { notifications: 0, mentions: 0 },
         muted: false,
         notifications: "all", // nothing muted, nothing scoped — the default
-        canEdit: { name: false, topic: false, avatar: false }, // #223: no power_levels state — fails closed
+        canEdit: { name: false, topic: false, avatar: false, pins: false }, // #223/#292: no power_levels state — fails closed
       },
       {
         roomId: "!project-x:workspace.example",
@@ -1298,7 +1304,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         unread: { notifications: 3, mentions: 0 },
         muted: false,
         notifications: "all",
-        canEdit: { name: false, topic: false, avatar: false },
+        canEdit: { name: false, topic: false, avatar: false, pins: false },
       },
       {
         roomId: "!announce:workspace.example",
@@ -1317,7 +1323,7 @@ describe("the rooms projection the conversation list reads (#63)", () => {
         unread: { notifications: 9, mentions: 9 },
         muted: true, // the server's own push rule — true on every device
         notifications: "nothing", // the same rule, read as the mode it is (#69)
-        canEdit: { name: false, topic: false, avatar: false },
+        canEdit: { name: false, topic: false, avatar: false, pins: false },
       },
     ]);
   });
@@ -1884,7 +1890,7 @@ describe("a group conversation's name, topic, picture and edit permissions (#223
     vi.mocked(createClient).mockReturnValue(client);
     const connection = await connectPrepared(client);
     const [moderator] = await connection.rooms();
-    expect(moderator?.canEdit).toEqual({ name: true, topic: true, avatar: false });
+    expect(moderator?.canEdit).toEqual({ name: true, topic: true, avatar: false, pins: true });
 
     // An ordinary member (level 0, the spec's default for an unlisted
     // user) clears none of it — the same room, read from a plain member's
@@ -1906,7 +1912,7 @@ describe("a group conversation's name, topic, picture and edit permissions (#223
     vi.mocked(createClient).mockReturnValue(plainClient);
     const plain = await connectPrepared(plainClient);
     const [member] = await plain.rooms();
-    expect(member?.canEdit).toEqual({ name: false, topic: false, avatar: false });
+    expect(member?.canEdit).toEqual({ name: false, topic: false, avatar: false, pins: false });
   });
 
   it("fails closed when this member's own level is unknown — never guessed as editable", async () => {
@@ -1934,7 +1940,7 @@ describe("a group conversation's name, topic, picture and edit permissions (#223
     vi.mocked(createClient).mockReturnValue(client);
     const connection = await connectPrepared(client);
     const [room] = await connection.rooms();
-    expect(room?.canEdit).toEqual({ name: false, topic: false, avatar: false });
+    expect(room?.canEdit).toEqual({ name: false, topic: false, avatar: false, pins: false });
   });
 
   it("a name/topic/picture change arrives at every subscriber as room news — no arrival, just the roomId (AC2: shows for everyone)", async () => {
@@ -1955,6 +1961,138 @@ describe("a group conversation's name, topic, picture and edit permissions (#223
     );
 
     expect(handler).toHaveBeenCalledWith(room.roomId);
+  });
+});
+
+describe("#292 — pinning a message to the room", () => {
+  it("projects m.room.pinned_events' own array, oldest first, and leaves it off a room that's pinned nothing", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          pinnedEventIds: ["$1000", "$2000"],
+        }),
+        summaryRoom({
+          roomId: "!bare:workspace.example",
+          name: "bare",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [pinned, bare] = await connection.rooms();
+    expect(pinned?.pinnedEventIds).toEqual(["$1000", "$2000"]);
+    expect(bare?.pinnedEventIds).toBeUndefined();
+  });
+
+  it("pin appends this event id to whatever's already pinned, never replacing it, and costs nothing to ask again", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          pinnedEventIds: ["$1000"],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.pin("!r:workspace.example", "$2000");
+    expect(client.sendStateEvent).toHaveBeenCalledWith(
+      "!r:workspace.example",
+      EventType.RoomPinnedEvents,
+      { pinned: ["$1000", "$2000"] },
+      "",
+    );
+
+    vi.mocked(client.sendStateEvent).mockClear();
+    await connection.pin("!r:workspace.example", "$1000");
+    expect(client.sendStateEvent).not.toHaveBeenCalled();
+  });
+
+  it("unpin removes exactly this event id, leaving the rest — and costs nothing when it was never pinned", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          pinnedEventIds: ["$1000", "$2000"],
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.unpin("!r:workspace.example", "$1000");
+    expect(client.sendStateEvent).toHaveBeenCalledWith(
+      "!r:workspace.example",
+      EventType.RoomPinnedEvents,
+      { pinned: ["$2000"] },
+      "",
+    );
+  });
+
+  it("grants pin/unpin exactly where this member's power level clears the gate — the same convention #223 reads for name/topic/avatar", async () => {
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana", powerLevel: 50 }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          powerLevels: { state_default: 50 },
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    const [moderator] = await connection.rooms();
+    expect(moderator?.canEdit.pins).toBe(true);
+
+    const plainClient = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!r:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@ana:workspace.example", name: "ana", powerLevel: 0 }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events: [],
+          powerLevels: { state_default: 50 },
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(plainClient);
+    const plain = await connectPrepared(plainClient);
+    const [member] = await plain.rooms();
+    expect(member?.canEdit.pins).toBe(false);
   });
 });
 

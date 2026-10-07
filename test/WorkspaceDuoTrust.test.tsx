@@ -77,7 +77,7 @@ function rooms(): RoomSummary[] {
       unread: { notifications: 0, mentions: 0 },
       muted: false,
       notifications: "all",
-      canEdit: { name: false, topic: false, avatar: false },
+      canEdit: { name: false, topic: false, avatar: false, pins: false },
     },
   ];
 }
@@ -123,6 +123,8 @@ function fakeConnection(timeline: RoomMessage[], roomList: RoomSummary[] = rooms
     delete: vi.fn(async () => {}),
     react: vi.fn(async () => {}),
     unreact: vi.fn(async () => {}),
+    pin: vi.fn(async () => {}),
+    unpin: vi.fn(async () => {}),
     replyInThread: vi.fn(async () => {}),
     retry: vi.fn(async () => {}),
     cancel: vi.fn(() => {}),

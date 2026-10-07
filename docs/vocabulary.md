@@ -402,7 +402,7 @@ that were derived: the owner never writes a personality, they approve a draft
 of it. Counts in this flow are the daemon's own ("14 questions found", "30 of
 40 records embedded") and a job's failure reads as the daemon worded it.
 
-### edit / delete / react / reply in thread
+### edit / delete / react / reply in thread / pin / forward / select
 
 The message verbs, each an operation on the room the homeserver holds — the
 surface adds no behaviour, it moves the server's own state and renders the
@@ -415,6 +415,20 @@ carries the thread as a preview — whose it was (by the id grammar, like any
 sender), the latest word, the count — and the thread itself is its own
 address, one link away and back. A sent message renders for its sender at
 once, marked as on its way, until the homeserver's record replaces it.
+
+**Pin** puts a message in the room's own pinned list (`m.room.pinned_events`,
+shared state, not a device's or a member's own preference) — visible to
+everyone here in the bar atop the conversation, and gated by the same
+power-level convention a group's name, topic and picture already read
+(§ "a group conversation's name, topic and picture"). **Forward** sends a
+copy of one or several messages to another conversation, each carrying its
+own "Forwarded from {who} in {conversation}" words — the forwarding
+member's own message, never a claim the original sender spoke there, and
+never the original attributed as if it arrived unmediated. **Select** turns
+on selection mode from any message's own actions; while it's on, a checkbox
+stands in for the row's usual verbs, and a toolbar in the composer's place
+offers Forward for everything picked, in the order it was said, never the
+order it was picked.
 
 ### search
 
