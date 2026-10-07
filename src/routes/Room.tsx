@@ -2139,6 +2139,15 @@ function RoomComposer({
     await connection.setLater(addLaterItem(current, { kind: "note", roomId, eventId: null, senderId: null, senderName: null, preview: body, remindAt }));
     editor.current?.clear();
     setText("");
+    // duo#290: the words just left the composer for Later, same as sending
+    // — nothing here to debounce-save a moment from now, and the account's
+    // own cross-device copy must clear with it, or another device would
+    // still show words this one just moved somewhere else.
+    if (draftSaveTimer.current !== null) {
+      clearTimeout(draftSaveTimer.current);
+      draftSaveTimer.current = null;
+    }
+    connection.setDraft?.(roomId, "").catch(() => undefined);
   };
 
   return (
