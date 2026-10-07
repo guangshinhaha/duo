@@ -55,6 +55,8 @@ import type {
   DraftPipelineResult,
   DraftRecord,
   DuoKnowledge,
+  KnowledgeRecord,
+  KnowledgeRecordsPage,
   TopicCoverageReport,
   DuoRequest,
   ExcludedEvidence,
@@ -208,6 +210,12 @@ export const queryKeys = {
   // exclusion is made or undone, so invalidating one must never imply the
   // other reads stale.
   excludedEvidence: ["knowledge", "evidence", "excluded"] as const,
+  // digital-duo#286 (duo#273): the Knows tab's record browser — keyed by
+  // its filters, so switching source/q is a different paged query, not a
+  // refetch of the same one (same reasoning `mirrorVoiceTrend`'s bucket
+  // key already gives). Under the ["knowledge"] root so a browse refresh
+  // and the summary's own refresh stay conceptually together.
+  knowledgeRecords: (opts: { source?: string; q?: string } = {}) => ["knowledge", "records", opts] as const,
   // duo#278: the Privacy settings page's per-source switch, under the
   // ["knowledge"] root so a Knows-tab refresh of bySource and this stay
   // conceptually together even though they're separate queries.
@@ -1125,6 +1133,9 @@ export function useExcludeEvidence(api: DuoApiConfig) {
       apiRequest<{ excluded: true }>(api, `/knowledge/evidence/${encodeURIComponent(recordId)}/exclude`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.excludedEvidence });
+      // digital-duo#286: this is also the record browser's own "Remove" —
+      // one exclusion mechanism, two surfaces reading it back.
+      queryClient.invalidateQueries({ queryKey: ["knowledge", "records"] });
     },
   });
 }
@@ -1137,6 +1148,51 @@ export function useRestoreEvidence(api: DuoApiConfig) {
       apiRequest<{ excluded: false }>(api, `/knowledge/evidence/${encodeURIComponent(recordId)}/restore`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.excludedEvidence });
+      queryClient.invalidateQueries({ queryKey: ["knowledge", "records"] });
+    },
+  });
+}
+
+/**
+ * `GET /knowledge/records` (digital-duo#286): the Knows tab's record
+ * browser, paged newest-first and optionally narrowed to one `source`
+ * and/or a full-text `q` (duo#273 AC4's "search across everything the duo
+ * knows", scoped to the raw corpus this screen browses). Same cursor
+ * shape as `useEscalationHistory`: the next page's cursor is the daemon's
+ * own `nextCursor`, and a page shorter than `limit` is the end.
+ */
+export const KNOWLEDGE_RECORDS_PAGE_SIZE = 20;
+
+export function useKnowledgeRecords(api: DuoApiConfig, opts: { source?: string; q?: string } = {}) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.knowledgeRecords(opts),
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams();
+      if (opts.source !== undefined) params.set("source", opts.source);
+      if (opts.q !== undefined && opts.q.trim().length > 0) params.set("q", opts.q);
+      params.set("limit", String(KNOWLEDGE_RECORDS_PAGE_SIZE));
+      if (pageParam !== 0) params.set("cursor", String(pageParam));
+      return apiRequest<KnowledgeRecordsPage>(api, `/knowledge/records?${params.toString()}`);
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+  });
+}
+
+/**
+ * `PUT /knowledge/records/:id` (digital-duo#286): corrects a record's own
+ * text in place. Invalidates the browser's pages (by the `["knowledge",
+ * "records"]` prefix, every filter combination at once) rather than
+ * splicing the cache by hand — same "re-read the daemon's own listing"
+ * discipline `useEditPinnedAnswer` already uses.
+ */
+export function useEditKnowledgeRecord(api: DuoApiConfig) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, text }: { id: string; text: string }) =>
+      apiRequest<KnowledgeRecord>(api, `/knowledge/records/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ text }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["knowledge", "records"] });
     },
   });
 }

@@ -7,6 +7,7 @@ import { RouteError } from "../components/RouteError.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { ChannelList, isChannelList } from "./ChannelList.js";
 import { CoverageSummary } from "./CoverageSummary.js";
+import { KnowledgeRecordBrowser } from "./KnowledgeRecordBrowser.js";
 import { corpusSentence, isDuoKnowledgeShape, lastImportSentence } from "./knowledgeWords.js";
 
 const formatDate = (iso: string | null): string => (iso ? new Date(iso).toLocaleDateString() : "—");
@@ -88,6 +89,10 @@ function KnowsBody({ api, knowledge }: { api: DuoApiConfig; knowledge: DuoKnowle
         <a className="inline-flex min-h-11 items-center self-start underline" href="#onboarding">
           Import more history
         </a>
+      </Section>
+
+      <Section testId="knows-browse" title="Browse what it has read">
+        <KnowledgeRecordBrowser api={api} sources={Object.keys(knowledge.records.bySource)} />
       </Section>
 
       <Section testId="knows-removed" title="Removed from citation">
