@@ -268,7 +268,7 @@ function SearchAnswer({
     <div className="mb-3" data-testid="message-search-answer">
       <DuoMessage>{result.text}</DuoMessage>
       {cited.length > 0 && (
-        <ul className="mt-1 flex flex-col gap-0.5 pl-1" aria-label="Sources">
+        <ul className="mt-1 flex flex-col gap-1 pl-1" aria-label="Sources">
           {cited.map((hit) => {
             const room = rooms.find((candidate) => candidate.roomId === hit.roomId);
             const title = room ? titleOf(room) : hit.roomId;
