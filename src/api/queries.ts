@@ -65,6 +65,8 @@ import type {
   ExcludedEvidence,
   ExplainResult,
   FactCheckResult,
+  FollowUpSuggestions,
+  StarterSuggestions,
   RoomOffTheRecord,
   RewriteInstruction,
   RewriteResult,
@@ -792,6 +794,37 @@ export function useDailyBrief(api: DuoApiConfig | null, since?: string) {
     queryKey: ["daily-brief", since ?? null],
     queryFn: () => apiRequest<DailyBrief>(api!, since ? `/daily-brief?since=${encodeURIComponent(since)}` : "/daily-brief"),
     enabled: api !== null,
+  });
+}
+
+/**
+ * duo#305: `GET /suggestions/starters` — up to a handful of things to ask
+ * an empty "Your duo". A plain read, same as `useDailyBrief` above: no
+ * mutation anywhere invalidates it, so it is only ever refetched on its
+ * own terms (a fresh mount, a refocus).
+ */
+export function useStarterSuggestions(api: DuoApiConfig | null) {
+  return useQuery({
+    queryKey: ["suggestions", "starters"],
+    queryFn: () => apiRequest<StarterSuggestions>(api!, "/suggestions/starters"),
+    enabled: api !== null,
+  });
+}
+
+/**
+ * duo#305: `POST /suggestions/follow-ups` — up to three follow-ups for one
+ * self-chat turn (the question just asked and the answer that came back).
+ * Writes nothing, same as `useExplainMessage`/`useFactCheck` above; the
+ * route itself never 503s (follow-ups.ts's own doc comment), so callers
+ * only ever see an empty array or a real list, never an error state to
+ * render.
+ */
+export function useFollowUpSuggestions(api: DuoApiConfig | null) {
+  return useMutation({
+    mutationFn: (input: { question: string; answer: string }) =>
+      api
+        ? apiRequest<FollowUpSuggestions>(api, "/suggestions/follow-ups", { method: "POST", body: JSON.stringify(input) })
+        : Promise.reject(new Error("No duo is paired to suggest follow-ups with.")),
   });
 }
 

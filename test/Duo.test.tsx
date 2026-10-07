@@ -7,6 +7,7 @@ import type { DraftRecord } from "../src/api/types.js";
 import type { DuoApiConfig } from "../src/api/client.js";
 import { composerText, setComposer } from "./composerHelpers.js";
 import { sseDraftResponse } from "./sseHelpers.js";
+import { writeSuggestionChipsEnabled } from "../src/suggestionsPrefs.js";
 
 /*
  * Your duo, as a chat (#144): one continuous conversation — what you asked
@@ -93,6 +94,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // duo#305: a test that turns suggestion chips off (`suggestionsPrefs.ts`,
+  // localStorage-backed) must not leak that choice into the next test.
+  localStorage.clear();
 });
 
 describe("#144 — your duo is one continuous chat", () => {
@@ -214,6 +218,118 @@ describe("#144 — your duo is one continuous chat", () => {
   });
 });
 
+describe("duo#306 — a settled duo message still carries a real action (Why?)", () => {
+  it("offers Why? on a settled turn, not just a pending one", async () => {
+    renderWithClient(<Duo api={api} />);
+    await screen.findByTestId("thread-group");
+    const kept = turnFor("sent as drafted");
+    expect(within(kept).getByTestId("tray-why")).toBeInTheDocument();
+  });
+
+  it("never offers Send or Edit on a settled turn — only the one action left to take, understanding why", async () => {
+    renderWithClient(<Duo api={api} />);
+    await screen.findByTestId("thread-group");
+    const kept = turnFor("sent as drafted");
+    expect(within(kept).queryByRole("button", { name: "Send" })).toBeNull();
+    expect(within(kept).queryByRole("button", { name: "Keep" })).toBeNull();
+    expect(within(kept).queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+});
+
+describe("duo#305 — suggested questions and follow-ups", () => {
+  it("AC1: an empty chat offers starters from GET /suggestions/starters, and tapping one asks it", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (href.endsWith("/suggestions/starters")) {
+        return new Response(JSON.stringify({ starters: ["What do you know about Leave policy?"] }), { status: 200 });
+      }
+      if (init?.method === "POST" && href.endsWith("/drafts/stream")) {
+        return sseDraftResponse({ kind: "draft", draftId: "new", text: "Five days a quarter.", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } });
+      }
+      return pagedResponse(href, []);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await screen.findByTestId("duo-empty");
+    const chip = await screen.findByRole("button", { name: "What do you know about Leave policy?" });
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("http://test/drafts/stream", expect.objectContaining({ method: "POST" })));
+    const sent = JSON.parse(
+      (fetchMock.mock.calls.find(([href, init]) => (init as RequestInit | undefined)?.method === "POST" && String(href).endsWith("/drafts/stream"))?.[1] as {
+        body: string;
+      }).body,
+    ) as { question: string };
+    expect(sent.question).toBe("What do you know about Leave policy?");
+  });
+
+  it("AC3: turning suggestion chips off hides starters, even when the daemon offers them", async () => {
+    writeSuggestionChipsEnabled(false);
+    const fetchMock = vi.fn(async (url: string) => {
+      const href = String(url);
+      if (href.endsWith("/suggestions/starters")) {
+        return new Response(JSON.stringify({ starters: ["What do you know about Leave policy?"] }), { status: 200 });
+      }
+      return pagedResponse(href, []);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await screen.findByTestId("duo-empty");
+    expect(screen.queryByTestId("starter-chips")).toBeNull();
+  });
+
+  it("AC2: the latest settled answer offers up to three follow-ups from POST /suggestions/follow-ups, and tapping one asks it", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (init?.method === "POST" && href.endsWith("/suggestions/follow-ups")) {
+        return new Response(JSON.stringify({ followUps: ["Does it roll over?"] }), { status: 200 });
+      }
+      if (init?.method === "POST" && href.endsWith("/drafts/stream")) {
+        return sseDraftResponse({ kind: "draft", draftId: "new", text: "No, it doesn't roll over.", sources: [], confidence: { score: 0.9, passesThreshold: true, threshold: 0.55 } });
+      }
+      return pagedResponse(href, drafts);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await screen.findByTestId("thread-group");
+    const chip = await screen.findByRole("button", { name: "Does it roll over?" });
+    // The latest turn only — not every settled answer in the history.
+    expect(screen.queryAllByTestId("follow-up-chips")).toHaveLength(1);
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("http://test/drafts/stream", expect.objectContaining({ method: "POST" })));
+  });
+
+  it("AC3: turning suggestion chips off hides follow-ups too", async () => {
+    writeSuggestionChipsEnabled(false);
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (init?.method === "POST" && href.endsWith("/suggestions/follow-ups")) {
+        return new Response(JSON.stringify({ followUps: ["Does it roll over?"] }), { status: 200 });
+      }
+      return pagedResponse(href, drafts);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<Duo api={api} />);
+    await screen.findByTestId("thread-group");
+    expect(screen.queryByTestId("follow-up-chips")).toBeNull();
+    expect(fetchMock.mock.calls.some(([href]) => String(href).endsWith("/suggestions/follow-ups"))).toBe(false);
+  });
+
+  it("never offers follow-ups for an escalation — passed-on or refused, neither is an answer to follow up on", async () => {
+    stubDraftsResponse([
+      draftFor("esc", { escalated: true, draftText: null, escalationReason: "below confidence threshold", outcome: "escalation_answered" }),
+    ]);
+    renderWithClient(<Duo api={api} />);
+    await screen.findByTestId("thread-group");
+    expect(screen.queryByTestId("follow-up-chips")).toBeNull();
+  });
+});
+
 describe("Duo — asking (issue #8)", () => {
   it("submits a question to POST /drafts, clears the input on success, and the new turn reads back", async () => {
     let posts = 0;
@@ -237,7 +353,14 @@ describe("Duo — asking (issue #8)", () => {
     fireEvent.click(screen.getByTestId("composer-submit"));
 
     await waitFor(() => expect(posts).toBe(1));
-    const sent = JSON.parse((fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "POST")?.[1] as { body: string }).body) as {
+    // duo#305: FollowUpChips may also POST /suggestions/follow-ups for the
+    // existing last turn on mount — filter to the stream call specifically,
+    // the way `posts` above already does, rather than "the first POST".
+    const sent = JSON.parse(
+      (fetchMock.mock.calls.find(([url, init]) => (init as RequestInit | undefined)?.method === "POST" && String(url).endsWith("/drafts/stream"))?.[1] as {
+        body: string;
+      }).body,
+    ) as {
       question: string;
       threadContext: string | null;
     };

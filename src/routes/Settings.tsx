@@ -30,6 +30,7 @@ import { readUrlPreviewPref, writeUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { readFactCheckPref, writeFactCheckPref } from "../factCheckPrefs.js";
 import { readCatchUpEnabled, writeCatchUpEnabled } from "../catchUpPrefs.js";
 import { readDailyBriefEnabled, writeDailyBriefEnabled } from "../dailyBriefPrefs.js";
+import { readSuggestionChipsEnabled, writeSuggestionChipsEnabled } from "../suggestionsPrefs.js";
 import { readTypingPref, writeTypingPref } from "../typingPrefs.js";
 import { readPrivateReceiptsPref, writePrivateReceiptsPref } from "../readReceiptPrefs.js";
 import {
@@ -169,6 +170,7 @@ export function Settings({
   const [catchUpEnabled, setCatchUpEnabled] = useState<boolean>(readCatchUpEnabled);
   // duo#282: on by default, same stance as the catch-up switch above.
   const [dailyBriefEnabled, setDailyBriefEnabled] = useState<boolean>(readDailyBriefEnabled);
+  const [suggestionChipsEnabled, setSuggestionChipsEnabled] = useState<boolean>(readSuggestionChipsEnabled);
   const [sendTyping, setSendTyping] = useState<boolean>(readTypingPref);
   // #286: off (ordinary, visible receipts — this app's behavior since #63)
   // until this member turns it on — same "their own call, on their own
@@ -473,6 +475,29 @@ export function Settings({
           type="button"
         >
           {dailyBriefEnabled ? "Turn off the daily brief" : "Turn on the daily brief"}
+        </button>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-suggestion-chips">
+        <h2 className="type-heading">Suggested questions</h2>
+        {/* duo#305: starters for an empty Your duo, and up to three
+            follow-ups after an answer — one switch for both, the same
+            affordance offered at two moments. On by default. */}
+        <p className="type-provenance text-[var(--muted)]">
+          Your duo suggests things to ask when the chat is empty, and up to three follow-ups after it answers. On by default.
+        </p>
+        <button
+          aria-pressed={suggestionChipsEnabled}
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+          data-testid="settings-suggestion-chips-toggle"
+          onClick={() => {
+            const next = !suggestionChipsEnabled;
+            writeSuggestionChipsEnabled(next);
+            setSuggestionChipsEnabled(next);
+          }}
+          type="button"
+        >
+          {suggestionChipsEnabled ? "Turn off suggested questions" : "Turn on suggested questions"}
         </button>
       </section>
 

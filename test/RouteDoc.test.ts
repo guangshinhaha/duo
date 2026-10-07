@@ -77,6 +77,9 @@ const SERVED: [method: string, path: string][] = [
   // digital-duo#279 (duo#280/#281): landed on origin/main's src/serve/server.ts.
   ["POST", "/compose/catch-up"],
   ["GET", "/daily-brief"],
+  // duo#305: starters and follow-up suggestions — landed alongside this client PR.
+  ["GET", "/suggestions/starters"],
+  ["POST", "/suggestions/follow-ups"],
   ["POST", "/ask"],
   ["POST", "/drafts/:id/outcome"],
   ["POST", "/drafts/:id/answer"],
