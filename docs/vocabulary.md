@@ -247,6 +247,20 @@ evidence itself stays on the owner's machine. A passed-on question is
 *waiting on {owner}* until {owner} speaks after it, then *replied* — the
 answer itself is {owner}'s own message, a person's, never the duo's.
 
+### later
+
+What the owner saved to come back to (duo#299) — a message, theirs or
+someone else's, or the words they were writing instead of sending them. Held
+in the **Later** list (`#later`, ⌘L), each with an optional reminder; a row
+is never "a draft" even when it holds the owner's own unsent words — that
+noun stays the duo's alone (see **draft**, above) — it is simply what was
+saved, shown as "Your note" when it has no sender to attribute. A saved item
+is marked **done** (it stays in the record, filtered from the default view,
+the same stance **dismiss** takes) or **snoozed** (its reminder moved).
+Saving never removes a message from its conversation and never imports it
+anywhere a duo can read it — Later is the owner's own list, on their own
+account, like their sidebar's folders.
+
 ## The verbs
 
 One action, one name, everywhere it appears. If a control and a sentence
@@ -374,6 +388,15 @@ until the member clears it. The rule holds the duo's own acts too — an
 escalation waits like a mention — because holding is not silencing; the
 per-conversation standings are what never apply to the duo's acts, since
 those belong to no conversation.
+
+### save (to Later)
+
+Keeping a message or the composer's own unsent words in the owner's **Later**
+list (duo#299), with or without a reminder — "Save to Later" in a message's
+own action menu (beside Forward, Pin and Explain), and the composer's own
+button for words not yet sent. Never "bookmark" (there is no such noun
+elsewhere here) or "draft" (reserved for the duo's own artifact, above).
+**Done** closes a saved item out; **snooze** moves its reminder.
 
 ### share
 

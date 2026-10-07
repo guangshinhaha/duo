@@ -3851,6 +3851,114 @@ describe("#292 — forward, pin and select", () => {
   });
 });
 
+describe("duo#299 — Save to Later", () => {
+  /** Stands in for `matrix.ts`'s own `duo.later.items` account data — a plain in-memory array `later`/`setLater` read and write, the same round trip the real seam does. */
+  function withLater(fake: ReturnType<typeof fakeConnection>) {
+    const items: unknown[] = [];
+    fake.connection.later = vi.fn(async () => [...items] as never);
+    fake.connection.setLater = vi.fn(async (next) => {
+      items.length = 0;
+      items.push(...(next as unknown[]));
+    });
+    return items;
+  }
+
+  it("saves a message with no reminder from its own action, and it shows up in the Later list", async () => {
+    stubDesktop();
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    withLater(fake);
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("Refunds within 30 days, full amount.")).getByTestId("save-later-action"));
+    const dialog = await screen.findByTestId("save-later-dialog");
+    expect(dialog).toHaveTextContent("Refunds within 30 days, full amount.");
+    fireEvent.click(within(dialog).getByTestId("save-later-no-reminder"));
+
+    await waitFor(() =>
+      expect(fake.connection.setLater).toHaveBeenCalledWith([
+        expect.objectContaining({
+          kind: "message",
+          roomId: "!project-x:workspace.example",
+          eventId: "$2",
+          preview: "Refunds within 30 days, full amount.",
+          remindAt: null,
+          done: false,
+        }),
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByTestId("save-later-dialog")).toBeNull());
+
+    navigate("#later");
+    const item = await screen.findByTestId("later-item");
+    expect(item).toHaveTextContent("Refunds within 30 days, full amount.");
+  });
+
+  it("saves with a reminder, and Done clears it from the default list", async () => {
+    stubDesktop();
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    withLater(fake);
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    fireEvent.click(within(messageRow("what's our refund policy?")).getByTestId("save-later-action"));
+    const dialog = await screen.findByTestId("save-later-dialog");
+    fireEvent.click(within(dialog).getByTestId("save-later-in-1h"));
+    await waitFor(() => expect(fake.connection.setLater).toHaveBeenCalled());
+
+    navigate("#later");
+    const item = await screen.findByTestId("later-item");
+    expect(item).toHaveTextContent("Reminds");
+
+    fireEvent.click(within(item).getByTestId("later-done"));
+    await waitFor(() => expect(screen.queryByTestId("later-item")).toBeNull());
+    expect(await screen.findByTestId("later-empty")).toBeInTheDocument();
+  });
+
+  it("⌘L opens Later", async () => {
+    stubDesktop();
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    withLater(fake);
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    await screen.findByTestId("conversations-list");
+
+    fireEvent.keyDown(window, { key: "l", metaKey: true });
+    expect(await screen.findByTestId("later-page")).toBeInTheDocument();
+  });
+
+  it("saves the composer's own unsent words from its own button, and clears the composer", async () => {
+    stubDesktop();
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    withLater(fake);
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "a reply I'm not ready to send");
+    fireEvent.click(screen.getByTestId("composer-save-later"));
+    const dialog = await screen.findByTestId("save-later-dialog");
+    fireEvent.click(within(dialog).getByTestId("save-later-no-reminder"));
+
+    await waitFor(() =>
+      expect(fake.connection.setLater).toHaveBeenCalledWith([
+        expect.objectContaining({ kind: "note", eventId: null, senderId: null, preview: "a reply I'm not ready to send" }),
+      ]),
+    );
+    await waitFor(() => expect(composerText(field)).toBe(""));
+  });
+});
+
 /*
  * #244: Enter sends, Shift+Enter makes a new line — the shared editor's
  * own key handling (#248's `ChatEditor`, ChatEditor.test.tsx) wired into
