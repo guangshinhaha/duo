@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Paperclip, X } from "lucide-react";
+import { Bookmark, Paperclip, X } from "lucide-react";
 import { RoomDuoAnswer } from "../components/RoomDuoAnswer.js";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
@@ -45,6 +45,8 @@ import { EmojiPicker } from "../components/EmojiPicker.js";
 import { readReactionRecents, recordReactionRecent } from "../reactionRecents.js";
 import { PinnedBar } from "../components/PinnedMessages.js";
 import { ForwardMessageDialog } from "../components/ForwardMessageDialog.js";
+import { SaveToLaterDialog } from "../components/SaveToLaterDialog.js";
+import { addLaterItem, useLaterItems } from "../shell/later.js";
 
 /**
  * #62 + #63 + #64: one conversation — the timeline, the message verbs, and
@@ -492,6 +494,13 @@ export function Room({
   // is closed. One message from a row's own "Forward" action, several from
   // the selection toolbar below.
   const [forwardTargets, setForwardTargets] = useState<readonly RoomMessage[] | null>(null);
+  // duo#299: the message a "Save to Later" is on its way for — null when
+  // the dialog is closed. `later` is this account's own saved-items record
+  // (`duo.later.items`), the same account-data door `m.direct` and
+  // `duo.sidebar.sections` already stand behind — never daemon state, so
+  // this works with no duo paired.
+  const [saveLaterTarget, setSaveLaterTarget] = useState<RoomMessage | null>(null);
+  const later = useLaterItems(connection);
   // #292: a selection mode toggled from a row's own "Select" action — once
   // on, rows show a checkbox instead of their usual verbs, and a toolbar
   // replaces the composer (`at === undefined` only — a search window has
@@ -858,6 +867,30 @@ export function Room({
     cancelSelection();
   };
 
+  // duo#299: saves a snapshot of `saveLaterTarget` — optimistic, the same
+  // shape `ChatList.tsx`'s `updateSections` already takes: the list (and
+  // the nav chip's count) reads the new item at once, and the write lands
+  // right after. Resolves rather than throwing either way, so the dialog
+  // closes immediately — nothing here asks the owner to wait on the
+  // workspace for a save this unimportant to fail loudly over.
+  const saveMessageToLater = async (remindAt: string | null): Promise<void> => {
+    const target = saveLaterTarget;
+    if (target === null) {
+      return;
+    }
+    later.update(
+      addLaterItem(later.items, {
+        kind: "message",
+        roomId,
+        eventId: target.eventId,
+        senderId: target.senderId,
+        senderName: target.senderName,
+        preview: target.file !== undefined ? target.file.name : target.body,
+        remindAt,
+      }),
+    );
+  };
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-[var(--edge)] px-4 py-2" data-testid="room-header">
@@ -986,6 +1019,7 @@ export function Room({
                         pinned={pinnedEventIds.includes(message.eventId)}
                         canPin={canPin}
                         onForward={(target) => setForwardTargets([target])}
+                        onSaveLater={(target) => setSaveLaterTarget(target)}
                         selecting={selecting}
                         selected={selectedIds.has(message.eventId)}
                         onToggleSelect={toggleSelect}
@@ -1154,6 +1188,16 @@ export function Room({
           }
         }}
         open={forwardTargets !== null}
+      />
+      <SaveToLaterDialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setSaveLaterTarget(null);
+          }
+        }}
+        onSave={saveMessageToLater}
+        open={saveLaterTarget !== null}
+        preview={saveLaterTarget === null ? "" : saveLaterTarget.file !== undefined ? saveLaterTarget.file.name : plainPreview(saveLaterTarget.body)}
       />
     </div>
   );
@@ -1420,6 +1464,7 @@ export function RoomEntry({
   pinned = false,
   canPin = false,
   onForward,
+  onSaveLater,
   selecting = false,
   selected = false,
   onToggleSelect,
@@ -1459,6 +1504,8 @@ export function RoomEntry({
   canPin?: boolean;
   /** #292: forwards this one message — opens `Room`'s own room-picker dialog. `undefined` hides the action (there is none without a conversation list to forward into). */
   onForward?: (message: RoomMessage) => void;
+  /** duo#299: saves this message to Later, with an optional reminder — opens `Room`'s own dialog, same shape as `onForward`. `undefined` hides the action (there is no `WorkspaceConnection` to save against, which never actually happens — every caller has one — but keeps the same optional convention every message action here follows). */
+  onSaveLater?: (message: RoomMessage) => void;
   /** #292: whether the conversation is in selection mode — a checkbox stands in for this row's usual verbs while it's on. */
   selecting?: boolean;
   /** #292: whether THIS message is one of the current selection. */
@@ -1593,6 +1640,14 @@ export function RoomEntry({
     // Explain — forwarding someone else's words is the whole point.
     ...(onForward && !message.redacted && !message.pending && !message.failed
       ? [{ key: "forward", label: "Forward", disabled: busy, testId: "forward-action", onClick: () => onForward(message) }]
+      : []),
+    // duo#299: saving a snapshot of this message to Later, with an
+    // optional reminder — never a pending/failed echo (nothing stable to
+    // snapshot yet), never a redacted row (the words are gone). Offered on
+    // every message, like Explain and Forward: saving someone else's words
+    // for later is as much the point as saving the owner's own.
+    ...(onSaveLater && !message.redacted && !message.pending && !message.failed
+      ? [{ key: "save-later", label: "Save to Later", disabled: busy, testId: "save-later-action", onClick: () => onSaveLater(message) }]
       : []),
     // #292: pin/unpin — gated by this member's own power level
     // (`canPin`, #223's own convention), same eligibility as Forward.
@@ -1921,6 +1976,10 @@ function RoomComposer({
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // duo#299: "Save to Later" for the words sitting in this composer right
+  // now — the owner chose not to send them (yet). Open only while there's
+  // something to save; `saveLaterOpen` gates the dialog, not the button.
+  const [saveLaterOpen, setSaveLaterOpen] = useState(false);
   const trimmed = text.trim();
   const disabled = (trimmed.length === 0 && attachments.length === 0) || pending;
   const duos = members.filter((member) => isDuoUserId(member.userId));
@@ -1979,6 +2038,25 @@ function RoomComposer({
         setError(refusals.join(" "));
       }
     })();
+  };
+
+  // duo#299: saves the composer's own unsent text — a direct read-modify-
+  // write on the account's own record (`connection.later`/`setLater`),
+  // the same door `Room`'s message-save uses, just reached straight from
+  // here rather than through that route's shared `useLaterItems` cache:
+  // this composer has no other reason to hold that whole list in memory.
+  // A connection with neither door (a fixture built before duo#299) throws,
+  // which the dialog turns into its own inline error — the same "degrade,
+  // don't throw past the UI" stance `shell/later.ts` takes everywhere else.
+  const saveComposerToLater = async (remindAt: string | null): Promise<void> => {
+    const body = text.trim();
+    if (body === "" || !connection.later || !connection.setLater) {
+      throw new Error("Nothing here can be saved.");
+    }
+    const current = await connection.later();
+    await connection.setLater(addLaterItem(current, { kind: "note", roomId, eventId: null, senderId: null, senderName: null, preview: body, remindAt }));
+    editor.current?.clear();
+    setText("");
   };
 
   return (
@@ -2172,6 +2250,18 @@ function RoomComposer({
         >
           <Paperclip aria-label="Attach files" className="size-4" />
         </button>
+        {/* duo#299: saves these words instead of sending them — only
+            meaningful once there's something typed. */}
+        <button
+          aria-label="Save to Later"
+          className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--muted)] disabled:opacity-40"
+          data-testid="composer-save-later"
+          disabled={pending || trimmed.length === 0}
+          onClick={() => setSaveLaterOpen(true)}
+          type="button"
+        >
+          <Bookmark aria-label="Save to Later" size={16} />
+        </button>
         {/* #263: polishes the owner's OWN typed text — disabled rather than
             hidden with no paired duo, so the control's presence doesn't
             itself signal whether a duo is paired. */}
@@ -2246,6 +2336,7 @@ function RoomComposer({
           {error}
         </p>
       )}
+      <SaveToLaterDialog onOpenChange={setSaveLaterOpen} onSave={saveComposerToLater} open={saveLaterOpen} preview={trimmed} />
     </form>
   );
 }
