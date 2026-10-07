@@ -57,6 +57,7 @@ import {
   watchSections,
 } from "./sections.js";
 import { bridgedHref, bridgedTitle, useBridgedChats, type BridgedChat } from "./bridged.js";
+import { usePeoplePresence } from "./usePeoplePresence.js";
 import { SourceBadge } from "./BridgedChat.js";
 import { useWaitingItems, waitingWords, swipeActionsOf, type WaitingItem } from "./waiting.js";
 import { useMentions } from "./mentions.js";
@@ -87,24 +88,45 @@ function hueOf(seed: string): number {
   return hash % 360;
 }
 
+/** #287: the hairline's semantic colours, reused here for the same reason they exist on a trust reading — each reads as a judgement at a glance, never as decoration. Offline/unknown gets no dot at all (P3: quiet until it matters). */
+const PRESENCE_DOT_COLOUR: Record<"online" | "away", string> = { online: "var(--confident)", away: "var(--escalate)" };
+
 /**
  * A row's picture. A duo — yours or a colleague's — is always the mark and
  * never initials, so a duo cannot be mistaken for a person in the list
  * (Hairline P1); a person is their initials on a coloured tile (#208: a
  * stable colour per `seed` stands in for a picture — uploading one is out
- * of scope), a group or channel a `#`.
+ * of scope), a group or channel a `#`. #287: a person's tile carries a
+ * small presence dot at its corner when this account knows their state —
+ * nothing drawn for "offline/unknown" (indistinguishable from here, and
+ * the common case), so the dot only ever says something worth noticing.
+ * Purely decorative (the avatar's whole span is already `aria-hidden`):
+ * the accessible equivalent is the row's own text badge, beside the title.
  */
-function Avatar({ kind, title, seed }: { kind: "duo" | "person" | "group"; title: string; seed?: string }) {
+function Avatar({ kind, title, seed, presence }: { kind: "duo" | "person" | "group"; title: string; seed?: string; presence?: "online" | "away" | "offline" | null }) {
   const hue = kind === "person" ? hueOf(seed ?? title) : null;
+  const dotColour = presence === "online" || presence === "away" ? PRESENCE_DOT_COLOUR[presence] : null;
   return (
-    <span
-      aria-hidden="true"
-      className="inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface-2)] type-identifier text-[var(--muted)]"
-      data-kind={kind}
-      data-testid="chat-avatar"
-      style={hue === null ? undefined : { background: `hsl(${hue} 55% 90%)`, color: `hsl(${hue} 45% 32%)` }}
-    >
-      {kind === "duo" ? <Mark /> : kind === "group" ? "#" : initialsOf(title)}
+    <span aria-hidden="true" className="relative inline-flex shrink-0" data-testid="chat-avatar-wrap">
+      <span
+        className="inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--r-md)] border border-[var(--edge)] bg-[var(--surface-2)] type-identifier text-[var(--muted)]"
+        data-kind={kind}
+        data-testid="chat-avatar"
+        style={hue === null ? undefined : { background: `hsl(${hue} 55% 90%)`, color: `hsl(${hue} 45% 32%)` }}
+      >
+        {kind === "duo" ? <Mark /> : kind === "group" ? "#" : initialsOf(title)}
+      </span>
+      {dotColour !== null && (
+        <span
+          className="absolute size-2.5 rounded-full border-2 border-[var(--surface)]"
+          data-presence={presence}
+          data-testid="chat-avatar-presence"
+          // Positioned in style, not Tailwind's inset utilities: a 2px hang
+          // off the tile's corner is the hairline's own stroke width
+          // (Part 4), not a spacing choice the 4px scale governs.
+          style={{ background: dotColour, bottom: "-2px", right: "-2px" }}
+        />
+      )}
     </span>
   );
 }
@@ -527,6 +549,20 @@ export function ChatList({
   const bridgedWaiting = useMemo(() => new Map(waiting.items.filter((item) => item.kind === "bridged").map((item) => [item.key, item])), [waiting.items]);
   const roomRows = rooms.data ?? [];
   const roomsById = useMemo(() => new Map(roomRows.map((room) => [room.roomId, room])), [roomRows]);
+  // #287: the one other person in each direct row — never a colleague's
+  // duo (always-on, not a presence concept) — watched for online/away/
+  // offline together, one subscription for the whole list. Off the full
+  // set, archived included: the "Archived" dialog renders the same row
+  // shape and deserves the same dot.
+  const directPartnerIds = useMemo(
+    () =>
+      roomRows
+        .filter((room) => room.kind === "direct" && soleDuoLabel(room) === null)
+        .map((room) => room.members[0]?.userId)
+        .filter((userId): userId is string => userId !== undefined),
+    [roomRows],
+  );
+  const presence = usePeoplePresence(connection, directPartnerIds);
   // #297 AC2: an archived conversation leaves the list until new activity
   // mentions the member — the tag itself carries no such exception, so
   // this is where the exception lives. Applied before every other filter
@@ -836,6 +872,10 @@ export function ChatList({
       // unnamed one must read the same way, and only `kind` agrees with
       // `directRoomIdsOf`'s DM record either way.
       const avatarKind: "duo" | "person" | "group" = sole ? "duo" : room.kind === "direct" ? "person" : "group";
+      // #287: the row's one other person — null for a duo or a group,
+      // which carry no presence concept here.
+      const partnerId = avatarKind === "person" ? room.members[0]?.userId ?? null : null;
+      const partnerPresence = partnerId ? presence.get(partnerId) ?? null : null;
       const more = openMore === room.roomId;
       // duo#281: the sidebar's own one-line gist — never shown over a
       // draft tray preview (`waitingByRoom` already takes priority below),
@@ -854,13 +894,21 @@ export function ChatList({
       const row = (
         <Row
           active={activeRoom === room.roomId}
-          avatar={<Avatar kind={avatarKind} seed={room.roomId} title={title} />}
+          avatar={<Avatar kind={avatarKind} presence={partnerPresence?.presence ?? null} seed={room.roomId} title={title} />}
           badges={
-            room.muted ? (
-              <span className="type-provenance uppercase text-[var(--faint)]" data-testid="room-muted">
-                Muted
-              </span>
-            ) : undefined
+            <>
+              {/* #287: the dot's accessible twin — only for online/away, the same "nothing drawn for the common case" rule the dot itself keeps. */}
+              {(partnerPresence?.presence === "online" || partnerPresence?.presence === "away") && (
+                <span className="type-provenance text-[var(--muted)]" data-testid="room-presence">
+                  {partnerPresence.presence === "online" ? "Online" : "Away"}
+                </span>
+              )}
+              {room.muted && (
+                <span className="type-provenance uppercase text-[var(--faint)]" data-testid="room-muted">
+                  Muted
+                </span>
+              )}
+            </>
           }
           href={roomHref(room.roomId)}
           key={room.roomId}

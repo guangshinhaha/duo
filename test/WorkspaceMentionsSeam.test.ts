@@ -14,7 +14,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 vi.mock("matrix-js-sdk", () => ({
   createClient: vi.fn(),
-  ClientEvent: { Sync: "sync" },
+  ClientEvent: { Sync: "sync", Event: "event", AccountData: "accountData" },
+  // #287: `connect()` calls this at least once on every connect.
+  SetPresence: { Offline: "offline", Online: "online", Unavailable: "unavailable" },
   // #211: backward-pagination token checks (`loadOlder`) read this.
   Direction: { Backward: "b", Forward: "f" },
   // #209: LocalEchoUpdated alongside Timeline — the seam's `subscribe`
@@ -154,6 +156,13 @@ function fakeClient(over: { rooms?: Room[]; answer?: unknown; error?: Error } = 
         return over.answer ?? notificationsResponse([]);
       }),
     },
+    // #287: `connect()` touches presence on every connect, whether or not
+    // this test exercises it — a bare-bones fixture still needs the door.
+    getAccountData: vi.fn(() => undefined),
+    setAccountData: vi.fn(async () => undefined),
+    getUser: vi.fn(() => null),
+    setPresence: vi.fn(async () => undefined),
+    setSyncPresence: vi.fn(async () => undefined),
   };
   return client as unknown as FakeClient;
 }

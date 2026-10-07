@@ -4,6 +4,7 @@ import type { WorkspaceConnection, WorkspaceSession } from "../workspace/matrix.
 import { isHostedAccess, useWorkspaceAccess } from "../workspace/access.js";
 import { HostedWorkspaceStatus } from "../components/HostedWorkspaceStatus.js";
 import { WorkspaceProfile } from "../components/WorkspaceProfile.js";
+import { StatusAndPresence } from "../components/StatusAndPresence.js";
 import { KeywordAlerts } from "../components/KeywordAlerts.js";
 import {
   AlertDialog,
@@ -600,6 +601,14 @@ export function Settings({
         <p className="type-provenance text-[var(--muted)]">
           Sign in to a workspace to set your name and picture there.
         </p>
+      </section>
+    ),
+    status: connection ? (
+      <StatusAndPresence connection={connection} />
+    ) : (
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-status">
+        <h2 className="type-heading">Status &amp; presence</h2>
+        <p className="type-provenance text-[var(--muted)]">Sign in to a workspace to set a status there.</p>
       </section>
     ),
     privacy: api ? <PrivacyControls api={api} /> : null,

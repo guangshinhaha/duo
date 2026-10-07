@@ -61,6 +61,7 @@ describe("the index", () => {
       "Appearance",
       "Sending",
       "Profile",
+      "Status & presence",
       "Privacy & data",
       "Devices",
       "Ask links",
