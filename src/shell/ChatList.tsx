@@ -1126,8 +1126,12 @@ export function ChatList({
 
     return (
       <CommandSearch
+        activeRoom={activeRoom !== null ? roomsById.get(activeRoom) ?? null : null}
         api={api}
         connection={connection}
+        onMarkRead={markRead}
+        onNewConversation={() => setNewOpen(true)}
+        onSetNotificationMode={setMode}
         onStartedConversation={(roomId) => {
           refresh();
           window.location.hash = roomHref(roomId);
