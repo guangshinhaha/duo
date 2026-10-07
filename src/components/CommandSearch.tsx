@@ -1,10 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { DuoApiConfig } from "../api/client.js";
+import { useSearchAnswer } from "../api/queries.js";
+import type { SearchAnswerHit } from "../api/types.js";
 import { MessageSearchResults } from "./ConversationSearch.js";
 import { PersonProfile } from "./PersonProfile.js";
 import { directoryEntryLabel, duoOwnerUserIdOf, isDuoUserId } from "../workspace/identity.js";
 import { roomHref } from "../workspace/links.js";
+import { EMPTY_SEARCH_FILTERS, parseSearchQuery, type SearchFilters } from "../workspace/searchQuery.js";
 import type { RoomSummary, WorkspaceConnection } from "../workspace/matrix.js";
 
 /** How long to wait, after the member stops typing, before asking the directory — long enough that every keystroke doesn't cost a request, short enough to still feel instant. */
@@ -56,11 +59,23 @@ export function CommandSearch({
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  // duo#300: the answer-on-top's call is owned here, never by
+  // `ConversationSearch.tsx` (`WorkspaceSearch.test.tsx`'s own structural
+  // test: the message search must not reach the daemon's api) — same seam
+  // `PersonProfile.tsx`'s own api calls already sit behind. `onAnswer` is
+  // `undefined` with no duo paired, matching `onRewrite`/`onFactCheck`'s
+  // shape in `App.tsx` for Room.tsx's composer.
+  const searchAnswerMutation = useSearchAnswer(api);
+  const onAnswer = api ? (input: { query: string; hits: readonly SearchAnswerHit[] }) => searchAnswerMutation.mutateAsync(input) : undefined;
   const [roomMatches, setRoomMatches] = useState<readonly RoomSummary[]>([]);
   const [peopleMatches, setPeopleMatches] = useState<readonly PersonHit[]>([]);
   const [peopleLoading, setPeopleLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [messageQuery, setMessageQuery] = useState<string | null>(null);
+  // duo#300: from:/in:/before:/after:, parsed out of the query at the moment
+  // the member hands off to "Search messages for '…'" — narrows the hits
+  // `MessageSearchResults` already has, never a second ask of the workspace.
+  const [messageFilters, setMessageFilters] = useState<SearchFilters>(EMPTY_SEARCH_FILTERS);
   const [selectedPerson, setSelectedPerson] = useState<PersonHit | null>(null);
   const listboxId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -182,7 +197,9 @@ export function CommandSearch({
     } else if (item.kind === "person") {
       setSelectedPerson(item.person);
     } else {
-      setMessageQuery(trimmed);
+      const parsed = parseSearchQuery(trimmed);
+      setMessageFilters(parsed.filters);
+      setMessageQuery(parsed.term);
     }
   };
 
@@ -243,9 +260,12 @@ export function CommandSearch({
       />
       {/* What this finds, in the member's terms — the corpus search (⌘K,
           docs/design-language.md §5.7) says its own scope, and the two never
-          share a sentence. */}
+          share a sentence. duo#300: the filter syntax named here, once, is
+          the same four tokens `workspace/searchQuery.ts` parses — this is
+          the one place a member learns it exists. */}
       <p className="type-provenance text-[var(--faint)]" data-testid="command-search-scope">
-        Finds people, conversations, and what&apos;s been said — on the workspace.
+        Finds people, conversations, and what&apos;s been said — on the workspace. Narrow messages
+        with from:, in:, before:, after:.
       </p>
       {showDropdown && (
         <ul aria-label="Suggestions" className="flex flex-col gap-2" data-testid="command-search-listbox" id={listboxId} role="listbox">
@@ -329,8 +349,12 @@ export function CommandSearch({
       {messageQuery !== null ? (
         <MessageSearchResults
           connection={connection}
+          filters={messageFilters}
+          onAnswer={onAnswer}
+          onFiltersChange={setMessageFilters}
           onClear={() => {
             setMessageQuery(null);
+            setMessageFilters(EMPTY_SEARCH_FILTERS);
             setQuery("");
           }}
           query={messageQuery}

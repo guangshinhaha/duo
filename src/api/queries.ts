@@ -79,6 +79,8 @@ import type {
   Rule,
   RuleReviewListing,
   RuleWithEvidence,
+  SearchAnswerHit,
+  SearchAnswerResult,
   SearchOutcome,
   SentEscalationDigest,
   SettableDraftOutcome,
@@ -708,6 +710,21 @@ export function useExplainMessage(api: DuoApiConfig | null) {
       api
         ? apiRequest<ExplainResult>(api, "/compose/explain", { method: "POST", body: JSON.stringify(input) })
         : Promise.reject(new Error("No duo is paired to explain with.")),
+  });
+}
+
+/**
+ * duo#300: `POST /search/answer` — the answer on top of "search what was
+ * said". Takes exactly the hits the member's own message search already
+ * returned (never a corpus read, never a second search); writes nothing,
+ * so there is no query to invalidate, the same as rewrite/fact-check above.
+ */
+export function useSearchAnswer(api: DuoApiConfig | null) {
+  return useMutation({
+    mutationFn: (input: { query: string; hits: readonly SearchAnswerHit[] }) =>
+      api
+        ? apiRequest<SearchAnswerResult>(api, "/search/answer", { method: "POST", body: JSON.stringify(input) })
+        : Promise.reject(new Error("No duo is paired to ask for an answer.")),
   });
 }
 
