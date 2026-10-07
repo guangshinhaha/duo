@@ -227,8 +227,8 @@ describe("duo#301 — the slash-command typeahead", () => {
     expect(screen.getAllByTestId("slash-command-option").map((o) => o.textContent)).toEqual([
       "/duoOpen Your duo",
       "/summarizeCatch up on this conversation",
-      "/laterSave for later — coming soon",
-      "/remindSet a reminder — coming soon",
+      "/laterSave words for later",
+      "/remindSave words with a reminder",
       "/pollRun a poll — coming soon",
     ]);
   });

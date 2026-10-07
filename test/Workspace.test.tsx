@@ -4063,9 +4063,47 @@ describe("duo#301 — slash commands in the conversation composer", () => {
     expect(fake.connection.send).not.toHaveBeenCalled();
   });
 
-  it("'/later', '/remind' and '/poll' name real, coming commands — not built yet, said plainly, nothing sent", async () => {
+  /** Stands in for `matrix.ts`'s own `duo.later.items` account data — the same in-memory round trip `withLater` takes in the "duo#299 — Save to Later" describe above, duplicated here rather than sharing scope across two unrelated describes. */
+  function withLater(fake: ReturnType<typeof fakeConnection>) {
+    const items: unknown[] = [];
+    fake.connection.later = vi.fn(async () => [...items] as never);
+    fake.connection.setLater = vi.fn(async (next) => {
+      items.length = 0;
+      items.push(...(next as unknown[]));
+    });
+    return items;
+  }
+
+  it("'/later <words>' saves straight to Later, no dialog, no reminder — duo#299's own mechanism, reused", async () => {
     seedSession();
     const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    withLater(fake);
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "/later remember to buy milk");
+    pressEnter(field);
+
+    await waitFor(() =>
+      expect(fake.connection.setLater).toHaveBeenCalledWith([
+        expect.objectContaining({ kind: "note", roomId: "!project-x:workspace.example", eventId: null, preview: "remember to buy milk", remindAt: null }),
+      ]),
+    );
+    expect(await screen.findByTestId("composer-command-notice")).toHaveTextContent("Saved to Later.");
+    expect(fake.connection.send).not.toHaveBeenCalled();
+    expect(composerText(field)).toBe("");
+
+    navigate("#later");
+    expect(await screen.findByTestId("later-item")).toHaveTextContent("remember to buy milk");
+  });
+
+  it("'/later' with nothing after it teaches the usage, rather than saving an empty note", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    withLater(fake);
     vi.mocked(connect).mockResolvedValue(fake.connection);
     await renderApp();
     navigate("#chat/!project-x%3Aworkspace.example");
@@ -4074,7 +4112,49 @@ describe("duo#301 — slash commands in the conversation composer", () => {
     const field = screen.getByLabelText("Message project-x");
     typeInto(field, "/later");
     pressEnter(field);
-    expect(await screen.findByTestId("composer-command-notice")).toHaveTextContent("Later isn't built yet — nothing was sent.");
+
+    expect(await screen.findByTestId("composer-command-notice")).toHaveTextContent('Type what to save after "/later"');
+    expect(fake.connection.setLater).not.toHaveBeenCalled();
+  });
+
+  it("'/remind <words>' opens the same reminder dialog the composer's own 'Save to Later' button does, over those words", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    withLater(fake);
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "/remind follow up with Bose");
+    pressEnter(field);
+
+    const dialog = await screen.findByTestId("save-later-dialog");
+    expect(dialog).toHaveTextContent("follow up with Bose");
+    // The composer itself is already empty — the words rode with the
+    // dialog, not left behind as unsent text.
+    expect(composerText(field)).toBe("");
+
+    fireEvent.click(within(dialog).getByTestId("save-later-in-1h"));
+    await waitFor(() =>
+      expect(fake.connection.setLater).toHaveBeenCalledWith([expect.objectContaining({ preview: "follow up with Bose", remindAt: expect.any(String) })]),
+    );
+    expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+
+  it("'/poll' names a real, coming command — duo#293 isn't built yet, said plainly, nothing sent", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "/poll");
+    pressEnter(field);
+    expect(await screen.findByTestId("composer-command-notice")).toHaveTextContent("Polls aren't built yet — nothing was sent.");
     expect(fake.connection.send).not.toHaveBeenCalled();
   });
 
