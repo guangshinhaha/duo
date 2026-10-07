@@ -147,6 +147,9 @@ function fakeConnection(timeline: RoomMessage[], roomList: RoomSummary[] = rooms
       throw new Error("not used here");
     }),
     sendFile: vi.fn(async () => {}),
+    sendPoll: vi.fn(async () => {}),
+    votePoll: vi.fn(async () => {}),
+    endPoll: vi.fn(async () => {}),
     loadMedia: vi.fn(async () => null),
     getUrlPreview: vi.fn(async () => null),
     searchPeople: vi.fn(async () => []),

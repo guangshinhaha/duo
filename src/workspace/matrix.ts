@@ -28,6 +28,27 @@ import {
   type Room as MatrixRoom,
   type RoomMember,
 } from "matrix-js-sdk";
+// #294: the root barrel doesn't re-export this content type (only the
+// generic `@types/event` singular, not `@types/events` plural, which
+// defines it) — a type-only import, so it carries no runtime module to
+// worry about under the seam test's mock.
+import type { RoomMessageEventContent } from "matrix-js-sdk/lib/@types/events";
+// #293: polls (MSC3381). The MSC is still unmerged, so there is no stable
+// `m.poll.*` support in wide client use yet — but matrix-js-sdk 34 already
+// ships a full, spec-accurate implementation of it as "extensible events",
+// and Element sends exactly this shape today. Rather than hand-composing
+// the wire JSON (the extensible-events content shape double-keys by
+// stable/unstable name and is easy to get subtly wrong), this seam reuses
+// the SDK's own classes — the same reasoning #207's `normalize` import
+// above already applies to borrowing a correct implementation instead of
+// reinventing one. These are deep imports because the package's root
+// barrel (`matrix-js-sdk`) does not re-export the extensible-events
+// classes, only their namespaced-value constants (`@types/polls`) — the
+// deep path is still "the SDK", so it stays inside this one seam module.
+import { PollStartEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollStartEvent";
+import { PollResponseEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollResponseEvent";
+import { PollEndEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollEndEvent";
+import { M_POLL_KIND_DISCLOSED, M_POLL_START, M_POLL_RESPONSE, M_POLL_END } from "matrix-js-sdk/lib/@types/polls";
 // #207: case- and accent-insensitive matching for the one search box's
 // display-name matching — Apache-2.0, the SDK's own fold (it also strips the
 // zero-width tricks a name can carry), used exactly as Element uses it
@@ -49,7 +70,7 @@ import {
   type MessageMention,
   type MessagePart,
 } from "./mentions.js";
-import { isImageType, type StagedShare } from "./sharing.js";
+import { isAudioType, isImageType, type StagedShare } from "./sharing.js";
 import { sweepWorkspaceCaches, workspaceCacheName, workspaceIndexedDB } from "./cache.js";
 import {
   dequeuePendingMessage,
@@ -458,6 +479,49 @@ export interface SharedFile {
   readonly size: number;
   readonly url: string;
   readonly image: boolean;
+  /**
+   * #294: true for a voice note — this share rides `m.audio` with the
+   * MSC3245 voice-message marker, never an ordinary audio file attachment
+   * (this client has only one way to produce `audio/*`: recording one).
+   */
+  readonly audio?: boolean;
+  /** #294: the clip's own length, carried to `info.duration` (MSC1767's audio-info convention) so playback knows it before the bytes finish loading. */
+  readonly durationMs?: number;
+  /**
+   * #294: the transcript produced client-side (Web Speech API) while
+   * recording, when the browser produced one — carried as this event's own
+   * `body` (never a separate field only this client reads), because that is
+   * the one piece of a voice note every existing text-reading door, inside
+   * this client and out, already knows how to find: search, notifications,
+   * and the duo's own grounding of a question's preceding messages all read
+   * a message's `body` today, and a transcript is the one honest word for
+   * what a voice note "says" there. No daemon changed to get this.
+   */
+  readonly transcript?: string;
+}
+
+/** #293: one answer in a poll, with this device's own live tally of it. */
+export interface PollOption {
+  readonly id: string;
+  readonly text: string;
+  readonly votes: number;
+  /** Whether this account's current vote includes this option. */
+  readonly mine: boolean;
+}
+
+/**
+ * #293: a poll message's own state — read off its `m.poll.start` (MSC3381)
+ * plus whatever `m.poll.response`s and an `m.poll.end` have arrived for it
+ * in this device's own copy of the room. Disclosed only: this client never
+ * builds an undisclosed poll, so results are always live (#293 AC2), never
+ * held back for a reveal.
+ */
+export interface Poll {
+  readonly question: string;
+  readonly options: readonly PollOption[];
+  /** How many members have voted — not a sum of selections, since this client's polls are single-choice. */
+  readonly totalVotes: number;
+  readonly closed: boolean;
 }
 
 /**
@@ -508,6 +572,8 @@ export interface RoomMessage {
   readonly mentionLabels?: Readonly<Record<string, string>>;
   /** The share this message IS, when it is one — null/absent for text. Sharing reaches people, never any corpus. */
   readonly file?: SharedFile;
+  /** #293: the poll this message IS, when it's an `m.poll.start` — absent for every other turn. */
+  readonly poll?: Poll;
   /** The homeserver's epoch-ms timestamp — server time, not arrival time. */
   readonly originServerTs: number;
   /** True when a same-sender replacement amended these words — the "(edited)" mark is the honesty. */
@@ -828,6 +894,31 @@ export interface WorkspaceConnection {
    * own contiguous file messages immediately preceding their question).
    */
   sendFile(roomId: string, file: SharedFile): Promise<void>;
+  /**
+   * #293: starts a poll — an `m.poll.start` (MSC3381), disclosed (votes are
+   * visible as they arrive, never held back for a reveal — "results update
+   * live" is #293 AC2, and an undisclosed poll could never honestly promise
+   * that). `options` must hold at least two entries; the seam does not
+   * police this (the composer does, before this is ever called), because
+   * refusing here would be a second, later place to say the same thing.
+   */
+  sendPoll(roomId: string, question: string, options: readonly string[]): Promise<void>;
+  /**
+   * #293: casts (or replaces) this account's own vote — a fresh
+   * `m.poll.response` referencing the poll's start event. The spec's own
+   * rule is "last one wins" per sender, read off `originServerTs` in the
+   * projection below, so a second vote replaces the first rather than
+   * adding to it; there is no separate "change my vote" verb.
+   */
+  votePoll(roomId: string, pollStartEventId: string, optionId: string): Promise<void>;
+  /**
+   * #293: closes a poll — an `m.poll.end`. The spec's own rule is that any
+   * response timestamped at or after the first valid end event is ignored,
+   * which the projection below enforces; this client offers the verb only
+   * to the poll's own starter (`RoomMessage.senderId`), checked where the
+   * control renders, not here.
+   */
+  endPoll(roomId: string, pollStartEventId: string): Promise<void>;
   /**
    * The bytes of a shared file, fetched as this member: the homeserver's
    * authenticated media endpoint (MSC3916) wants the member's token in a
@@ -1378,6 +1469,17 @@ function roomFailure(error: unknown): Error {
 }
 
 /**
+ * #293: `client.sendEvent`'s own typing ties `eventType` to the SDK's
+ * closed `TimelineEvents` map, which has never heard of an unmerged MSC —
+ * this is the one narrow, documented place that relaxes it back to `string`
+ * for exactly the three poll event types `PollStartEvent`/`PollResponseEvent`/
+ * `PollEndEvent`'s own `.serialize()` produces, never a general escape hatch.
+ */
+function sendUntypedEvent(client: MatrixClient, roomId: string, eventType: string, content: object): Promise<unknown> {
+  return (client.sendEvent as unknown as (roomId: string, eventType: string, content: object) => Promise<unknown>)(roomId, eventType, content);
+}
+
+/**
  * #214: the org wall's refusal of a `restricted` rule whose allow-list room
  * is not one org (`duo_org_wall/rules.py`'s ERR_PUBLIC, the same sentence
  * every non-invite join rule gets). `createChannel` only ever asks for
@@ -1491,6 +1593,22 @@ interface Relation {
 
 function relationOf(event: MatrixEvent): Relation | undefined {
   return (event.getContent()?.["m.relates_to"] ?? undefined) as Relation | undefined;
+}
+
+/**
+ * #293: the words out of an extensible-events message-content shape
+ * (MSC1767) — a poll's question or one of its answers. Both prefer the
+ * namespaced `org.matrix.msc1767.text` and fall back to the plain `body`
+ * every such shape also carries for clients that predate the extension —
+ * the same stable/unstable-pair reasoning `formattedBodyOf` already
+ * applies to a text turn's own formatted half.
+ */
+function extensibleText(value: Record<string, unknown>): string {
+  const namespaced = value["org.matrix.msc1767.text"];
+  if (typeof namespaced === "string") {
+    return namespaced;
+  }
+  return typeof value.body === "string" ? value.body : "";
 }
 
 /**
@@ -1658,7 +1776,12 @@ async function replayPendingOutbox(client: MatrixClient, account: OutboxAccount)
  * its own either, the same way `timelineOf`'s first pass treats it.
  */
 function isMainFlowRow(event: MatrixEvent): boolean {
-  if (event.getType() !== EventType.RoomMessage) {
+  // #293: a poll (`m.poll.start`) is its own kind of turn, not an
+  // `m.room.message` — it never carries a replace/thread relation of its
+  // own in this client (polls aren't edited or thread-replied here), so it
+  // only needs the redaction check the rest of this function already does.
+  const isPollStart = M_POLL_START.matches(event.getType());
+  if (event.getType() !== EventType.RoomMessage && !isPollStart) {
     return false;
   }
   const relation = relationOf(event);
@@ -1671,8 +1794,11 @@ function isMainFlowRow(event: MatrixEvent): boolean {
   if (relation?.rel_type === RelationType.Replace) {
     return false;
   }
+  if (isPollStart) {
+    return true;
+  }
   const msgtype = event.getContent()?.msgtype;
-  return msgtype === MsgType.Text || msgtype === MsgType.File || msgtype === MsgType.Image;
+  return msgtype === MsgType.Text || msgtype === MsgType.File || msgtype === MsgType.Image || msgtype === MsgType.Audio;
 }
 
 /**
@@ -1766,6 +1892,10 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     formattedBody: string | undefined;
     mentionLabels: Readonly<Record<string, string>> | undefined;
     file: SharedFile | undefined;
+    // #293: the poll's own static shape (question, options) — its live
+    // tally is a later pass, read off the responses and end event that
+    // reference this base's own event id, so it is never stored here.
+    poll: { question: string; options: readonly { id: string; text: string }[] } | undefined;
     ts: number;
     edited: boolean;
     redacted: boolean;
@@ -1776,7 +1906,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
   }
   const bases = new Map<string, Base>();
   for (const event of events) {
-    if (event.getType() !== EventType.RoomMessage) {
+    const isPollStart = M_POLL_START.matches(event.getType());
+    if (event.getType() !== EventType.RoomMessage && !isPollStart) {
       continue;
     }
     const senderId = event.getSender() ?? "";
@@ -1799,6 +1930,7 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
         formattedBody: undefined,
         mentionLabels: undefined,
         file: undefined,
+        poll: undefined,
         ts: event.getTs(),
         edited: false,
         redacted: true,
@@ -1811,8 +1943,40 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       });
       continue;
     }
+    if (isPollStart) {
+      // #293: a poll is its own kind of base — never a reply, never edited,
+      // never a share — read straight off the extensible-events shape the
+      // SDK's own `PollStartEvent` parses (the question and each answer are
+      // themselves message-content shapes, `org.matrix.msc1767.text` with a
+      // `body` fallback, which `extensibleText` below reads either way).
+      const subtype = M_POLL_START.findIn<{
+        question?: Record<string, unknown>;
+        answers?: ReadonlyArray<Record<string, unknown> & { id?: unknown }>;
+      }>(event.getContent());
+      const options = (subtype?.answers ?? [])
+        .filter((answer): answer is Record<string, unknown> & { id: string } => typeof answer.id === "string")
+        .map((answer) => ({ id: answer.id, text: extensibleText(answer) }));
+      bases.set(event.getId() ?? "", {
+        msgtype: "duo.poll.start",
+        senderId,
+        senderName: nameOf(senderId),
+        body: extensibleText(subtype?.question ?? {}),
+        parts: null,
+        formattedBody: undefined,
+        mentionLabels: undefined,
+        file: undefined,
+        poll: { question: extensibleText(subtype?.question ?? {}), options },
+        ts: event.getTs(),
+        edited: false,
+        redacted: false,
+        threadRootEventId: null,
+        replyToEventId: null,
+        ...localEchoFlagsOf(event),
+      });
+      continue;
+    }
     const msgtype = event.getContent()?.msgtype;
-    const isShare = msgtype === MsgType.File || msgtype === MsgType.Image;
+    const isShare = msgtype === MsgType.File || msgtype === MsgType.Image || msgtype === MsgType.Audio;
     if (msgtype !== MsgType.Text && !isShare) {
       continue;
     }
@@ -1861,13 +2025,14 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
           formatted_body?: unknown;
           filename?: unknown;
           url?: unknown;
-          info?: { mimetype?: unknown; size?: unknown };
+          info?: { mimetype?: unknown; size?: unknown; duration?: unknown };
         }
       | undefined;
     const body = String(content?.body ?? "");
     // #213: a share's content never carries `formatted_body` for its own
     // caption today — only a text turn's formatted half is read.
     const formattedBody = isShare ? undefined : formattedBodyOf(content ?? {});
+    const shareName = typeof content?.filename === "string" && content.filename.length > 0 ? content.filename : body;
     bases.set(event.getId() ?? "", {
       msgtype: msgtype as string,
       senderId,
@@ -1882,13 +2047,25 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       // nothing about either.
       file: isShare
         ? {
-            name: typeof content?.filename === "string" && content.filename.length > 0 ? content.filename : body,
+            name: shareName,
             mimeType: typeof content?.info?.mimetype === "string" ? content.info.mimetype : "",
             size: typeof content?.info?.size === "number" ? content.info.size : 0,
             url: typeof content?.url === "string" ? content.url : "",
             image: msgtype === MsgType.Image,
+            // #294: a voice note's body IS its transcript, when it carried
+            // one (`sendFile` above) — distinguished from the generated
+            // filename standing in for "no transcript", never shown as if
+            // it were one.
+            ...(msgtype === MsgType.Audio
+              ? {
+                  audio: true,
+                  durationMs: typeof content?.info?.duration === "number" ? content.info.duration : undefined,
+                  transcript: body.length > 0 && body !== shareName ? body : undefined,
+                }
+              : {}),
           }
         : undefined,
+      poll: undefined,
       ts: event.getTs(),
       edited: false,
       redacted: false,
@@ -1944,6 +2121,51 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     });
   }
 
+  // Pass four — polls: an `m.poll.end` closes the poll it references (the
+  // EARLIEST one counts, by the spec's own "first end wins" rule), and an
+  // `m.poll.response` counts as its sender's current vote on the poll it
+  // references, EXCEPT one timestamped at or after that close. Only the
+  // LATEST response per sender counts (the spec's "last one wins"), so a
+  // changed vote replaces rather than adds — read directly off the raw
+  // `events`, the same place reactions (pass two) read theirs from, never a
+  // second fetch.
+  const pollCloseTs = new Map<string, number>();
+  for (const event of events) {
+    if (!M_POLL_END.matches(event.getType()) || event.isRedacted()) {
+      continue;
+    }
+    const relation = relationOf(event);
+    if (relation?.rel_type !== RelationType.Reference || relation.event_id === undefined) {
+      continue;
+    }
+    const existing = pollCloseTs.get(relation.event_id);
+    if (existing === undefined || event.getTs() < existing) {
+      pollCloseTs.set(relation.event_id, event.getTs());
+    }
+  }
+  const pollVotesByPoll = new Map<string, Map<string, { ts: number; answerIds: readonly string[] }>>();
+  for (const event of events) {
+    if (!M_POLL_RESPONSE.matches(event.getType()) || event.isRedacted()) {
+      continue;
+    }
+    const relation = relationOf(event);
+    if (relation?.rel_type !== RelationType.Reference || relation.event_id === undefined) {
+      continue;
+    }
+    const closedAt = pollCloseTs.get(relation.event_id);
+    if (closedAt !== undefined && event.getTs() >= closedAt) {
+      continue;
+    }
+    const subtype = M_POLL_RESPONSE.findIn<{ answers?: unknown }>(event.getContent());
+    const answerIds = Array.isArray(subtype?.answers) ? subtype.answers.filter((answer): answer is string => typeof answer === "string") : [];
+    const bySender = pollVotesByPoll.get(relation.event_id) ?? new Map<string, { ts: number; answerIds: readonly string[] }>();
+    const current = bySender.get(event.getSender() ?? "");
+    if (current === undefined || event.getTs() >= current.ts) {
+      bySender.set(event.getSender() ?? "", { ts: event.getTs(), answerIds });
+    }
+    pollVotesByPoll.set(relation.event_id, bySender);
+  }
+
   // The rows, in timeline order: each base stands where it was said,
   // carrying what the passes learned about it.
   const messages: RoomMessage[] = [];
@@ -1959,6 +2181,33 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
         : [];
     const readState: "sent" | "read" | undefined =
       base.senderId === selfUserId && !base.pending && !base.failed && !base.redacted ? (readers.length > 0 ? "read" : "sent") : undefined;
+    const poll: Poll | undefined =
+      base.poll === undefined
+        ? undefined
+        : (() => {
+            const votes = pollVotesByPoll.get(eventId) ?? new Map<string, { ts: number; answerIds: readonly string[] }>();
+            const tally = new Map<string, number>();
+            let mineAnswerIds: readonly string[] = [];
+            for (const [voterId, vote] of votes) {
+              for (const answerId of vote.answerIds) {
+                tally.set(answerId, (tally.get(answerId) ?? 0) + 1);
+              }
+              if (voterId === selfUserId) {
+                mineAnswerIds = vote.answerIds;
+              }
+            }
+            return {
+              question: base.poll.question,
+              options: base.poll.options.map((option) => ({
+                id: option.id,
+                text: option.text,
+                votes: tally.get(option.id) ?? 0,
+                mine: mineAnswerIds.includes(option.id),
+              })),
+              totalVotes: votes.size,
+              closed: pollCloseTs.has(eventId),
+            };
+          })();
     messages.push({
       eventId,
       roomId: room.roomId,
@@ -1969,6 +2218,7 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       formattedBody: base.formattedBody,
       mentionLabels: base.mentionLabels,
       file: base.file,
+      poll,
       originServerTs: base.ts,
       edited: base.edited,
       redacted: base.redacted,
@@ -3263,7 +3513,19 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       } catch (error) {
         throw workspaceFailure(error, staged.name);
       }
-      return { name: staged.name, mimeType: staged.mimeType, size: staged.size, url: content_uri, image: isImageType(staged.mimeType) };
+      return {
+        name: staged.name,
+        mimeType: staged.mimeType,
+        size: staged.size,
+        url: content_uri,
+        image: isImageType(staged.mimeType),
+        // #294: a voice note's duration and transcript ride the staged
+        // share through to here untouched — neither is learned from the
+        // upload, both were already known before it started.
+        ...(isAudioType(staged.mimeType)
+          ? { audio: true, durationMs: staged.durationMs, transcript: staged.transcript ?? undefined }
+          : {}),
+      };
     },
     sendFile: async (roomId, file) => {
       // The share's wire shape (spec §Send-to-room messaging): the name
@@ -3272,14 +3534,70 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       // back. The msgtype is spelled in each arm because the SDK types a
       // message content by its msgtype literal; a union of the two would
       // not type as either.
-      const facts = { body: file.name, filename: file.name, url: file.url, info: { mimetype: file.mimeType, size: file.size } };
+      //
+      // #294: a voice note's `body` is its transcript when the browser
+      // produced one, never the generated filename — the one existing
+      // text-reading door (search, notifications, a duo's own grounding of
+      // the messages before a question) already reads `body`, and a
+      // transcript is the only honest word for what a voice note "says"
+      // there. `filename` keeps the real name regardless, so nothing about
+      // the share's own facts is lost to that choice.
+      const facts = {
+        body: file.audio && file.transcript !== undefined && file.transcript.length > 0 ? file.transcript : file.name,
+        filename: file.name,
+        url: file.url,
+        info: {
+          mimetype: file.mimeType,
+          size: file.size,
+          ...(file.durationMs !== undefined ? { duration: file.durationMs } : {}),
+        },
+      };
       try {
         await client.sendMessage(
           roomId,
-          file.image ? { ...facts, msgtype: MsgType.Image } : { ...facts, msgtype: MsgType.File },
+          file.audio
+            ? // MSC3245's voice-message marker: an `m.audio` with this empty
+              // object present renders as a voice note (waveform UI, no
+              // generic file chrome) in clients that recognise it, and as an
+              // ordinary audio attachment in the ones that don't — never a
+              // broken render either way. Cast because the SDK's own
+              // `RoomMessageEventContent` union predates this marker.
+              ({ ...facts, msgtype: MsgType.Audio, "org.matrix.msc3245.voice": {} } as unknown as RoomMessageEventContent)
+            : file.image
+              ? { ...facts, msgtype: MsgType.Image }
+              : { ...facts, msgtype: MsgType.File },
         );
       } catch (error) {
         throw workspaceFailure(error, file.name);
+      }
+    },
+    sendPoll: async (roomId, question, options) => {
+      // The SDK's own extensible-event builder (imported above): it fills
+      // in both the stable and unstable keys the spec's migration shape
+      // wants, and `.name` resolves to the unstable type Element actually
+      // sends today — this seam asks for neither explicitly, it just takes
+      // what the builder gives.
+      const { type, content } = PollStartEvent.from(question, [...options], M_POLL_KIND_DISCLOSED.name, 1).serialize();
+      try {
+        await sendUntypedEvent(client, roomId, type, content as object);
+      } catch (error) {
+        throw workspaceFailure(error, question);
+      }
+    },
+    votePoll: async (roomId, pollStartEventId, optionId) => {
+      const { type, content } = PollResponseEvent.from([optionId], pollStartEventId).serialize();
+      try {
+        await sendUntypedEvent(client, roomId, type, content as object);
+      } catch (error) {
+        throw workspaceFailure(error, "your vote");
+      }
+    },
+    endPoll: async (roomId, pollStartEventId) => {
+      const { type, content } = PollEndEvent.from(pollStartEventId, "This poll is closed.").serialize();
+      try {
+        await sendUntypedEvent(client, roomId, type, content as object);
+      } catch (error) {
+        throw workspaceFailure(error, "closing the poll");
       }
     },
     loadMedia: async (url) => {

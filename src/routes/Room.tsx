@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bookmark, Paperclip, X } from "lucide-react";
+import { Bookmark, Mic, Paperclip, X } from "lucide-react";
 import { RoomDuoAnswer } from "../components/RoomDuoAnswer.js";
 import { RoomDuoMessage } from "../components/RoomDuoMessage.js";
 import { RoomPersonMessage } from "../components/RoomPersonMessage.js";
@@ -12,9 +12,11 @@ import { ChatTimelineList, useChatTimeline } from "../shell/useChatTimeline.js";
 import { useTouchPrimary } from "../shell/useMediaQuery.js";
 import { useLongPress } from "../shell/useLongPress.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/primitives/DropdownMenu.js";
+import { PollCard } from "../components/PollCard.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
+import { formatDuration, VoiceNoteCard } from "../components/VoiceNoteCard.js";
 import { roomTitle, soleDuoLabel } from "../shell/roomTitle.js";
 import { usePeoplePresence } from "../shell/usePeoplePresence.js";
 import { addressed, mentionLabelOf, mentionPillClassName } from "../workspace/mentions.js";
@@ -23,6 +25,7 @@ import { FactCheckAssist } from "../composer/FactCheckAssist.js";
 import { mentionCandidatesOf } from "../composer/mentionOffer.js";
 import { parseSlashCommand, type SlashCommand } from "../composer/slashCommandOffer.js";
 import { RewriteMenu } from "../composer/RewriteMenu.js";
+import { VoiceRecorderButton } from "../composer/VoiceRecorderButton.js";
 import type { ComposedMessage } from "../composer/serialize.js";
 import type { RewriteInstruction } from "../composer/rewrite.js";
 import { readFactCheckPref } from "../factCheckPrefs.js";
@@ -35,7 +38,7 @@ import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswe
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { duoConversationOf, questionOutcomes, questionOutcomeWords, type QuestionOutcome } from "../workspace/duoConversation.js";
 import { DuoConversationBanner } from "../components/DuoConversationBanner.js";
-import { formatBytes, shareRefusalOf, stageFile, type StagedShare } from "../workspace/sharing.js";
+import { formatBytes, shareRefusalOf, stageFile, stageRecordedAudio, type StagedShare } from "../workspace/sharing.js";
 import { takeShareForRoom } from "../shareTarget.js";
 import { messagePermalink, roomHref, threadHref } from "../workspace/links.js";
 import { firstLinkOf } from "../workspace/linkPreview.js";
@@ -48,6 +51,7 @@ import { EmojiPicker } from "../components/EmojiPicker.js";
 import { readReactionRecents, recordReactionRecent } from "../reactionRecents.js";
 import { PinnedBar } from "../components/PinnedMessages.js";
 import { ForwardMessageDialog } from "../components/ForwardMessageDialog.js";
+import { PollComposeDialog } from "../components/PollComposeDialog.js";
 import { SaveToLaterDialog } from "../components/SaveToLaterDialog.js";
 import { addLaterItem, useLaterItems } from "../shell/later.js";
 
@@ -1292,6 +1296,9 @@ export function MessageBody({
   onRetry,
   onCancel,
   onJumpToReply,
+  selfUserId,
+  onVotePoll,
+  onClosePoll,
 }: {
   message: RoomMessage;
   /** #313: what became of this question to a colleague's duo — answered, passed on, declined. */
@@ -1309,6 +1316,12 @@ export function MessageBody({
   onCancel?: (message: RoomMessage) => void;
   /** #215: the quote above a reply is clickable — brings its original into view, when this device already holds it (see `Room`'s `jumpToMessage`). */
   onJumpToReply?: (eventId: string) => void;
+  /** #293: this account's own user id — only ever used to gate a poll's "Close poll" control to the member who started it; never anything else here. */
+  selfUserId?: string;
+  /** #293: casts this account's vote on a poll. `undefined` hides every option's click (a connection with no poll mechanism, which never actually happens). */
+  onVotePoll?: (message: RoomMessage, optionId: string) => void;
+  /** #293: closes a poll this account started. */
+  onClosePoll?: (message: RoomMessage) => void;
 }) {
   const fromDuo = isDuoUserId(message.senderId);
   // #67: a duo's composed words read back as an answer, an outcome, or
@@ -1351,7 +1364,14 @@ export function MessageBody({
   // simply doesn't render rather than guess at words nobody here has.
   const quoted = message.replyToEventId === null ? undefined : conversation.find((candidate) => candidate.eventId === message.replyToEventId);
   const content =
-    message.file === undefined ? (
+    message.poll !== undefined ? (
+      <PollCard
+        canClose={onClosePoll !== undefined && message.senderId === selfUserId}
+        onClose={() => onClosePoll?.(message)}
+        onVote={(optionId) => onVotePoll?.(message, optionId)}
+        poll={message.poll}
+      />
+    ) : message.file === undefined ? (
       duoReading ? (
         <RoomDuoAnswer
           escalation={escalationOf(message, conversation)}
@@ -1373,6 +1393,8 @@ export function MessageBody({
           {previewUrl !== null && <LinkPreviewCard getUrlPreview={getUrlPreview} loadMedia={loadMedia} url={previewUrl} />}
         </>
       )
+    ) : message.file.audio ? (
+      <VoiceNoteCard file={message.file} loadMedia={loadMedia} />
     ) : (
       <SharedFileCard file={message.file} loadMedia={loadMedia} />
     );
@@ -1743,6 +1765,9 @@ export function RoomEntry({
         refresh();
       }}
       onJumpToReply={onJumpToReply}
+      onVotePoll={(target, optionId) => run(connection.votePoll(roomId, target.eventId, optionId))}
+      onClosePoll={(target) => run(connection.endPoll(roomId, target.eventId))}
+      selfUserId={connection.userId}
     />
   );
 
@@ -2100,6 +2125,10 @@ function RoomComposer({
   // whatever the button's own `trimmed` happens to hold — `null` means the
   // dialog, if open at all, is open for the ordinary composer-button path.
   const [remindDraft, setRemindDraft] = useState<string | null>(null);
+  // duo#293: "/poll" opens the poll composer — null closed; a value (even
+  // the blank default "/poll" with no argument dispatches) carries what to
+  // pre-fill it with, read once at open the same way `remindDraft` does.
+  const [pollDraft, setPollDraft] = useState<{ question: string; options: readonly string[] } | null>(null);
   // duo#301: a "/"-shaped word this product doesn't recognise, captured
   // whole (body + any live mentions) at the moment Enter was pressed —
   // AC3's "sent as text only after confirmation". `null` once more: nothing
@@ -2386,6 +2415,19 @@ function RoomComposer({
       setRemindDraft(note);
       return;
     }
+    if (command.id === "poll") {
+      // "/poll <question> | <option> | <option>…" pre-fills every field;
+      // a bare "/poll" opens the dialog blank. Either way the dialog, not
+      // this dispatch, is what actually starts the poll (#293 AC3's
+      // "results update live" needs nothing typed here to be validated
+      // twice) — this just reads the shorthand apart.
+      const parts = argument
+        .split("|")
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0);
+      setPollDraft({ question: parts[0] ?? "", options: parts.slice(1) });
+      return;
+    }
     setCommandNotice(command.unavailableNotice ?? null);
   };
 
@@ -2488,9 +2530,21 @@ function RoomComposer({
               data-testid="attachment-chip"
               key={`${attachment.name}-${index}`}
             >
-              <Paperclip aria-label="Attachment" className="size-3.5 shrink-0" />
+              {/* #294 AC1's "preview": a staged voice note shows its own
+                  icon and its transcript (when there is one) rather than a
+                  generated filename nobody typed — the same honesty
+                  principle #66's own attachment chip already follows. */}
+              {attachment.durationMs !== undefined ? (
+                <Mic aria-label="Voice note" className="size-3.5 shrink-0" />
+              ) : (
+                <Paperclip aria-label="Attachment" className="size-3.5 shrink-0" />
+              )}
               <span className="break-all">
-                {attachment.name} · {formatBytes(attachment.size)}
+                {attachment.durationMs === undefined
+                  ? `${attachment.name} · ${formatBytes(attachment.size)}`
+                  : typeof attachment.transcript === "string" && attachment.transcript.length > 0
+                    ? `“${attachment.transcript}” · ${formatDuration(attachment.durationMs)}`
+                    : `Voice note · ${formatDuration(attachment.durationMs)}`}
               </span>
               <button
                 className="inline-flex items-center rounded-full px-1 text-[var(--muted)]"
@@ -2529,6 +2583,23 @@ function RoomComposer({
         >
           <Paperclip aria-label="Attach files" className="size-4" />
         </button>
+        {/* duo#294: records a voice note straight into `attachments` — the
+            same `StagedShare[]` a picked file lands in, through the same
+            `stage()` door's own share-limit check, so it sends exactly the
+            way any other attachment does. */}
+        <VoiceRecorderButton
+          disabled={pending}
+          onRecorded={(blob, durationMs, transcript) => {
+            void stageRecordedAudio(blob, durationMs, transcript).then((staged) => {
+              const refusal = shareRefusalOf({ name: staged.name, size: staged.size, mimeType: staged.mimeType }, attachments.length);
+              if (refusal === null) {
+                setAttachments((current) => [...current, staged]);
+              } else {
+                setError(refusal);
+              }
+            });
+          }}
+        />
         {/* duo#299: saves these words instead of sending them — only
             meaningful once there's something typed. */}
         <button
@@ -2654,6 +2725,19 @@ function RoomComposer({
         onSave={remindDraft !== null ? (remindAt) => saveNoteToLater(remindDraft, remindAt) : saveComposerToLater}
         open={saveLaterOpen || remindDraft !== null}
         preview={remindDraft ?? trimmed}
+      />
+      {/* duo#293: "/poll" (or the attach row's own poll button) opens this —
+          `pollDraft` carries what to pre-fill, read once at open. */}
+      <PollComposeDialog
+        initialOptions={pollDraft?.options}
+        initialQuestion={pollDraft?.question}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPollDraft(null);
+          }
+        }}
+        onStart={(question, options) => connection.sendPoll(roomId, question, options)}
+        open={pollDraft !== null}
       />
       {/* duo#301 AC3: a "/"-shaped word this product doesn't recognise is
           never sent on Enter alone — the member says so first. "Edit"

@@ -263,6 +263,9 @@ function fakeConnection(state: {
       const eventId = `~share-${(pendingSeq += 1)}`;
       localEcho(roomId, messageFor({ eventId, senderId: SESSION.userId, senderName: "ana", body: file.name, file, pending: true }));
     }),
+    sendPoll: vi.fn(async () => {}),
+    votePoll: vi.fn(async () => {}),
+    endPoll: vi.fn(async () => {}),
     loadMedia: vi.fn(async (url: string): Promise<Blob | null> => new Blob([`bytes of ${url}`], { type: "application/octet-stream" })),
     // #219: no fixture in this file posts a link a card should render —
     // LinkPreview.test.tsx pins the preview itself — so this fake simply
@@ -4246,7 +4249,7 @@ describe("duo#301 — slash commands in the conversation composer", () => {
     expect(fake.connection.send).not.toHaveBeenCalled();
   });
 
-  it("'/poll' names a real, coming command — duo#293 isn't built yet, said plainly, nothing sent", async () => {
+  it("duo#293: '/poll' alone opens the poll composer blank", async () => {
     seedSession();
     const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
     vi.mocked(connect).mockResolvedValue(fake.connection);
@@ -4257,7 +4260,36 @@ describe("duo#301 — slash commands in the conversation composer", () => {
     const field = screen.getByLabelText("Message project-x");
     typeInto(field, "/poll");
     pressEnter(field);
-    expect(await screen.findByTestId("composer-command-notice")).toHaveTextContent("Polls aren't built yet — nothing was sent.");
+
+    const dialog = await screen.findByTestId("poll-compose-dialog");
+    expect(within(dialog).getByTestId("poll-compose-question")).toHaveValue("");
+    expect(within(dialog).getByTestId("poll-compose-option-0")).toHaveValue("");
+    expect(within(dialog).getByTestId("poll-compose-option-1")).toHaveValue("");
+    // The composer itself is already empty — the words rode with the
+    // dialog, same as every other slash command's dispatch.
+    expect(composerText(field)).toBe("");
+    expect(fake.connection.send).not.toHaveBeenCalled();
+  });
+
+  it("duo#293: '/poll <question> | <option> | <option>' pre-fills the composer, and Start runs the real poll", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    const field = screen.getByLabelText("Message project-x");
+    typeInto(field, "/poll Lunch? | Pizza | Sushi");
+    pressEnter(field);
+
+    const dialog = await screen.findByTestId("poll-compose-dialog");
+    expect(within(dialog).getByTestId("poll-compose-question")).toHaveValue("Lunch?");
+    expect(within(dialog).getByTestId("poll-compose-option-0")).toHaveValue("Pizza");
+    expect(within(dialog).getByTestId("poll-compose-option-1")).toHaveValue("Sushi");
+
+    fireEvent.click(within(dialog).getByTestId("poll-compose-start"));
+    await waitFor(() => expect(fake.connection.sendPoll).toHaveBeenCalledWith("!project-x:workspace.example", "Lunch?", ["Pizza", "Sushi"]));
     expect(fake.connection.send).not.toHaveBeenCalled();
   });
 

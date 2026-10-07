@@ -521,6 +521,30 @@ hint describes, never a limit this app enforces. Attach-then-ask rides by constr
 attachment sends as its own message, in order, before the question — contiguous, same sender,
 same room, exactly what the backend associates.
 
+#293 adds polls on the same seam, over MSC3381's "extensible events" shape — the MSC is still
+unmerged, so there is no stable `m.poll.*` in wide client use, but matrix-js-sdk 34 already ships
+a spec-accurate implementation of it (`PollStartEvent`/`PollResponseEvent`/`PollEndEvent`, deep
+imports since the package's root barrel doesn't re-export them), and Element sends exactly this
+shape today — reused rather than hand-composed, so the wire content's stable/unstable double-keying
+can't drift from what a real client expects. `sendPoll`/`votePoll`/`endPoll` are the three verbs;
+the timeline projection reads a poll's live results straight off the raw `m.poll.response`/
+`m.poll.end` events in the loaded window (the same pass-based aggregation reactions already use),
+applying the spec's own rules — last response per sender wins, nothing after the first end event
+counts. Every poll this client starts is disclosed (results visible as they arrive); the manual
+`/poll` trigger is built, the daemon-side "suggest a poll when a group is deciding" half of #293
+is not (noted in that PR as a scope-down, not forced by the issue).
+
+#294 adds voice notes on the same seam: a `StagedShare` carrying `durationMs` and a transcript
+(the Web Speech API's live result, captured client-side while recording — digital-duo has no
+speech-to-text capability today, and building a provider for one is its own story, not a
+same-night addition) rides `uploadFile`/`sendFile` exactly like a picked file, landing on the wire
+as `m.audio` with the MSC3245 voice-message marker. The transcript rides as the message's own
+`body` rather than a client-only field, deliberately: it is the one existing text-reading door —
+search, notifications, a duo's own grounding of a question's preceding messages — that already
+knows how to find a message's words, so a transcript reaches them with no daemon change. Recording
+itself (`VoiceRecorderButton`) is web/Mac's click-to-record, per #294's own split; the phone's
+hold-to-record gesture is unbuilt.
+
 #68 closes the loop the product is built on inside one app: a message someone sends the owner
 in a conversation here is drafted for by the owner's duo, and the owner sends, edits, or
 ignores the draft — the edit is the correction loop's input, as it always was. **Everything

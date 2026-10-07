@@ -41,6 +41,14 @@ export function isImageType(mimeType: string): boolean {
   return mimeType.startsWith("image/");
 }
 
+/** #294: whether a MIME type is this app's own recorded voice note (`m.audio`) — the browser's own claim from `MediaRecorder`, never guessed. */
+export function isAudioType(mimeType: string): boolean {
+  return mimeType.startsWith("audio/");
+}
+
+/** #294: the longest voice note this app records — 5 minutes. A hold-to-record gesture that runs longer is cut off rather than building an attachment nobody will share the size of. */
+export const VOICE_NOTE_LIMIT_MS = 5 * 60_000;
+
 /** The share limit a MIME type runs against. */
 export function shareLimitOf(mimeType: string): number {
   return isImageType(mimeType) ? SHARE_IMAGE_LIMIT_BYTES : SHARE_FILE_LIMIT_BYTES;
@@ -65,11 +73,36 @@ export interface StagedShare {
   readonly mimeType: string;
   readonly size: number;
   readonly bytes: ArrayBuffer;
+  /** #294: set only for a recorded voice note — the clip's own length, read from `MediaRecorder`'s timing, not guessed from byte size. */
+  readonly durationMs?: number;
+  /** #294: the transcript the browser's own speech recognition produced while recording, when it produced one at all — null is honest ("no transcript"), never an empty string standing in for it. */
+  readonly transcript?: string | null;
 }
 
 /** Reads a picked file into what the seam takes — the browser's type claim carried as-is, never guessed. */
 export async function stageFile(file: File): Promise<StagedShare> {
   return { name: file.name, mimeType: file.type, size: file.size, bytes: await file.arrayBuffer() };
+}
+
+/**
+ * #294: reads a recorded voice note into what the seam takes — the same
+ * `stage()` door #66 built for a picked file, one more way in. `durationMs`
+ * and `transcript` ride alongside the bytes because both are already known
+ * the moment recording stops (the clip's own timing; the Web Speech API's
+ * running result) and have nowhere else to come from once the blob is just
+ * bytes. The name is fixed and dated, matching how this app already names
+ * nothing a member typed themselves (recordings have no filename to lose).
+ */
+export async function stageRecordedAudio(blob: Blob, durationMs: number, transcript: string | null): Promise<StagedShare> {
+  const mimeType = blob.type.length > 0 ? blob.type : "audio/webm";
+  return {
+    name: `Voice note ${new Date().toISOString().replace(/[:.]/g, "-")}.webm`,
+    mimeType,
+    size: blob.size,
+    bytes: await blob.arrayBuffer(),
+    durationMs,
+    transcript,
+  };
 }
 
 /**
