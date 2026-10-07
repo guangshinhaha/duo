@@ -27,6 +27,7 @@ import { MutationError } from "../components/MutationError.js";
 import { readThemePreference, setThemePreference, type ThemePreference } from "../theme.js";
 import { readUrlPreviewPref, writeUrlPreviewPref } from "../urlPreviewPrefs.js";
 import { readFactCheckPref, writeFactCheckPref } from "../factCheckPrefs.js";
+import { readTypingPref, writeTypingPref } from "../typingPrefs.js";
 import { readPrivateReceiptsPref, writePrivateReceiptsPref } from "../readReceiptPrefs.js";
 import { SendingSettings } from "../components/SendingSettings.js";
 import {
@@ -152,6 +153,7 @@ export function Settings({
   // #264: off until this member turns it on — same "their own call, on
   // their own device" default as link previews above.
   const [factCheck, setFactCheck] = useState<boolean>(readFactCheckPref);
+  const [sendTyping, setSendTyping] = useState<boolean>(readTypingPref);
   // #286: off (ordinary, visible receipts — this app's behavior since #63)
   // until this member turns it on — same "their own call, on their own
   // device" default as the two above.
@@ -347,6 +349,33 @@ export function Settings({
           type="button"
         >
           {factCheck ? "Turn off quiet fact-check" : "Turn on quiet fact-check"}
+        </button>
+      </section>
+
+      <section className="shape-container flex flex-col gap-3 p-4" data-testid="settings-typing">
+        <h2 className="type-heading">Typing</h2>
+        {/* #285: on by default — the ordinary messenger behaviour every
+            member already expects, unlike the two settings above it (each
+            off by default because it costs something: a server fetch, a
+            quiet corpus check). Turning this off only ever stops SENDING
+            this member's own typing; seeing everyone else's has no
+            setting at all. */}
+        <p className="type-provenance text-[var(--muted)]">
+          Lets people you're chatting with see when you're typing a reply. On by default — turn it off and you'll
+          still see when others are typing, you just won't show it yourself.
+        </p>
+        <button
+          aria-pressed={sendTyping}
+          className="inline-flex min-h-11 items-center justify-center self-start rounded-[var(--r-sm)] border border-[var(--edge)] px-3 text-[var(--text)]"
+          data-testid="settings-typing-toggle"
+          onClick={() => {
+            const next = !sendTyping;
+            writeTypingPref(next);
+            setSendTyping(next);
+          }}
+          type="button"
+        >
+          {sendTyping ? "Turn off sending typing" : "Turn on sending typing"}
         </button>
       </section>
 

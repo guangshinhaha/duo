@@ -42,15 +42,21 @@ class FakeWebSocket {
   }
 }
 
-function Host({ onDraftReady }: { onDraftReady?: (draftId: string) => void }) {
-  useDraftReadySocket(api, onDraftReady);
+function Host({
+  onDraftReady,
+  onDraftingStarted,
+}: {
+  onDraftReady?: (draftId: string) => void;
+  onDraftingStarted?: (roomId: string) => void;
+}) {
+  useDraftReadySocket(api, onDraftReady, onDraftingStarted);
   return null;
 }
 
-function renderHookHost(client: QueryClient, onDraftReady?: (draftId: string) => void) {
+function renderHookHost(client: QueryClient, onDraftReady?: (draftId: string) => void, onDraftingStarted?: (roomId: string) => void) {
   return render(
     <QueryClientProvider client={client}>
-      <Host onDraftReady={onDraftReady} />
+      <Host onDraftReady={onDraftReady} onDraftingStarted={onDraftingStarted} />
     </QueryClientProvider>,
   );
 }
@@ -87,6 +93,20 @@ describe("useDraftReadySocket — the client half of the one push channel (C7, d
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["drafts"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["review"] });
     expect(onDraftReady).toHaveBeenCalledWith("d1");
+  });
+
+  it("guangshinhaha/duo#285: on draft-drafting, fires onDraftingStarted with the room id and touches no query cache", () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const onDraftingStarted = vi.fn();
+    renderHookHost(client, undefined, onDraftingStarted);
+
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].message({ type: "draft-drafting", roomId: "!project-x:workspace.example" });
+    });
+    expect(onDraftingStarted).toHaveBeenCalledWith("!project-x:workspace.example");
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it("reconnects with backoff after an abnormal close, and the backoff resets after a clean auth", () => {

@@ -232,7 +232,7 @@ The nine rows below (#269's never-answer writes and suggestion, and #270's away/
 | `GET` | `/audit` | `AuditEntry[]` | `permissions/audit` |
 | `GET` | `/mirror/public-answers` | `PublicAnswerLogEntry[]` — every ask-link answer given on the owner's behalf, each with its draft's `sources` resolved at read time; merged with `/audit` into Activity's one newest-first feed (duo#267, digital-duo#267) | `permissions/public-answer-log` |
 | `POST` | `/mirror/public-answers/:id/correct` | `PublicAnswerLogEntry` — body `{ correctedText, threadStillExists? }`; posts a linked correction and demotes the topic's T0 autonomy immediately; 404 unknown id, 409 nothing to correct, 400 blank text (duo#267, digital-duo#267) | `permissions/public-correction` |
-| `GET` | `/ws` | the one push channel — `draft-ready`; auth by first message (#162) | `serve/ws` |
+| `GET` | `/ws` | the one push channel — `draft-ready` and, since guangshinhaha/duo#285, `draft-drafting` (`{ type: "draft-drafting", roomId }`, fired when a workspace question starts drafting, before any draft row exists — "your duo is drafting"); auth by first message (#162) | `serve/ws` |
 
 **Ending the duo (#55).** "Instantly killable" is only true if it is not tied to one laptop, so
 Settings carries the kill switch: `POST /lifecycle/end` twice, and only the second deletes. The

@@ -35,6 +35,8 @@ vi.mock("matrix-js-sdk", () => ({
   // #286: Receipt too — another member's read receipt arriving is room
   // news the same way.
   RoomEvent: { Timeline: "timeline", LocalEchoUpdated: "Room.localEchoUpdated", Receipt: "Room.receipt" },
+  // #285: the member-level typing signal — a client.on/off target, never a RoomEvent.
+  RoomMemberEvent: { Typing: "RoomMember.typing" },
   SyncState: { Prepared: "PREPARED", Error: "ERROR" },
   MsgType: { Text: "m.text", File: "m.file", Image: "m.image" },
   ReceiptType: { Read: "m.read", FullyRead: "m.fully_read", ReadPrivate: "m.read.private" },
@@ -69,7 +71,7 @@ vi.mock("matrix-js-sdk", () => ({
   },
 }));
 
-import { ClientEvent, createClient, EventStatus, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent } from "matrix-js-sdk";
+import { ClientEvent, createClient, EventStatus, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent, RoomMemberEvent } from "matrix-js-sdk";
 import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import { enqueuePendingMessage, outboxKeyOf, pendingMessagesInOrder } from "../src/workspace/outbox.js";
 import { workspaceCacheName } from "../src/workspace/cache.js";
@@ -200,6 +202,7 @@ type FakeClient = MatrixClient & {
   setRoomAccountData: ReturnType<typeof vi.fn>;
   searchUserDirectory: ReturnType<typeof vi.fn>;
   sendReadReceipt: ReturnType<typeof vi.fn>;
+  sendTyping: ReturnType<typeof vi.fn>;
   sendEvent: ReturnType<typeof vi.fn>;
   redactEvent: ReturnType<typeof vi.fn>;
   uploadContent: ReturnType<typeof vi.fn>;
@@ -272,6 +275,7 @@ function fakeClient(
       ],
     })),
     sendReadReceipt: vi.fn(async () => ({})),
+    sendTyping: vi.fn(async () => ({})),
     sendEvent: vi.fn(async () => ({})),
     redactEvent: vi.fn(async () => ({})),
     uploadContent: vi.fn(async () => ({ content_uri: "mxc://workspace.example/abc123" })),
@@ -3693,6 +3697,70 @@ describe("#289 — a queued send survives a reload", () => {
 
     await vi.waitFor(async () => expect(await pendingMessagesInOrder(SESSION)).toEqual([]));
     expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("#285 — typing", () => {
+  it("sendTyping(true) carries the seam's own timeout; sendTyping(false) clears it at once", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.sendTyping!("!project-x:workspace.example", true);
+    expect(client.sendTyping).toHaveBeenCalledWith("!project-x:workspace.example", true, 20_000);
+
+    await connection.sendTyping!("!project-x:workspace.example", false);
+    expect(client.sendTyping).toHaveBeenCalledWith("!project-x:workspace.example", false, 0);
+  });
+
+  it("subscribeTyping reports who's typing at subscribe time, and again on every change — excluding this member and every other room", async () => {
+    // A mutable member list: the fixture flips `typing` and the test fires
+    // the exact event the real SDK would, the same way every other live
+    // event in this file is driven.
+    const members = [
+      { userId: "@bose:workspace.example", name: "Bose", rawDisplayName: "Bose", typing: true },
+      { userId: SESSION.userId, name: "ana", rawDisplayName: "ana", typing: true }, // this member's own typing never counts
+    ];
+    const room = { roomId: "!project-x:workspace.example", getMembers: () => members } as unknown as Room;
+    const client = fakeClient({ rooms: [room] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const seen: Array<readonly { userId: string; name: string }[]> = [];
+    const unsubscribe = connection.subscribeTyping!("!project-x:workspace.example", (typing) => seen.push(typing));
+    // Reported immediately — Bose was already typing before anyone subscribed.
+    expect(seen).toEqual([[{ userId: "@bose:workspace.example", name: "Bose" }]]);
+
+    const typingHandler = client.on.mock.calls.find(([event]) => event === RoomMemberEvent.Typing)?.[1] as (
+      event: unknown,
+      member: { roomId: string },
+    ) => void;
+
+    // A change in a DIFFERENT room must not re-report this one.
+    typingHandler?.(undefined, { roomId: "!other:workspace.example" });
+    expect(seen).toHaveLength(1);
+
+    // Bose stops; the next snapshot is empty.
+    members[0]!.typing = false;
+    typingHandler?.(undefined, { roomId: "!project-x:workspace.example" });
+    expect(seen).toEqual([[{ userId: "@bose:workspace.example", name: "Bose" }], []]);
+
+    unsubscribe();
+    expect(client.off).toHaveBeenCalledWith(RoomMemberEvent.Typing, typingHandler);
+  });
+
+  it("subscribeTyping on a room this account isn't in reports nothing and is a safe no-op to unsubscribe", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+    // Unlike the default fixture (which always falls back to a stand-in
+    // room), a room this account isn't in really does answer undefined.
+    client.getRoom.mockReturnValue(undefined);
+
+    const handler = vi.fn();
+    const unsubscribe = connection.subscribeTyping!("!nope:workspace.example", handler);
+    expect(handler).not.toHaveBeenCalled();
+    expect(() => unsubscribe()).not.toThrow();
   });
 });
 

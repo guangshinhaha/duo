@@ -11,7 +11,14 @@ import type { DuoApiConfig } from "./client.js";
  */
 export type WsInbound =
   | { type: "ready" }
-  | { type: "draft-ready"; draftId: string };
+  | { type: "draft-ready"; draftId: string }
+  // guangshinhaha/duo#285: "your duo is drafting" — a draft is being
+  // composed for this room, before it exists as a draft row at all (so
+  // there is no draftId yet, only the room it's for). Digital-duo fires
+  // this once per workspace question that starts drafting; there is no
+  // matching "stopped drafting" message — see `useDraftReadySocket`'s own
+  // doc comment for how the client clears it.
+  | { type: "draft-drafting"; roomId: string };
 
 const AUTH_CLOSE_CODE = 4001;
 const BACKOFF_FIRST_MS = 1000;
@@ -31,16 +38,32 @@ function wsUrl(baseUrl: string): string {
  * outcome-shaped write) and fire the native notification via `onDraftReady`
  * (C5's shell supplies it; the browser default does nothing).
  *
+ * guangshinhaha/duo#285: on `draft-drafting`, `onDraftingStarted` hears the
+ * room id — "your duo is drafting", shown only where that room surfaces
+ * (App.tsx owns the socket and passes the signal down, the same way it
+ * already does for `drafts`'s `RoomDrafts` slot; this hook does nothing
+ * with it beyond handing it along, since what to show is a rendering
+ * decision this module may not make). There is no matching "stopped
+ * drafting" push — App.tsx clears it itself once the room sees any
+ * activity, or after its own timeout, same honesty `draft-ready` itself
+ * never needed because a draft, once created, stays queryable forever.
+ *
  * Reconnect has exponential backoff that resets on a successful auth —
  * §3.3: reconnect *refetches*, it never replays, so a close is repaired by
  * the same invalidation every other reader already uses. The asker page
  * (`ask.html`) never mounts this hook: an asker has no push channel, and
  * no owner surface to refresh.
  */
-export function useDraftReadySocket(api: DuoApiConfig | null, onDraftReady?: (draftId: string) => void): void {
+export function useDraftReadySocket(
+  api: DuoApiConfig | null,
+  onDraftReady?: (draftId: string) => void,
+  onDraftingStarted?: (roomId: string) => void,
+): void {
   const queryClient = useQueryClient();
   const onDraftReadyRef = useRef(onDraftReady);
   onDraftReadyRef.current = onDraftReady;
+  const onDraftingStartedRef = useRef(onDraftingStarted);
+  onDraftingStartedRef.current = onDraftingStarted;
 
   useEffect(() => {
     if (!api || typeof WebSocket === "undefined") {
@@ -75,6 +98,10 @@ export function useDraftReadySocket(api: DuoApiConfig | null, onDraftReady?: (dr
         void queryClient.invalidateQueries({ queryKey: ["drafts"] });
         void queryClient.invalidateQueries({ queryKey: ["review"] });
         onDraftReadyRef.current?.(parsed.draftId);
+        return;
+      }
+      if (parsed.type === "draft-drafting") {
+        onDraftingStartedRef.current?.(parsed.roomId);
       }
     }
 
