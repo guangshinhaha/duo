@@ -251,6 +251,24 @@ export interface RoomSummary {
    * this field still satisfies the type.
    */
   readonly pinnedEventIds?: readonly string[];
+  /**
+   * #297: this conversation is pinned to the top of the sidebar — the
+   * spec's own `m.favourite` room tag, the account's own state, so it
+   * syncs the same way on every device. Distinct from `pinnedEventIds`
+   * above (#292's message-pin, a room's own shared state): this is the
+   * member's own ordering preference over their list, never a fact about
+   * the room itself. Present only when true, the same convention
+   * `markedUnread` uses.
+   */
+  readonly pinned?: true;
+  /**
+   * #297: this conversation is archived — the spec's own `m.lowpriority`
+   * room tag — which hides it from the sidebar's ordinary shelves and
+   * folders until new activity mentions the member (`ChatList.tsx`'s own
+   * rule; the tag itself carries no such exception). Present only when
+   * true, the same convention `markedUnread` uses.
+   */
+  readonly archived?: true;
 }
 
 /**
@@ -971,6 +989,23 @@ export interface WorkspaceConnection {
    * to write again.
    */
   setNotificationMode(roomId: string, mode: NotificationMode): Promise<void>;
+  /**
+   * #297: pins or unpins a conversation — the spec's own `m.favourite`
+   * room tag, this account's own state, so a pin made on one device holds
+   * on every other. Idempotent, the same stance `setNotificationMode`
+   * above already takes. Optional: absent on a minimal test stub that
+   * never exercises pinning (same stance `renewToken` takes).
+   */
+  setPinned?(roomId: string, pinned: boolean): Promise<void>;
+  /**
+   * #297: archives or restores a conversation — the spec's own
+   * `m.lowpriority` room tag. Archiving says nothing about notifications
+   * or membership; it only asks the sidebar to stop showing the room
+   * until something new mentions the member (`RoomSummary.archived`, read
+   * by `ChatList.tsx`). Idempotent, same stance as `setPinned`. Optional,
+   * same reason.
+   */
+  setArchived?(roomId: string, archived: boolean): Promise<void>;
   /**
    * #310: every keyword the member has asked to always hear about, read
    * from this account's own Matrix content push rules (`duo.keyword.*`,
@@ -2319,6 +2354,8 @@ async function projectRoom(
     canEdit: editPermissionsOf(room, selfId),
     ...(markedUnreadOf(room) ? { markedUnread: true as const } : {}),
     ...(pinnedEventIds.length > 0 ? { pinnedEventIds } : {}),
+    ...(pinnedOf(room) ? { pinned: true as const } : {}),
+    ...(archivedOf(room) ? { archived: true as const } : {}),
   };
 }
 
@@ -2351,6 +2388,28 @@ function markedUnreadOf(room: MatrixRoom): boolean {
   try {
     const content = room.getAccountData("m.marked_unread")?.getContent() as { unread?: unknown } | undefined;
     return content?.unread === true;
+  } catch {
+    return false;
+  }
+}
+
+/** The spec's own room-tagging names (#297) — read and written as-is, never a client-invented tag. */
+const FAVOURITE_TAG = "m.favourite";
+const LOW_PRIORITY_TAG = "m.lowpriority";
+
+/** #297: whether this member's account has tagged the room `m.favourite` (pinned) — read as defensively as every other account-state flag above, a fixture with no `tags` at all reading as "not pinned" rather than throwing. */
+function pinnedOf(room: MatrixRoom): boolean {
+  try {
+    return Boolean(room.tags?.[FAVOURITE_TAG]);
+  } catch {
+    return false;
+  }
+}
+
+/** #297: whether this member's account has tagged the room `m.lowpriority` (archived) — same defensive read as `pinnedOf`. */
+function archivedOf(room: MatrixRoom): boolean {
+  try {
+    return Boolean(room.tags?.[LOW_PRIORITY_TAG]);
   } catch {
     return false;
   }
@@ -3364,6 +3423,23 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       await client.deletePushRule("global", PushRuleKind.RoomSpecific, roomId).catch(() => undefined);
       await client.setRoomAccountData(roomId, "duo.notifications", { mode });
     },
+    // #297: the spec's own room-tagging door. Deleting a tag the account
+    // never set is a no-op on the homeserver side, so unpinning (or
+    // unarchiving) an already-plain room costs nothing to ask again.
+    setPinned: async (roomId, pinned) => {
+      if (pinned) {
+        await client.setRoomTag(roomId, FAVOURITE_TAG);
+      } else {
+        await client.deleteRoomTag(roomId, FAVOURITE_TAG).catch(() => undefined);
+      }
+    },
+    setArchived: async (roomId, archived) => {
+      if (archived) {
+        await client.setRoomTag(roomId, LOW_PRIORITY_TAG);
+      } else {
+        await client.deleteRoomTag(roomId, LOW_PRIORITY_TAG).catch(() => undefined);
+      }
+    },
     keywordAlerts: async () => {
       const pushRules = await client.getPushRules().catch(() => undefined);
       return (pushRules?.global.content ?? [])
@@ -3526,14 +3602,23 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
       const receiptListener = (_event: MatrixEvent, room: MatrixRoom): void => {
         handler(room.roomId);
       };
+      // #297: a pin or an archive — this account's own `m.tag` write,
+      // from this device or another — is room news the same way a name
+      // change is: no arrival, just the roomId, so the sidebar re-reads
+      // `pinned`/`archived` on its next projection.
+      const tagsListener = (_event: MatrixEvent, room: MatrixRoom): void => {
+        handler(room.roomId);
+      };
       client.on(RoomEvent.Timeline, listener);
       client.on(RoomEvent.LocalEchoUpdated, localEchoListener);
       client.on(RoomEvent.Receipt, receiptListener);
+      client.on(RoomEvent.Tags, tagsListener);
       handlers.add(handler);
       return () => {
         client.off(RoomEvent.Timeline, listener);
         client.off(RoomEvent.LocalEchoUpdated, localEchoListener);
         client.off(RoomEvent.Receipt, receiptListener);
+        client.off(RoomEvent.Tags, tagsListener);
         handlers.delete(handler);
       };
     },

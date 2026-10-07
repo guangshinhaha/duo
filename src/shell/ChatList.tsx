@@ -1,7 +1,23 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, AtSign, ChevronDown, ChevronRight, Ellipsis, FolderPlus, Settings as SettingsIcon, SquarePen, Trash2, UsersRound } from "lucide-react";
+import {
+  Archive as ArchiveIcon,
+  ArchiveRestore,
+  ArrowDown,
+  ArrowUp,
+  AtSign,
+  ChevronDown,
+  ChevronRight,
+  Ellipsis,
+  FolderPlus,
+  Pin,
+  PinOff,
+  Settings as SettingsIcon,
+  SquarePen,
+  Trash2,
+  UsersRound,
+} from "lucide-react";
 import type { DuoApiConfig } from "../api/client.js";
 import { usePendingT4, useRecordOutcome } from "../api/queries.js";
 import { Mark } from "../components/Mark.js";
@@ -46,6 +62,7 @@ import { useWaitingItems, waitingWords, swipeActionsOf, type WaitingItem } from 
 import { useMentions } from "./mentions.js";
 import { dueLaterItems, useLaterItems } from "./later.js";
 import { SwipeRow } from "./SwipeRow.js";
+import { ChatRowSwipe } from "./ChatRowSwipe.js";
 import { DESKTOP_QUERY, useMediaQuery } from "./useMediaQuery.js";
 import { DuoLine } from "../components/DuoLine.js";
 import { useSyncStatus } from "../sync.js";
@@ -325,6 +342,11 @@ export function ChatList({
   // #296: the owner's own sidebar folders — managed from their own dialog, not the "more" panel of any one row.
   const [foldersOpen, setFoldersOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  // #297: the recovery view for an archived conversation that has nothing
+  // new to bring it back on its own — the dialog this app otherwise has no
+  // other screen for, the same "only while something's there" chrome rule
+  // `ConfirmationsChip` already follows.
+  const [archivedOpen, setArchivedOpen] = useState(false);
 
   // Live arrivals refresh the list the same way every other reader does:
   // invalidation, never a second copy of the data.
@@ -442,6 +464,44 @@ export function ChatList({
       });
   };
 
+  // #297: pin stays on top of the list, archive leaves it until new
+  // activity mentions the member — the spec's own room tags
+  // (`setPinned`/`setArchived` on the connection), the same busy-lock and
+  // error-banner shape every other row action here already takes. Absent
+  // on a minimal test stub (same stance `keywordAlerts` takes): the
+  // button and the swipe that would call it simply don't appear.
+  const setPinned = (room: RoomSummary, pinned: boolean): void => {
+    if (busyRoomId !== null || !connection?.setPinned) {
+      return;
+    }
+    setBusyRoomId(room.roomId);
+    setActionError(null);
+    connection
+      .setPinned(room.roomId, pinned)
+      .then(() => setActionError(null))
+      .catch(() => setActionError("The workspace didn't take that — try again."))
+      .finally(() => {
+        setBusyRoomId(null);
+        refresh();
+      });
+  };
+
+  const setArchived = (room: RoomSummary, archived: boolean): void => {
+    if (busyRoomId !== null || !connection?.setArchived) {
+      return;
+    }
+    setBusyRoomId(room.roomId);
+    setActionError(null);
+    connection
+      .setArchived(room.roomId, archived)
+      .then(() => setActionError(null))
+      .catch(() => setActionError("The workspace didn't take that — try again."))
+      .finally(() => {
+        setBusyRoomId(null);
+        refresh();
+      });
+  };
+
   const confirmLeave = (): void => {
     if (!leaveTarget || leaving || !connection) {
       return;
@@ -467,24 +527,43 @@ export function ChatList({
   const bridgedWaiting = useMemo(() => new Map(waiting.items.filter((item) => item.kind === "bridged").map((item) => [item.key, item])), [waiting.items]);
   const roomRows = rooms.data ?? [];
   const roomsById = useMemo(() => new Map(roomRows.map((room) => [room.roomId, room])), [roomRows]);
+  // #297 AC2: an archived conversation leaves the list until new activity
+  // mentions the member — the tag itself carries no such exception, so
+  // this is where the exception lives. Applied before every other filter
+  // and count below, so "the list" means the same thing everywhere in this
+  // component: what the member would actually see, archived-and-quiet
+  // rooms aside.
+  const visibleRoomRows = useMemo(() => roomRows.filter((room) => room.archived !== true || room.unread.mentions > 0), [roomRows]);
+  // The full set of archived rooms, unfiltered by the above — what the
+  // "Archived" dialog offers back, independent of whatever chip is active.
+  const archivedRoomRows = useMemo(() => roomRows.filter((room) => room.archived === true), [roomRows]);
   // #298: each chip's own count — how many rooms it would narrow the list
-  // to — read off the full list, never the currently filtered one, the same
-  // way the Waiting and Confirmations chips' own counts hold steady while
-  // another filter is active.
-  const unreadCount = useMemo(() => roomRows.filter((room) => matchesSectionFilter("unread", room)).length, [roomRows]);
-  const mentionsCount = useMemo(() => roomRows.filter((room) => matchesSectionFilter("mentions", room)).length, [roomRows]);
-  const duosCount = useMemo(() => roomRows.filter((room) => matchesSectionFilter("duos", room)).length, [roomRows]);
+  // to — read off the full (visible) list, never the one narrowed by
+  // another chip, the same way the Waiting and Confirmations chips' own
+  // counts hold steady while another filter is active.
+  const unreadCount = useMemo(() => visibleRoomRows.filter((room) => matchesSectionFilter("unread", room)).length, [visibleRoomRows]);
+  const mentionsCount = useMemo(() => visibleRoomRows.filter((room) => matchesSectionFilter("mentions", room)).length, [visibleRoomRows]);
+  const duosCount = useMemo(() => visibleRoomRows.filter((room) => matchesSectionFilter("duos", room)).length, [visibleRoomRows]);
   const filteredRoomRows = useMemo(
-    () => (sectionFilter === "all" ? roomRows : roomRows.filter((room) => matchesSectionFilter(sectionFilter, room))),
-    [roomRows, sectionFilter],
+    () => (sectionFilter === "all" ? visibleRoomRows : visibleRoomRows.filter((room) => matchesSectionFilter(sectionFilter, room))),
+    [visibleRoomRows, sectionFilter],
   );
+  // #297 AC1: a pinned conversation stays on top of the whole list — above
+  // the owner's own folders, in its own section, the same "claimed once,
+  // never duplicated" rule #296's folding already set for a room that
+  // leaves the ordinary shelves below.
+  const pinnedRoomRows = useMemo(() => filteredRoomRows.filter((room) => room.pinned === true), [filteredRoomRows]);
+  const pinnedRoomIds = useMemo(() => new Set(pinnedRoomRows.map((room) => room.roomId)), [pinnedRoomRows]);
   // #296: a conversation claimed by one of the owner's own folders leaves
   // the sidebar's ordinary shelves below — it still renders, just once,
   // under its folder instead. Filtered the same way the shelves are (#298):
   // an active chip narrows a folder's own rows exactly as it narrows the
   // shelves, so the two combine rather than one overriding the other.
   const foldedRoomIds = useMemo(() => roomIdsInSections(chatSections), [chatSections]);
-  const shelvedRoomRows = useMemo(() => filteredRoomRows.filter((room) => !foldedRoomIds.has(room.roomId)), [filteredRoomRows, foldedRoomIds]);
+  const shelvedRoomRows = useMemo(
+    () => filteredRoomRows.filter((room) => !foldedRoomIds.has(room.roomId) && !pinnedRoomIds.has(room.roomId)),
+    [filteredRoomRows, foldedRoomIds, pinnedRoomIds],
+  );
   // #208: grouped the way the list itself renders — Channels, then Direct
   // messages, then Duos — so ⌘1–9 and J/K (below) walk the rows in the same
   // order the eye does, never the server's flat recency order. #298: the
@@ -495,13 +574,23 @@ export function ChatList({
   // same way the shelves above are — a folder with nothing left to show
   // under the current chip renders no rows (the render below hides its
   // header too in that case), never a row the chip would otherwise hide.
+  // #297: a pinned conversation leaves its folder too, for the same
+  // "shown once, at the top" reason it leaves the ordinary shelves, and an
+  // archived one with nothing new follows the same AC2 exception the
+  // shelves already take.
   const visibleFolderRooms = useMemo(
     () =>
       chatSections.map((section) => ({
         section,
         rooms: section.roomIds
           .map((roomId) => roomsById.get(roomId))
-          .filter((room): room is RoomSummary => room !== undefined && (sectionFilter === "all" || matchesSectionFilter(sectionFilter, room))),
+          .filter(
+            (room): room is RoomSummary =>
+              room !== undefined &&
+              room.pinned !== true &&
+              (room.archived !== true || room.unread.mentions > 0) &&
+              (sectionFilter === "all" || matchesSectionFilter(sectionFilter, room)),
+          ),
       })),
     [chatSections, roomsById, sectionFilter],
   );
@@ -513,8 +602,8 @@ export function ChatList({
     [visibleFolderRooms],
   );
   const sectionedRoomRows = useMemo(
-    () => [...folderRoomRows, ...sections.channels, ...sections.directs, ...sections.duos],
-    [folderRoomRows, sections],
+    () => [...pinnedRoomRows, ...folderRoomRows, ...sections.channels, ...sections.directs, ...sections.duos],
+    [pinnedRoomRows, folderRoomRows, sections],
   );
   const activeRoom = typeof route === "object" && "chat" in route ? route.chat : typeof route === "object" && "thread" in route ? route.thread.roomId : null;
 
@@ -753,7 +842,16 @@ export function ChatList({
       // never below the member's own "Summaries" setting, and null below
       // #281's own unread threshold (see unreadSummary.ts).
       const summary = readCatchUpEnabled() ? oneLineUnreadSummary(room) : null;
-      return (
+      // #297 AC3: a row that already shows a draft keeps the draft swipe
+      // (its own, elsewhere — `WaitingSwipe`, in the Waiting on you filter)
+      // and never also offers this one, so the two can never compete for
+      // the same gesture; pin and archive still reach that row through
+      // the "more" panel above. Phone-only (`phone`, the same signal
+      // `WaitingSwipe` already gates its own swipe on, for consistency),
+      // and only for whichever of pin/archive the connection actually
+      // offers.
+      const swipeable = phone && !waitingByRoom.get(room.roomId);
+      const row = (
         <Row
           active={activeRoom === room.roomId}
           avatar={<Avatar kind={avatarKind} seed={room.roomId} title={title} />}
@@ -853,6 +951,34 @@ export function ChatList({
                 <option value="mentions">Mentions</option>
                 <option value="nothing">Nothing</option>
               </select>
+              {/* #297: pin to the top of the whole list, or take it back — absent when the connection never offers it (a minimal test stub). */}
+              {connection?.setPinned && (
+                <button
+                  aria-label={room.pinned ? `Unpin ${title}` : `Pin ${title}`}
+                  className="inline-flex min-h-11 items-center justify-center gap-1 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
+                  data-testid="room-pin"
+                  disabled={busyRoomId === room.roomId}
+                  onClick={() => setPinned(room, !room.pinned)}
+                  type="button"
+                >
+                  {room.pinned ? <PinOff aria-hidden="true" size={14} /> : <Pin aria-hidden="true" size={14} />}
+                  {room.pinned ? "Unpin" : "Pin"}
+                </button>
+              )}
+              {/* #297: archive hides it from the list until new activity mentions the member — reversible any time from here, or from the Archived dialog once it's out of sight. */}
+              {connection?.setArchived && (
+                <button
+                  aria-label={room.archived ? `Unarchive ${title}` : `Archive ${title}`}
+                  className="inline-flex min-h-11 items-center justify-center gap-1 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
+                  data-testid="room-archive"
+                  disabled={busyRoomId === room.roomId}
+                  onClick={() => setArchived(room, !room.archived)}
+                  type="button"
+                >
+                  {room.archived ? <ArchiveRestore aria-hidden="true" size={14} /> : <ArchiveIcon aria-hidden="true" size={14} />}
+                  {room.archived ? "Unarchive" : "Archive"}
+                </button>
+              )}
               {/* #296: which of the owner's own folders this conversation lives in — "No folder" puts it back on the ordinary shelves above. Shown only once the owner has made at least one; there is nothing to choose among otherwise. */}
               {chatSections.length > 0 && (
                 <select
@@ -916,6 +1042,20 @@ export function ChatList({
           )}
         </Row>
       );
+      if (!swipeable) {
+        return row;
+      }
+      return (
+        <ChatRowSwipe
+          archive={connection?.setArchived ? () => setArchived(room, !room.archived) : null}
+          archiveLabel={room.archived ? "Unarchive" : "Archive"}
+          key={room.roomId}
+          pin={connection?.setPinned ? () => setPinned(room, !room.pinned) : null}
+          pinLabel={room.pinned ? "Unpin" : "Pin"}
+        >
+          {row}
+        </ChatRowSwipe>
+      );
     };
 
     return (
@@ -943,8 +1083,15 @@ export function ChatList({
           </p>
         ) : (
           <div className="mt-2 flex flex-col gap-1" data-testid="conversations-list">
-            {/* #296: the owner's own folders, in their own order, each above the rows it claims — ahead of the sidebar's ordinary shelves, which only ever show what no folder has taken. */}
-            {chatSections.map((section) => (
+            {/* #297 AC1: pinned conversations, above everything else this list renders — a pinned room is claimed here instead of its folder or ordinary shelf, same "shown once" rule #296's folding already set. */}
+            {pinnedRoomRows.length > 0 && (
+              <>
+                <SectionHeader label="Pinned" testId="chat-section-pinned" />
+                {pinnedRoomRows.map(renderRoomRow)}
+              </>
+            )}
+            {/* #296: the owner's own folders, in their own order, each above the rows it claims — ahead of the sidebar's ordinary shelves, which only ever show what no folder has taken. #297/#298: a folder's own rows are the same ones `visibleFolderRooms` already narrowed by the active chip, by archive (AC2) and by pin (above) — the unread count stays the folder's true count regardless, read straight off `roomsById`. */}
+            {visibleFolderRooms.map(({ section, rooms }) => (
               <Fragment key={section.id}>
                 <FolderHeader
                   collapsed={section.collapsed}
@@ -953,11 +1100,7 @@ export function ChatList({
                   testId={`chat-folder-${section.id}`}
                   unread={sectionUnreadCount(section, roomsById)}
                 />
-                {!section.collapsed &&
-                  section.roomIds
-                    .map((roomId) => roomsById.get(roomId))
-                    .filter((room): room is RoomSummary => room !== undefined)
-                    .map(renderRoomRow)}
+                {!section.collapsed && rooms.map(renderRoomRow)}
               </Fragment>
             ))}
             {sections.channels.length > 0 && (
@@ -1020,6 +1163,18 @@ export function ChatList({
               type="button"
             >
               <FolderPlus aria-label="Folders" size={18} />
+            </button>
+          )}
+          {/* #297: only once something is archived — an empty workspace shows no chrome for a queue that holds nothing, the same "nothing to add" rule every other badge here follows. */}
+          {connection && archivedRoomRows.length > 0 && (
+            <button
+              aria-label={`Archived, ${archivedRoomRows.length}`}
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--r-md)] text-[var(--muted)]"
+              data-testid="chat-list-archived"
+              onClick={() => setArchivedOpen(true)}
+              type="button"
+            >
+              <ArchiveIcon aria-label="Archived" size={18} />
             </button>
           )}
           {connection && (
@@ -1258,6 +1413,39 @@ export function ChatList({
             <DialogClose
               className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body"
               data-testid="folders-done"
+            >
+              Done
+            </DialogClose>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* #297 AC2: an archived room returns on its own once something new mentions the member — this is the way back for the rest, independent of that. */}
+      <Dialog onOpenChange={setArchivedOpen} open={archivedOpen}>
+        <DialogContent data-testid="archived-dialog">
+          <DialogTitle>Archived</DialogTitle>
+          <DialogDescription>Hidden from your list until something new mentions you. Unarchive one to bring it back now.</DialogDescription>
+          <div className="flex flex-col gap-2" data-testid="archived-list">
+            {archivedRoomRows.length === 0 && <p className="type-body text-[var(--muted)]">Nothing archived.</p>}
+            {archivedRoomRows.map((room) => (
+              <div className="flex items-center justify-between gap-2 rounded-[var(--r-sm)] border border-[var(--edge)] px-3 py-2" data-testid="archived-row" key={room.roomId}>
+                <span className="min-w-0 flex-1 truncate type-body text-[var(--text)]">{soleDuoLabel(room) ?? roomTitle(room)}</span>
+                <button
+                  aria-label={`Unarchive ${soleDuoLabel(room) ?? roomTitle(room)}`}
+                  className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-provenance text-[var(--muted)] disabled:opacity-40"
+                  data-testid="archived-row-unarchive"
+                  disabled={busyRoomId === room.roomId}
+                  onClick={() => setArchived(room, false)}
+                  type="button"
+                >
+                  Unarchive
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end">
+            <DialogClose
+              className="inline-flex min-h-11 items-center justify-center rounded-[var(--r-sm)] border border-[var(--edge)] px-3 type-body"
+              data-testid="archived-done"
             >
               Done
             </DialogClose>
