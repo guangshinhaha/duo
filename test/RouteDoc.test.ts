@@ -70,6 +70,8 @@ const SERVED: [method: string, path: string][] = [
   ["POST", "/drafts"],
   ["POST", "/compose/rewrite"],
   ["POST", "/compose/fact-check"],
+  // digital-duo duo#283: landed on origin/main's src/serve/server.ts.
+  ["POST", "/compose/explain"],
   ["POST", "/ask"],
   ["POST", "/drafts/:id/outcome"],
   ["POST", "/drafts/:id/answer"],
