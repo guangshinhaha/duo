@@ -15,7 +15,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
-import { roomTitle } from "../shell/roomTitle.js";
+import { roomTitle, soleDuoLabel } from "../shell/roomTitle.js";
+import { usePeoplePresence } from "../shell/usePeoplePresence.js";
 import { addressed, mentionLabelOf, mentionPillClassName } from "../workspace/mentions.js";
 import { ChatEditor, type ChatEditorHandle } from "../composer/ChatEditor.js";
 import { FactCheckAssist } from "../composer/FactCheckAssist.js";
@@ -436,6 +437,13 @@ export function Room({
 
   const room = rooms.data?.find((candidate) => candidate.roomId === roomId);
   const roomName = room ? roomTitle(room) : roomId;
+  // #287: the one other person in a direct conversation — never a
+  // colleague's duo, which carries no presence concept. Called
+  // unconditionally (an empty id list is a perfectly good argument), the
+  // same "hook runs every render" shape every other query above already
+  // takes with this room possibly not loaded yet.
+  const partnerId = room && room.kind === "direct" && soleDuoLabel(room) === null ? room.members[0]?.userId ?? null : null;
+  const partnerPresence = usePeoplePresence(connection, partnerId ? [partnerId] : []).get(partnerId ?? "") ?? null;
   // #313: a conversation with a colleague's duo says so, persistently, and
   // each question in it says what became of it.
   const duoConversation = room ? duoConversationOf(room, connection?.userId ?? null) : null;
@@ -853,7 +861,19 @@ export function Room({
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-[var(--edge)] px-4 py-2" data-testid="room-header">
-        <h1 className="min-w-0 truncate type-heading">{roomName}</h1>
+        <div className="flex min-w-0 flex-col">
+          <h1 className="min-w-0 truncate type-heading">{roomName}</h1>
+          {/* #287: the one other person's own state and status — the
+              open conversation is the one place "offline" is worth saying
+              (unlike a row in the list, where most people are and it would
+              just be noise). */}
+          {partnerPresence !== null && (
+            <p className="min-w-0 truncate type-provenance text-[var(--muted)]" data-testid="room-partner-presence">
+              {partnerPresence.presence === "online" ? "Online" : partnerPresence.presence === "away" ? "Away" : "Offline"}
+              {partnerPresence.statusMessage !== null && <> — {partnerPresence.statusMessage}</>}
+            </p>
+          )}
+        </div>
         {offTheRecordControl && <div className="ml-auto flex items-center">{offTheRecordControl}</div>}
         <InfoButton />
       </header>
