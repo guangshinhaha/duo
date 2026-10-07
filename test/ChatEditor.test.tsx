@@ -229,7 +229,7 @@ describe("duo#301 — the slash-command typeahead", () => {
       "/summarizeCatch up on this conversation",
       "/laterSave words for later",
       "/remindSave words with a reminder",
-      "/pollRun a poll — coming soon",
+      "/pollRun a poll",
     ]);
   });
 

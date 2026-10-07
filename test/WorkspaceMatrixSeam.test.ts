@@ -44,7 +44,7 @@ vi.mock("matrix-js-sdk", () => ({
   // #285: the member-level typing signal — a client.on/off target, never a RoomEvent.
   RoomMemberEvent: { Typing: "RoomMember.typing" },
   SyncState: { Prepared: "PREPARED", Error: "ERROR" },
-  MsgType: { Text: "m.text", File: "m.file", Image: "m.image" },
+  MsgType: { Text: "m.text", File: "m.file", Image: "m.image", Audio: "m.audio" },
   ReceiptType: { Read: "m.read", FullyRead: "m.fully_read", ReadPrivate: "m.read.private" },
   NotificationCountType: { Highlight: "highlight", Total: "total" },
   Preset: { PrivateChat: "private_chat", TrustedPrivateChat: "trusted_private_chat", PublicChat: "public_chat" },
@@ -86,6 +86,15 @@ vi.mock("matrix-js-sdk", () => ({
 }));
 
 import { ClientEvent, createClient, EventStatus, EventType, IndexedDBStore, MatrixError, MsgType, PendingEventOrdering, ReceiptType, RoomEvent, RoomMemberEvent, SetPresence } from "matrix-js-sdk";
+// #293: the real SDK classes, the same deep-path doors `matrix.ts` itself
+// uses — never intercepted by the `vi.mock("matrix-js-sdk", ...)` above
+// (which only replaces the bare package specifier), so these build the
+// identical wire shape the seam sends, rather than this file guessing it a
+// second time.
+import { PollStartEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollStartEvent";
+import { PollResponseEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollResponseEvent";
+import { PollEndEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollEndEvent";
+import { M_POLL_KIND_DISCLOSED } from "matrix-js-sdk/lib/@types/polls";
 import { connect, normalizeHomeserverUrl, signIn } from "../src/workspace/matrix.js";
 import { enqueuePendingMessage, outboxKeyOf, pendingMessagesInOrder } from "../src/workspace/outbox.js";
 import { workspaceCacheName } from "../src/workspace/cache.js";
@@ -145,6 +154,32 @@ function fakeEvent(
       "m.relates_to":
         shape.relatesTo ?? (shape.replyToEventId === undefined ? undefined : { "m.in_reply_to": { event_id: shape.replyToEventId } }),
     }),
+    getTs: () => shape.ts,
+    isRedacted: () => shape.redacted ?? false,
+  } as unknown as MatrixEvent;
+}
+
+/**
+ * #293: an event of a type `fakeEvent` doesn't know (a poll's three event
+ * types aren't `m.room.message`, so none of its fixed content shape
+ * applies) — a bare id/type/sender/content/ts/redacted fixture for exactly
+ * those, with `relatesTo` folded into `m.relates_to` the same way
+ * `fakeEvent` does it for consistency between the two.
+ */
+function fakeRawEvent(shape: {
+  id: string;
+  type: string;
+  sender: string;
+  content: object;
+  ts: number;
+  relatesTo?: { rel_type: string; event_id: string };
+  redacted?: boolean;
+}): MatrixEvent {
+  return {
+    getId: () => shape.id,
+    getType: () => shape.type,
+    getSender: () => shape.sender,
+    getContent: () => ({ ...shape.content, ...(shape.relatesTo === undefined ? {} : { "m.relates_to": shape.relatesTo }) }),
     getTs: () => shape.ts,
     isRedacted: () => shape.redacted ?? false,
   } as unknown as MatrixEvent;
@@ -3335,6 +3370,290 @@ describe("the share wire (#66)", () => {
         readState: "sent",
       },
     ]);
+  });
+});
+
+describe("voice notes (#294)", () => {
+  it("sends a voice note as m.audio with the MSC3245 voice marker, its transcript as the body, and the clip's own duration", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.sendFile("!project-x:workspace.example", {
+      name: "Voice note 2026-10-07.webm",
+      mimeType: "audio/webm",
+      size: 12_000,
+      url: "mxc://workspace.example/voice1",
+      image: false,
+      audio: true,
+      durationMs: 4_200,
+      transcript: "let's ship it tonight",
+    });
+
+    expect(client.sendMessage).toHaveBeenLastCalledWith("!project-x:workspace.example", {
+      msgtype: "m.audio",
+      // #294: the transcript rides as `body` — the one existing
+      // text-reading door (search, notifications, a duo's own grounding)
+      // that already knows how to find a message's words.
+      body: "let's ship it tonight",
+      filename: "Voice note 2026-10-07.webm",
+      url: "mxc://workspace.example/voice1",
+      info: { mimetype: "audio/webm", size: 12_000, duration: 4_200 },
+      "org.matrix.msc3245.voice": {},
+    });
+  });
+
+  it("falls back to the generated name as body when the browser produced no transcript", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.sendFile("!project-x:workspace.example", {
+      name: "Voice note 2026-10-07.webm",
+      mimeType: "audio/webm",
+      size: 9_000,
+      url: "mxc://workspace.example/voice2",
+      image: false,
+      audio: true,
+      durationMs: 1_800,
+    });
+
+    expect(client.sendMessage).toHaveBeenLastCalledWith(
+      "!project-x:workspace.example",
+      expect.objectContaining({ body: "Voice note 2026-10-07.webm", msgtype: "m.audio" }),
+    );
+  });
+
+  it("marks a recorded upload's own MIME type as audio, duration and transcript carried through untouched", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const shared = await connection.uploadFile({
+      name: "Voice note.webm",
+      mimeType: "audio/webm",
+      size: 9_000,
+      bytes: new ArrayBuffer(9_000),
+      durationMs: 2_500,
+      transcript: "quick question",
+    });
+
+    expect(shared).toEqual({
+      name: "Voice note.webm",
+      mimeType: "audio/webm",
+      size: 9_000,
+      url: "mxc://workspace.example/abc123",
+      image: false,
+      audio: true,
+      durationMs: 2_500,
+      transcript: "quick question",
+    });
+  });
+
+  it("projects a received voice note's transcript and duration, distinguishing it from a transcript-less clip's generated name", async () => {
+    const events = [
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.audio",
+        body: "let's ship it tonight",
+        filename: "Voice note 2026-10-07.webm",
+        url: "mxc://workspace.example/voice1",
+        info: { mimetype: "audio/webm", size: 12_000 },
+        ts: 1_000,
+      }),
+      fakeEvent({
+        type: "m.room.message",
+        sender: "@bose:workspace.example",
+        msgtype: "m.audio",
+        body: "Voice note 2026-10-07b.webm", // no transcript: body fell back to the filename
+        filename: "Voice note 2026-10-07b.webm",
+        url: "mxc://workspace.example/voice2",
+        info: { mimetype: "audio/webm", size: 9_000 },
+        ts: 2_000,
+      }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timeline("!project-x:workspace.example");
+    expect(messages.map((message) => message.file)).toEqual([
+      {
+        name: "Voice note 2026-10-07.webm",
+        mimeType: "audio/webm",
+        size: 12_000,
+        url: "mxc://workspace.example/voice1",
+        image: false,
+        audio: true,
+        durationMs: undefined,
+        transcript: "let's ship it tonight",
+      },
+      {
+        name: "Voice note 2026-10-07b.webm",
+        mimeType: "audio/webm",
+        size: 9_000,
+        url: "mxc://workspace.example/voice2",
+        image: false,
+        audio: true,
+        durationMs: undefined,
+        transcript: undefined, // the fallback body IS the filename — never shown as a transcript
+      },
+    ]);
+  });
+});
+
+describe("polls (#293)", () => {
+  it("starts a disclosed poll — an m.poll.start (MSC3381), the unstable-prefixed type every shipping client actually sends", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.sendPoll("!project-x:workspace.example", "Lunch?", ["Pizza", "Sushi"]);
+
+    expect(client.sendEvent).toHaveBeenCalledWith(
+      "!project-x:workspace.example",
+      "org.matrix.msc3381.poll.start",
+      expect.objectContaining({
+        "org.matrix.msc3381.poll.start": expect.objectContaining({
+          kind: "org.matrix.msc3381.poll.disclosed",
+          max_selections: 1,
+          answers: [expect.objectContaining({ "org.matrix.msc1767.text": "Pizza" }), expect.objectContaining({ "org.matrix.msc1767.text": "Sushi" })],
+        }),
+      }),
+    );
+  });
+
+  it("votes with an m.poll.response referencing the poll's start event", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.votePoll("!project-x:workspace.example", "$poll1", "answer-a");
+
+    expect(client.sendEvent).toHaveBeenCalledWith("!project-x:workspace.example", "org.matrix.msc3381.poll.response", {
+      "m.relates_to": { rel_type: "m.reference", event_id: "$poll1" },
+      "org.matrix.msc3381.poll.response": { answers: ["answer-a"] },
+    });
+  });
+
+  it("closes a poll with an m.poll.end referencing its start event", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.endPoll("!project-x:workspace.example", "$poll1");
+
+    expect(client.sendEvent).toHaveBeenCalledWith(
+      "!project-x:workspace.example",
+      "org.matrix.msc3381.poll.end",
+      expect.objectContaining({ "m.relates_to": { rel_type: "m.reference", event_id: "$poll1" } }),
+    );
+  });
+
+  it("projects a poll's live results — the latest response per sender, votes tallied by option", async () => {
+    const start = PollStartEvent.from("Lunch?", ["Pizza", "Sushi"], M_POLL_KIND_DISCLOSED.name, 1).serialize();
+    const [pizzaId, sushiId] = (start.content as { [k: string]: { answers: { id: string }[] } })["org.matrix.msc3381.poll.start"].answers.map(
+      (a) => a.id,
+    ) as [string, string];
+    const events = [
+      fakeRawEvent({ id: "$poll1", type: start.type, sender: "@bose:workspace.example", content: start.content as object, ts: 1_000 }),
+      // Bose votes Pizza, then changes their mind to Sushi — only the later vote should count.
+      fakeRawEvent({
+        id: "$r1",
+        type: PollResponseEvent.from([pizzaId], "$poll1").serialize().type,
+        sender: "@bose:workspace.example",
+        content: PollResponseEvent.from([pizzaId], "$poll1").serialize().content as object,
+        ts: 2_000,
+      }),
+      fakeRawEvent({
+        id: "$r2",
+        type: PollResponseEvent.from([sushiId], "$poll1").serialize().type,
+        sender: "@bose:workspace.example",
+        content: PollResponseEvent.from([sushiId], "$poll1").serialize().content as object,
+        ts: 3_000,
+      }),
+      // ana votes Pizza.
+      fakeRawEvent({
+        id: "$r3",
+        type: PollResponseEvent.from([pizzaId], "$poll1").serialize().type,
+        sender: SESSION.userId,
+        content: PollResponseEvent.from([pizzaId], "$poll1").serialize().content as object,
+        ts: 4_000,
+      }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message?.poll).toEqual({
+      question: "Lunch?",
+      options: [
+        { id: pizzaId, text: "Pizza", votes: 1, mine: true }, // ana's own vote
+        { id: sushiId, text: "Sushi", votes: 1, mine: false }, // Bose's latest vote
+      ],
+      totalVotes: 2, // two distinct voters, not three response events
+      closed: false,
+    });
+  });
+
+  it("closes voting: a response timestamped at or after the m.poll.end is ignored", async () => {
+    const start = PollStartEvent.from("Lunch?", ["Pizza", "Sushi"], M_POLL_KIND_DISCLOSED.name, 1).serialize();
+    const [pizzaId] = (start.content as { [k: string]: { answers: { id: string }[] } })["org.matrix.msc3381.poll.start"].answers.map(
+      (a) => a.id,
+    ) as [string, string];
+    const end = PollEndEvent.from("$poll1", "Closed").serialize();
+    const lateVote = PollResponseEvent.from([pizzaId], "$poll1").serialize();
+    const events = [
+      fakeRawEvent({ id: "$poll1", type: start.type, sender: "@bose:workspace.example", content: start.content as object, ts: 1_000 }),
+      fakeRawEvent({ id: "$end1", type: end.type, sender: "@bose:workspace.example", content: end.content as object, ts: 2_000 }),
+      // A vote that arrives after the close is ignored.
+      fakeRawEvent({ id: "$r1", type: lateVote.type, sender: SESSION.userId, content: lateVote.content as object, ts: 3_000 }),
+    ];
+    const client = fakeClient({
+      rooms: [
+        summaryRoom({
+          roomId: "!project-x:workspace.example",
+          name: "project-x",
+          joinRule: "invite",
+          members: [{ userId: "@bose:workspace.example", name: "Bose" }],
+          notificationCount: 0,
+          highlightCount: 0,
+          events,
+        }),
+      ],
+    });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message?.poll?.closed).toBe(true);
+    expect(message?.poll?.totalVotes).toBe(0);
   });
 });
 

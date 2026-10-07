@@ -4,21 +4,22 @@
  * after any other character is just a character, the same restraint the
  * mention offer gives "@" after whitespace only, `mentionOffer.ts`).
  *
- * Four of the five named commands have somewhere real to go: `/duo` opens
- * Your duo (`#duo`, always present, "works with no workspace" —
- * vocabulary.md); `/summarize` reuses the exact catch-up mechanism #280
- * already shipped (`onCatchUp`), on demand rather than only past its unread
- * threshold; `/later <words>` and `/remind <words>` reuse duo#299's own
- * "Later" mechanism (`shell/later.ts`'s `addLaterItem`, the account's own
+ * All five named commands have somewhere real to go: `/duo` opens Your duo
+ * (`#duo`, always present, "works with no workspace" — vocabulary.md);
+ * `/summarize` reuses the exact catch-up mechanism #280 already shipped
+ * (`onCatchUp`), on demand rather than only past its unread threshold;
+ * `/later <words>` and `/remind <words>` reuse duo#299's own "Later"
+ * mechanism (`shell/later.ts`'s `addLaterItem`, the account's own
  * `connection.later`/`setLater`, and — for `/remind`, to pick when —
  * `SaveToLaterDialog`, the exact dialog the composer's own "Save to Later"
  * button opens), rather than a second, parallel one this PR would invent.
- * `/poll` names a mechanism that doesn't exist yet (duo#293 is still open,
- * confirmed against `origin/main` before this file was written): it stays
- * listed (so a member typing "/poll" learns it's a real, coming command,
- * not a typo) but `available: false`, and picking it shows
- * `unavailableNotice` instead of doing anything — never a silent no-op,
- * never invented storage.
+ * `/poll <question> | <option> | <option>…` (duo#293) opens the poll
+ * composer pre-filled from whatever followed the command — a pipe-separated
+ * line, so a member who already knows the shape can skip the dialog's
+ * fields entirely; typing just "/poll" with no argument opens it blank. The
+ * daemon-side "your duo suggests one when a group is deciding" half of
+ * #293 stays unbuilt tonight (noted in that issue's own PR) — this is the
+ * manual trigger only, exactly as #293 allows scoping down to.
  */
 
 export type SlashCommandId = "duo" | "summarize" | "later" | "remind" | "poll";
@@ -38,13 +39,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { id: "summarize", command: "/summarize", description: "Catch up on this conversation", available: true },
   { id: "later", command: "/later", description: "Save words for later", available: true },
   { id: "remind", command: "/remind", description: "Save words with a reminder", available: true },
-  {
-    id: "poll",
-    command: "/poll",
-    description: "Run a poll — coming soon",
-    available: false,
-    unavailableNotice: "Polls aren't built yet — nothing was sent.",
-  },
+  { id: "poll", command: "/poll", description: "Run a poll", available: true },
 ];
 
 /** What follows "/" matches a command's own id as a prefix, case-insensitively — the same shape `mentionOffer`'s matching takes. */
