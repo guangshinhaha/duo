@@ -86,6 +86,21 @@ describe("buildWaitingItems — where each decision is made", () => {
     ]);
     expect(waitingWords({ kind: "chat", state: "confident", count: 3 })).toBe("3 waiting on you");
   });
+
+  // W-S4-10: `buildWaitingItems` reads only `DraftRecord`/the T4 queue — a
+  // room holding an acknowledged task card is still exactly one waiting
+  // draft, grouped the same way it always was. The task card itself is a
+  // Matrix-side fact (W-S4-7/W-S4-9's own owner task line, rendered beside
+  // the draft in `RoomDrafts.tsx`) that this model has no door to read and
+  // needs none: the pending draft underneath the card is what the filter
+  // already counts correctly, so a task-bearing conversation perturbs
+  // nothing here.
+  it("a room with an open task card is still just the one pending draft it already was — the Waiting filter needs no card-awareness", () => {
+    const withCard = buildWaitingItems([draft("a", "2026-01-02T00:00:00Z", { provenance: channel("!p:w") })], [], [{ roomId: "!p:w" }]);
+    const withoutCard = buildWaitingItems([draft("a", "2026-01-02T00:00:00Z", { provenance: channel("!p:w") })], [], [{ roomId: "!p:w" }]);
+    expect(withCard).toEqual(withoutCard);
+    expect(withCard.map((item) => [item.kind, item.href, item.count])).toEqual([["chat", "#chat/!p%3Aw", 1]]);
+  });
 });
 
 describe("the filter and the count, in the whole app", () => {

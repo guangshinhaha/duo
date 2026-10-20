@@ -129,6 +129,56 @@ describe("#313 — each question shows its outcome, and a passed-on one updates 
     expect(questionOutcomeWords("passed-on", "Wei")).toBe("Passed to Wei — waiting on them");
     expect(questionOutcomeWords("declined", "Wei")).toBe("Declined");
   });
+});
+
+// W-S4-10: a duo task card answering a question reads the same outcomes a
+// text reply would — off the card's own `kind`/`state`, never its fallback
+// body (`docs/workspace/cards.md` §8's state machine).
+describe("W-S4-10 — a duo task card answering a question maps to the existing outcome vocabulary", () => {
+  const taskCard = (eventId: string, state: string, body = "Looking into this — I'll update this message.") =>
+    message(eventId, DUO, body, { card: { kind: "task", state } as never });
+
+  it("acknowledged/working/needs_decision all read passed-on, even when the fallback body doesn't match the text-reply shape", () => {
+    for (const state of ["acknowledged", "working", "needs_decision"]) {
+      const conversation = [message("$q1", ME, "Who approves budgets?"), taskCard("$a1", state)];
+      expect(questionOutcomes(conversation, DUO).get("$q1")).toBe("passed-on");
+    }
+  });
+
+  it("done reads answered, off the card's own state rather than its result-text fallback body", () => {
+    const conversation = [message("$q1", ME, "Who approves budgets?"), taskCard("$a1", "done", "Priya approves budgets over $500.")];
+    expect(questionOutcomes(conversation, DUO).get("$q1")).toBe("answered");
+  });
+
+  it("a passed-on task card reads passed-on, then the SAME card's own edit to done reads answered — no second message needed", () => {
+    const acknowledged = [message("$q1", ME, "Who approves budgets?"), taskCard("$a1", "acknowledged")];
+    expect(questionOutcomes(acknowledged, DUO).get("$q1")).toBe("passed-on");
+    // The daemon edits the SAME event in place (W-S4-7's replace fold) — the
+    // client re-projects it to `done`, never a second row.
+    const resolved = [message("$q1", ME, "Who approves budgets?"), taskCard("$a1", "done", "Priya approves budgets over $500.")];
+    expect(questionOutcomes(resolved, DUO).get("$q1")).toBe("answered");
+  });
+
+  it("a decision-kind or unrecognized-state card claims nothing, same stance a reply the text path can't read already takes", () => {
+    const decision = [message("$q1", ME, "Which policy?"), message("$a1", DUO, "Choose one.", { card: { kind: "decision", state: "open" } as never })];
+    expect(questionOutcomes(decision, DUO).has("$q1")).toBe(false);
+    const unknown = [message("$q1", ME, "Who approves budgets?"), taskCard("$a1", "some-future-state", "x")];
+    expect(questionOutcomes(unknown, DUO).has("$q1")).toBe(false);
+  });
+
+  it("text-only fixtures are unaffected: no card field at all still resolves off body, exactly as before", () => {
+    const conversation = [
+      message("$q1", ME, "Where's the runbook?"),
+      message("$q2", ME, "And who approves budgets?"),
+      answer("$a1"),
+      passOn("$a2"),
+      message("$q3", ME, "What about salaries?"),
+      refusal("$a3"),
+      message("$q4", ME, "One more?"),
+    ];
+    const outcomes = questionOutcomes(conversation, DUO);
+    expect(Object.fromEntries(outcomes)).toEqual({ $q1: "answered", $q2: "passed-on", $q3: "declined", $q4: "with-duo" });
+  });
 
   it("the row shows the outcome beside the question, and the duo's message stays labelled as the duo's", () => {
     const noop = async () => null;

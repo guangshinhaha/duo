@@ -1,6 +1,6 @@
 import { escalationOf, readDuoAnswer, type RoomMessageLike } from "./duoAnswer.js";
 import { duoOwnerLabel, duoOwnerUserIdOf, isDuoUserId, localpartOf } from "./identity.js";
-import type { RoomSummary } from "./matrix.js";
+import type { DuoCardView, RoomSummary } from "./matrix.js";
 
 /**
  * #313: a conversation with a colleague's duo, read from what the room
@@ -76,6 +76,43 @@ export type QuestionOutcome = "with-duo" | "answered" | "passed-on" | "replied" 
 
 interface ConversationMessage extends RoomMessageLike {
   readonly file?: unknown;
+  /**
+   * W-S4-10: the card this message IS, when it's a `duo.card` the Matrix
+   * seam (W-S4-7) projected — only `kind`/`state` matter here, never the
+   * card's own words (`title`/`lines`/`result`), which this module has no
+   * business reading: a question's outcome is read off STRUCTURE (who
+   * spoke, in what order, and now a task card's own state machine), the
+   * same stance the text path already takes with `readDuoAnswer`.
+   */
+  readonly card?: Pick<DuoCardView, "kind" | "state"> | undefined;
+}
+
+/**
+ * W-S4-10: a task card's own state (`docs/workspace/cards.md` §8), read as
+ * the outcome vocabulary text already reads a completed/passed-on answer —
+ * `acknowledged`/`working`/`needs_decision` are all still with the owner
+ * (`passed-on`; an edit later moves the SAME card to `done`, which is what
+ * makes a passed-on question update live the same way a text pass-on
+ * updating via `escalationOf` already does — no separate "replied" case
+ * for a card: §8's `done` is "an answer that arrives after the ack", the
+ * duo's own completion, not the owner personally replying in the room).
+ * `failed` claims nothing either way, the same stance a reply the text path
+ * can't read already takes.
+ */
+function cardOutcomeOf(card: Pick<DuoCardView, "kind" | "state">): QuestionOutcome | null {
+  if (card.kind !== "task") {
+    return null;
+  }
+  switch (card.state) {
+    case "acknowledged":
+    case "working":
+    case "needs_decision":
+      return "passed-on";
+    case "done":
+      return "answered";
+    default:
+      return null;
+  }
 }
 
 /**
@@ -84,6 +121,18 @@ interface ConversationMessage extends RoomMessageLike {
  * duo message after a burst of questions answers the n-th of them. A
  * passed-on reply then reads its own state from the owner speaking after it
  * (`escalationOf`), which is what updates a question live when they answer.
+ *
+ * W-S4-10: a duo task card answering a question reads the same way — its
+ * own `card.state` (not its fallback `body`) decides the outcome, so a
+ * card whose fallback body never matches `readDuoAnswer`'s composed-text
+ * shape (the ack-timer's "Looking into this…", or a `done` card's result
+ * text) still resolves to the outcome it is, rather than "no claim". A
+ * passed-on TEXT reply's fallback body (the `acknowledged` state built
+ * from a `passed_on` outcome, `docs/workspace/cards.md` §5) already equals
+ * `PUBLIC_PASSED_ON_MESSAGE` byte for byte, so `readDuoAnswer` alone would
+ * even get that one case right — the card check runs first regardless, so
+ * every task-card state (not just that one) resolves off the state machine
+ * directly, never off a string match that happens to agree with it today.
  */
 export function questionOutcomes(conversation: readonly ConversationMessage[], duoUserId: string): ReadonlyMap<string, QuestionOutcome> {
   const ownerUserId = duoOwnerUserIdOf(duoUserId);
@@ -96,6 +145,11 @@ export function questionOutcomes(conversation: readonly ConversationMessage[], d
     if (message.senderId === duoUserId) {
       const question = open.shift();
       if (question === undefined) {
+        continue;
+      }
+      const cardOutcome = message.card !== undefined ? cardOutcomeOf(message.card) : null;
+      if (cardOutcome !== null) {
+        outcomes.set(question, cardOutcome);
         continue;
       }
       const reading = readDuoAnswer(message.body);
