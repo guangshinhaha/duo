@@ -106,3 +106,32 @@ describe("#51 AC4 — attribution strings stay contract", () => {
     }
   });
 });
+
+describe("W-S4-8 — the card copy stays inside the vocabulary", () => {
+  it("the task chip's fixed state labels carry none of the forbidden nouns, including agent and bot", () => {
+    const source = read("src/components/cards/TaskCard.tsx");
+    expect(source).not.toMatch(
+      /\b(employee|employees|teammate|teammates|assistant|staff|chatbot|intern|agent|agents|bot|bots|hire)\b/i,
+    );
+    // The fixed words every task state renders as — pinned here so a future
+    // edit that slips in a forbidden noun (or drops a state's own words
+    // entirely) fails this test, not just a rendering one.
+    for (const label of ["Acknowledged", "Working on it", "Needs a decision", "Done", "Failed"]) {
+      expect(source, label).toContain(label);
+    }
+  });
+
+  it("no card component under src/components/cards names the duo as anything but attributed", () => {
+    for (const file of srcSources().filter((candidate) => candidate.path.startsWith(`src${"/"}components${"/"}cards`))) {
+      expect(file.content, file.path).not.toMatch(
+        /\b(employee|employees|teammate|teammates|assistant|staff|chatbot|intern|agent|agents|bot|bots|hire)\b/i,
+      );
+      // AR-13, structural: a card component never carries an avatar PROP or
+      // attribute of its own (comments explaining the rule, like this
+      // file's own, are not the violation it guards against — the same
+      // "comments are invisible to the AST" exception eslint.config.js
+      // takes for its own channel-name rule).
+      expect(file.content, file.path).not.toMatch(/\bavatar[=:]/i);
+    }
+  });
+});

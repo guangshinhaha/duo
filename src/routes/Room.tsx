@@ -13,6 +13,7 @@ import { useTouchPrimary } from "../shell/useMediaQuery.js";
 import { useLongPress } from "../shell/useLongPress.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/primitives/DropdownMenu.js";
 import { PollCard } from "../components/PollCard.js";
+import { cardComponentFor } from "../components/cards/registry.js";
 import { RouteLoading } from "../components/RouteLoading.js";
 import { SharedFileCard } from "../components/SharedFileCard.js";
 import { Timestamp } from "../components/Timestamp.js";
@@ -1363,8 +1364,16 @@ export function MessageBody({
   // struck off the server and gone from every copy) — the quote then
   // simply doesn't render rather than guess at words nobody here has.
   const quoted = message.replyToEventId === null ? undefined : conversation.find((candidate) => candidate.eventId === message.replyToEventId);
+  // W-S4-8: the card's own registry picks a component by `kind` — null for
+  // a kind this client doesn't draw yet, which falls through to the plain
+  // text/file branches below exactly the way an unparseable card already
+  // does at the seam (W-S4-7's `v`/`kind` fallback): one rule for "nothing
+  // to draw a card with", not two.
+  const CardComponent = message.card !== undefined ? cardComponentFor(message.card.kind) : null;
   const content =
-    message.poll !== undefined ? (
+    message.card !== undefined && CardComponent !== null ? (
+      <CardComponent card={message.card} />
+    ) : message.poll !== undefined ? (
       <PollCard
         canClose={onClosePoll !== undefined && message.senderId === selfUserId}
         onClose={() => onClosePoll?.(message)}
