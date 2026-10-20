@@ -325,19 +325,10 @@ Review wants `outcome IS NULL`; filtering client-side means shipping the entire 
 poll, forever. → `listDrafts(storePath, passphrase, { outcome?: DraftOutcome | "pending", limit?, before? })`,
 defaulting to today's behaviour so no caller changes.
 
-**G-c · There is no "list my duos".** The sidebar is the first thing the client renders and nothing
-returns it. → `listAvailableDuos` (`duo/registry.ts`) plus `duo list`.
-
-This is deliberately **not** a general multi-duo registry, and role duos (`src/role-duo/`,
-already landed) are the reason why: each is addressed by an explicit definition file path passed
-to `duo role-duo`, and nothing anywhere enumerates which definition files exist. Inventing a
-registry entry format for them here would mean the daemon listing a kind of duo the CLI itself
-cannot list — exactly the "a surface must never add a behaviour" rule this document opened with.
-So `/duos` returns at most two entries: the personal duo (always — this process *is* its personal
-duo) and the shared duo (best-effort, if `shared-duo/persona.json` resolves to a human owner).
-A role duo you hold or seeded is real and useful, but it's reached today the way the CLI reaches
-it — `duo role-duo seed <path>` with the path you already have — not through the sidebar. Giving
-role duos a real registry is v1.5-shaped follow-up work, not a gap this pass silently papers over.
+**G-c · "List my duos."** `/duos` returns the personal duo, the owner's desk duos (up to five, from the hosted
+registry's desk entries), and the shared duo when one resolves. Desk duos are the role-duo registry this section
+deferred: created in-app, listed by the daemon, so a surface lists only what the core can list. Seeded multi-holder
+role duos stay CLI-addressed by path.
 
 Each is small. Each is a real gap the client would otherwise paper over with logic in a route
 handler, which is the failure mode this document is written to prevent.
@@ -398,6 +389,9 @@ a machine that is already on the tailnet, and that attacker gets to retry.
 
 Mobile drops `/trust` and `/audit` to a single "More" section and hides rule authoring entirely
 (AR-18). It is the same codebase and the same routes; the difference is which are reachable.
+Desk-duo creation is the one free-text form on every surface, phone included: its brief and instructions live in the
+daemon's store, not in `duo/rules/*.md`, so there is no file for a phone edit to lose. A desk duo's *derived*
+rules stay read/approve/reject on mobile.
 
 ## 3.2 State
 

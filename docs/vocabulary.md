@@ -8,13 +8,13 @@ in nouns cannot survive each surface inventing its own.
 ## Three rules that travel with the words
 
 1. **A duo must never be called an employee** — nor a teammate, an assistant,
-   staff, a chatbot, an intern, or any other noun that makes it a person or a
-   colleague. It is a thing the owner owns, named and labelled.
+   staff, a chatbot, an intern, an agent, or any other noun that makes it a person or a
+   colleague. That holds for desk duos too: a desk duo is "{owner}'s {role} desk", never "my leave assistant".
+   It is a thing the owner owns, named and labelled.
 2. **It never speaks as the owner.** Duo output is attributed ("Your duo",
    "the owner's duo") and never written in the owner's voice; nothing the duo
    produced renders without its attribution. The client enforces this
-   structurally (`DuoMessage` has no avatar and cannot contain an owner
-   message, AR-13) — the words must not undo what the structure holds.
+   structurally (`DuoMessage` never carries the owner's avatar and cannot contain an owner message, AR-13) — the words must not undo what the structure holds.
 3. **It is always labelled.** Every piece of generated text, every draft,
    every answer carries whose it is. An unlabelled string is a bug even when
    its content is harmless.
@@ -37,10 +37,16 @@ for the wire reference).
 
 ### duo
 
-The system of record that answers, drafts, escalates, and refuses — one per
-owner, always attributed, never a person. Owner surfaces say "Your duo"; the
-asker page says "the owner's duo" (its reader is not the owner); the roster
-says "Your duo" and "{owner}'s duo". These three are the whole set.
+The system of record that answers, drafts, escalates, and refuses — always attributed, never a person. An owner
+has one personal duo and up to five **desk duos**. Owner surfaces say "Your duo" and "Your {role} desk"; the asker
+page says "the owner's duo" / "the owner's {role} desk"; the roster says "{owner}'s duo" and "{owner}'s {role} desk".
+These are the whole set.
+
+### desk duo
+
+A duo the owner creates for one role, in one short flow: name, role, a one-line brief, instructions, an avatar,
+and what it knows. Verbs: **Create a desk duo**, **Edit**, **End this desk duo**. Never "agent", "bot", "assistant",
+"hire", "staff" or "team".
 
 ### draft
 
@@ -174,8 +180,8 @@ you hold that conversation.
 ### member
 
 A person signed in to the workspace. "Member" never describes a duo: a
-colleague's duo appears in a conversation as "{owner}'s duo", attributed
-structurally from its user id (`@duo-<owner>`) — never as a colleague, never
+colleague's duo appears in a conversation as "{owner}'s duo", or "{owner}'s {role} desk" for a desk duo, attributed
+structurally from its user id (`@duo-<owner>` / `@duo-<owner>.<desk>`) — never as a colleague, never
 by a display name it could set to anything.
 
 ### mention
@@ -183,7 +189,7 @@ by a display name it could set to anything.
 Addressing a person or somebody's duo — the product's central gesture, and
 one word for both halves of it. Composing one: an "@" in the composer offers
 the room's members, clearly distinguished — a person by their name, a duo as
-"{owner}'s duo" from the user-id grammar, never from a name a sender chose;
+"{owner}'s duo" or "{owner}'s {role} desk" from the user-id grammar, never from a name a sender chose;
 the pick lands in the text as words people read and rides the wire both ways
 the spec carries a mention — as ids (`m.mentions.user_ids`) the homeserver's
 notification settings read, and as the pill half (`formatted_body` matrix.to
