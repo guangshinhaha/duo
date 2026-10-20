@@ -30,8 +30,10 @@ its job.
 
 Two rules sit above the principles, inherited from `vocabulary.md`. **A duo is never called an
 employee, assistant or teammate**, and **it never speaks as the owner.** The visual language
-enforces the second rule structurally: duo output never carries an avatar, and it never shares
-a container with the owner's words.
+enforces the second rule structurally: duo output never carries the owner's avatar or any
+person's photo, and it never shares a container with the owner's words. A desk duo may carry the avatar its owner
+picked — a glyph or image drawn inside the duo mark's frame — on the roster and its profile. Its messages still lead
+with the mark and attribution line.
 
 ---
 
@@ -210,8 +212,8 @@ above.
 ### 3.5 Iconography
 
 Lucide at 1.5px stroke and 16/20px size, as shipped. Every icon that stands alone carries an
-`aria-label` (#34). The duo has no avatar. Where a person would get an avatar, the duo gets the
-mark.
+`aria-label` (#34). A personal duo has no avatar; where a person would get one, it gets the mark. A desk duo's chosen avatar sits inside
+the mark's frame, so it can never be mistaken for a person.
 
 ---
 

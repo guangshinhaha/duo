@@ -410,6 +410,9 @@ file sits on a machine it cannot see, and the next `derive sync` silently discar
 **→ Mobile is read, approve, reject, promote — never free-text authoring. Rule writing stays
 where the files are. The same constraint applies to any client action with no CLI equivalent
 (1.3).**
+Desk-duo creation is the one free-text form on every surface, phone included: its brief and instructions live in the
+daemon's store, not in `duo/rules/*.md`, so there is no file for a phone edit to lose. A desk duo's *derived*
+rules stay read/approve/reject on mobile.
 
 ### AR-19 · The surface outruns the duo — MEDIUM
 A polished app invites daily use, and `AR-3` already warns the Mirror may be thin: a handful of

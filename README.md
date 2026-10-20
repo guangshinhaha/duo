@@ -55,7 +55,8 @@ in this pass).
   replaced in history once spent. Hosted duos live under a path, so `normalizeBaseUrl` keeps the
   address's path (ws and ask links already append to it). On a server with Google sign-in
   (`GET /hosted/config` names a client id) the name field becomes Continue with Google, and the new
-  duo is bound to that account; `already_has_duo` points back to sign-in.
+  personal duo is bound to that account; `already_has_duo` (an account that already has its personal duo)
+  points back to sign-in. Desk duos are created from inside the app, never through an invite.
 - **`src/routes/Landing.tsx` / `src/components/GoogleSignInButton.tsx`** — a hosted build's front
   door. With `VITE_DUO_DAEMON_URL` set at build time (the Dockerfile takes it as a build arg) the app
   already knows its server, so an unpaired browser sees Sign in with Google rather than an address
