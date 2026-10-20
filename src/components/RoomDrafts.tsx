@@ -1,6 +1,7 @@
 import type { DuoApiConfig } from "../api/client.js";
-import { useDraftsFeed, usePendingDrafts } from "../api/queries.js";
+import { useDraftsFeed, usePendingDrafts, useTasks } from "../api/queries.js";
 import { conversationOf } from "../workspace/drafts.js";
+import { roomHref } from "../workspace/links.js";
 import { DeliveryStateLine } from "./DeliveryStateLine.js";
 import { Collapse, useLeaving } from "./Collapse.js";
 import { DraftTray } from "./DraftTray.js";
@@ -9,6 +10,7 @@ import { useStickToEnd } from "../shell/stickToEnd.js";
 import { useHeldRooms } from "../shell/waiting.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 import { EscalationCard, isColleagueEscalation } from "./EscalationCard.js";
+import { taskStateLabel } from "./cards/TaskCard.js";
 
 /**
  * #68, re-shaped by the chat-first move (#142): the drafts of one
@@ -54,6 +56,13 @@ export function RoomDrafts({
   const pending = usePendingDrafts(api);
   const rooms = useHeldRooms(connection);
   const feed = useDraftsFeed(api);
+  // W-S4-9: the owner's own read of this room's open tasks (`GET /tasks`,
+  // `docs/workspace/cards.md` §7) — refetched on the `/ws` `task-updated`
+  // signal (`src/api/ws.ts`). An asker never reaches this component (it
+  // renders only in the owner's own app, like every other RoomDrafts
+  // content), so there is no visitor path into `useTasks` to guard here.
+  const tasks = useTasks(api);
+  const roomTasks = (tasks.data ?? []).filter((task) => task.roomId === roomId && task.state !== "done" && task.state !== "failed");
 
   const waitingNow = (pending.data ?? []).filter((draft) => conversationOf(draft.provenance)?.roomId === roomId);
   // A decided draft folds away instead of vanishing, as its outcome appears below it (motion-plan B1).
@@ -88,6 +97,18 @@ export function RoomDrafts({
           <Mark working /> Your duo is drafting…
         </p>
       )}
+      {/* W-S4-9: the owner's own task line, beside the draft it names — ids
+          and state only (the daemon's own channel-table rule for this
+          view), linking back into the room the asker's own task chip
+          renders in. Never a second copy of the card's own words: the
+          state label is the same text `TaskCard` shows. */}
+      {roomTasks.map((task) => (
+        <p className="mt-2 flex items-center gap-2 type-provenance text-[var(--muted)]" data-testid="room-task-line" key={task.id}>
+          <a className="underline" data-testid="room-task-link" href={roomHref(roomId)}>
+            Task · {taskStateLabel(task.state)}
+          </a>
+        </p>
+      ))}
       {(waiting.length > 0 || sent.length > 0) && (
         <section aria-label="Drafts from your duo" className="mt-5 flex flex-col gap-4">
           {sent.map((draft) => (

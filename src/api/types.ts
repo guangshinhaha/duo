@@ -1009,6 +1009,38 @@ export interface PendingT4RequestForJudgement extends PendingT4Request {
   action: RegisteredAction | null;
 }
 
+/**
+ * W-S4-9: the owner's own read of a task — `GET /tasks`/`GET /tasks/:id`
+ * (`docs/workspace/cards.md` §7's "owner task view": draftId, confidence,
+ * gate reasons — owner-only, daemon HTTP + `/ws`, never the workspace).
+ * `state` is the task state machine's own word (§8); `draftId` links back
+ * to the draft tray row this task's answer is waiting on, when it has one.
+ */
+export interface TaskRecord {
+  id: string;
+  roomId: string;
+  requester: string;
+  state: "acknowledged" | "working" | "needs_decision" | "done" | "failed";
+  draftId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * W-S4-9: the owner's own read of a card's current state — `GET
+ * /cards/:id` / `GET /cards?roomId=&audience=owner` — ids and state only,
+ * the same "never content" rule the `/ws` signals keep
+ * (`docs/workspace/cards.md` §7).
+ */
+export interface OwnerCardSummary {
+  id: string;
+  taskId: string | null;
+  roomId: string;
+  kind: "task" | "decision" | "result" | "confirm";
+  state: string;
+  updatedAt: string;
+}
+
 export interface ApiError {
   error: { code: string; message: string };
 }

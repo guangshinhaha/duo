@@ -168,11 +168,20 @@ const json = (body: unknown, status = 200): Response => new Response(JSON.string
  * records the decision (and, for a decision that sends, the delivery the
  * seam would record next).
  */
-function fakeDaemon(initial: DraftRecord[], delivery: DraftRecord["delivery"] = { state: "delivered" }) {
+function fakeDaemon(
+  initial: DraftRecord[],
+  delivery: DraftRecord["delivery"] = { state: "delivered" },
+  tasks: Array<{ id: string; roomId: string; requester: string; state: string; draftId: string | null }> = [],
+) {
   let log = [...initial];
   const outcomes: Array<{ id: string; body: { outcome: string; sentText?: string } }> = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    // W-S4-9: GET /tasks — the owner's own task view this fixture seeds
+    // per test, same shape the mock daemon answers.
+    if (url.includes("/tasks") && (init?.method ?? "GET") === "GET") {
+      return json(tasks.map((task) => ({ ...task, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" })));
+    }
     const outcome = /\/drafts\/([^/]+)\/outcome$/.exec(url);
     if (outcome && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as { outcome: string; sentText?: string };
@@ -727,6 +736,50 @@ describe("#186 review — the draft is where the owner will see it", () => {
     navigate(`${ROOM_HASH}/${encodeURIComponent(BOSE_EVENT)}`);
     await screen.findByTestId("room-timeline");
     expect(screen.queryByTestId("draft-tray")).toBeNull();
+  });
+});
+
+describe("W-S4-9 — the owner's own task line beside the draft it names", () => {
+  it("shows Task · <state>, linking back into this room, beside the draft it names", async () => {
+    seed();
+    const daemon = fakeDaemon([draftFor({ id: "d1" })], undefined, [
+      { id: "task-1", roomId: PROJECT, requester: "@bose:workspace.example", state: "acknowledged", draftId: "d1" },
+    ]);
+    vi.stubGlobal("fetch", daemon.fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate(ROOM_HASH);
+    const drafts = await screen.findByTestId("room-drafts");
+    const line = await within(drafts).findByTestId("room-task-link");
+    expect(line).toHaveTextContent("Task · Acknowledged");
+    expect(line).toHaveAttribute("href", ROOM_HASH);
+  });
+
+  it("shows nothing when this room has no open task", async () => {
+    seed();
+    const daemon = fakeDaemon([draftFor({ id: "d1" })], undefined, []);
+    vi.stubGlobal("fetch", daemon.fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate(ROOM_HASH);
+    const drafts = await screen.findByTestId("room-drafts");
+    expect(within(drafts).queryByTestId("room-task-line")).toBeNull();
+  });
+
+  it("drops the task line once it reads done — a finished task has nothing left waiting on the owner", async () => {
+    seed();
+    const daemon = fakeDaemon([draftFor({ id: "d1" })], undefined, [
+      { id: "task-1", roomId: PROJECT, requester: "@bose:workspace.example", state: "done", draftId: "d1" },
+    ]);
+    vi.stubGlobal("fetch", daemon.fetchMock);
+    vi.mocked(connect).mockResolvedValue(fakeConnection({ [PROJECT]: [BOSE_MESSAGE] }).connection);
+
+    await renderApp();
+    navigate(ROOM_HASH);
+    const drafts = await screen.findByTestId("room-drafts");
+    expect(within(drafts).queryByTestId("room-task-line")).toBeNull();
   });
 });
 

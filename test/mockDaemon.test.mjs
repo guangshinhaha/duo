@@ -888,3 +888,82 @@ describe("mock daemon — the T4 confirmation moment (duo #52, mirroring digital
     expect((await missing.json()).error.code).toBe("NoPendingT4RequestError");
   });
 });
+
+// W-S4-9: the owner's own task/card routes and signals (`docs/workspace/cards.md`
+// §7) — mirroring the T4 routes' own fidelity bar above.
+describe("mock daemon — owner task and card routes, and the /ws signals that invalidate them (W-S4-9)", () => {
+  it("GET /tasks lists the seed's own open task, oldest first", async () => {
+    const tasks = await (await get("/tasks")).json();
+    expect(tasks.length).toBeGreaterThan(0);
+    expect(tasks[0]).toMatchObject({ id: expect.any(String), roomId: expect.any(String), requester: expect.any(String), state: expect.any(String) });
+    // §7's one named fact: the owner's own read carries draftId.
+    expect(tasks[0]).toHaveProperty("draftId");
+  });
+
+  it("GET /tasks?state= filters to that state only", async () => {
+    const all = await (await get("/tasks")).json();
+    const [seeded] = all;
+    const filtered = await (await get(`/tasks?state=${seeded.state}`)).json();
+    expect(filtered.every((task) => task.state === seeded.state)).toBe(true);
+    const none = await (await get("/tasks?state=failed")).json();
+    expect(none.every((task) => task.state === "failed")).toBe(true);
+  });
+
+  it("GET /tasks/:id answers the one task, and 404s a stranger", async () => {
+    const [seeded] = await (await get("/tasks")).json();
+    const found = await get(`/tasks/${seeded.id}`);
+    expect(found.status).toBe(200);
+    expect((await found.json()).id).toBe(seeded.id);
+
+    const missing = await get("/tasks/not-a-task");
+    expect(missing.status).toBe(404);
+    expect((await missing.json()).error.code).toBe("TaskNotFoundError");
+  });
+
+  it("GET /cards?roomId=&audience=owner answers only that room's cards, ids and state only", async () => {
+    const [seeded] = await (await get("/tasks")).json();
+    const cards = await (await get(`/cards?roomId=${encodeURIComponent(seeded.roomId)}&audience=owner`)).json();
+    expect(cards.length).toBeGreaterThan(0);
+    for (const card of cards) {
+      expect(card).toEqual({ id: expect.any(String), taskId: expect.anything(), roomId: seeded.roomId, kind: expect.any(String), state: expect.any(String), updatedAt: expect.any(String) });
+    }
+    expect(await (await get("/cards?roomId=!nowhere:workspace.example&audience=owner")).json()).toEqual([]);
+  });
+
+  it("GET /cards requires roomId and audience=owner", async () => {
+    const noRoom = await get("/cards?audience=owner");
+    expect(noRoom.status).toBe(400);
+    const wrongAudience = await get("/cards?roomId=!x:workspace.example&audience=everyone");
+    expect(wrongAudience.status).toBe(400);
+  });
+
+  it("GET /cards/:id answers one card, and 404s a stranger", async () => {
+    const [seeded] = await (await get("/tasks")).json();
+    const [card] = await (await get(`/cards?roomId=${encodeURIComponent(seeded.roomId)}&audience=owner`)).json();
+    const found = await get(`/cards/${card.id}`);
+    expect(found.status).toBe(200);
+    expect((await found.json()).id).toBe(card.id);
+
+    const missing = await get("/cards/not-a-card");
+    expect(missing.status).toBe(404);
+    expect((await missing.json()).error.code).toBe("CardNotFoundError");
+  });
+
+  it("POST /mock/push-task updates the task and would fire task-updated on the one push channel", async () => {
+    const before = await (await get("/tasks")).json();
+    const res = await post("/mock/push-task", { roomId: before[0].roomId, state: "done" });
+    expect(res.status).toBe(201);
+    const updated = await res.json();
+    expect(updated.state).toBe("done");
+
+    const after = await (await get(`/tasks/${updated.id}`)).json();
+    expect(after.state).toBe("done");
+  });
+
+  it("POST /mock/push-card updates the card the same way", async () => {
+    const [seeded] = await (await get("/tasks")).json();
+    const res = await post("/mock/push-card", { roomId: seeded.roomId, state: "done" });
+    expect(res.status).toBe(201);
+    expect((await res.json()).state).toBe("done");
+  });
+});

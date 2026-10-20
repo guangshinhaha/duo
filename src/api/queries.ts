@@ -104,6 +104,8 @@ import type {
   SendLater,
   VoiceAdaptationStatus,
   WorkingHours,
+  OwnerCardSummary,
+  TaskRecord,
 } from "./types.js";
 
 /**
@@ -228,6 +230,18 @@ export const queryKeys = {
   // duo#274: keyed by room, so marking one conversation off the record
   // never invalidates another's read.
   roomOffTheRecord: (roomId: string) => ["workspace", "rooms", roomId, "off-the-record"] as const,
+  // W-S4-9: the owner's task view (`docs/workspace/cards.md` §7) — its own
+  // root, never nested under ["drafts"]: a task is its own kind of record
+  // (it can exist with no draft at all, e.g. a `needs_decision` task mid
+  // T3/T4 gate), and the `/ws` `task-updated` signal invalidates exactly
+  // this root.
+  tasks: (opts?: { state?: TaskRecord["state"] }) => ["tasks", opts ?? {}] as const,
+  task: (id: string) => ["tasks", id] as const,
+  // W-S4-9: the owner's own read of a card's state, keyed by room — the
+  // `/ws` `card-updated` signal invalidates this root; `GET
+  // /cards?roomId=&audience=owner` is the owner-only read the daemon
+  // allows (`docs/workspace/cards.md` §7's channel table).
+  ownerCards: (roomId: string) => ["cards", roomId] as const,
 };
 
 /** `null` (a member with no duo paired) reads nothing: the query stays idle, and its data is `undefined`. */
@@ -1450,6 +1464,41 @@ export function usePendingT4(api: DuoApiConfig | null) {
     queryFn: () => apiRequest<PendingT4RequestForJudgement[]>(api!, "/actions/t4/pending"),
     refetchInterval: T4_POLL_MS,
     refetchIntervalInBackground: true,
+    enabled: api !== null,
+  });
+}
+
+/**
+ * W-S4-9: the owner's own tasks (`GET /tasks?state=`, `docs/workspace/cards.md`
+ * §7's "owner task view") — refetched on the `/ws` `task-updated` signal
+ * (`src/api/ws.ts`), the same pattern `usePendingDrafts` already keeps for
+ * `draft-ready`. `null` (no duo paired) reads nothing, same as every other
+ * owner-only hook here.
+ */
+export function useTasks(api: DuoApiConfig | null, state?: TaskRecord["state"]) {
+  return useQuery({
+    queryKey: queryKeys.tasks(state === undefined ? undefined : { state }),
+    queryFn: () => apiRequest<TaskRecord[]>(api!, state === undefined ? "/tasks" : `/tasks?state=${encodeURIComponent(state)}`),
+    enabled: api !== null,
+  });
+}
+
+/** W-S4-9: one task by id — `GET /tasks/:id`, which carries `draftId` for the owner (`docs/workspace/cards.md` §7). */
+export function useTask(api: DuoApiConfig, id: string) {
+  return useQuery({ queryKey: queryKeys.task(id), queryFn: () => apiRequest<TaskRecord>(api, `/tasks/${encodeURIComponent(id)}`) });
+}
+
+/**
+ * W-S4-9: the owner's own read of this room's cards — `GET
+ * /cards?roomId=&audience=owner`, ids and state only
+ * (`docs/workspace/cards.md` §7's channel table: the owner task view is
+ * daemon HTTP + `/ws` only, never the workspace). Refetched on the `/ws`
+ * `card-updated` signal.
+ */
+export function useOwnerCards(api: DuoApiConfig | null, roomId: string) {
+  return useQuery({
+    queryKey: queryKeys.ownerCards(roomId),
+    queryFn: () => apiRequest<OwnerCardSummary[]>(api!, `/cards?roomId=${encodeURIComponent(roomId)}&audience=owner`),
     enabled: api !== null,
   });
 }

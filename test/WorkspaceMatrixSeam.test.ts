@@ -3657,6 +3657,250 @@ describe("polls (#293)", () => {
   });
 });
 
+/**
+ * W-S4-7: the card seam — `docs/workspace/cards.md` §2's `duo.card`
+ * projects to `RoomMessage.card` with the latest-`rev` state, is refused a
+ * card projection entirely when its sender isn't a duo (§6's anti-spoofing)
+ * or when this client doesn't recognize its `v`/`kind` (§4's fallback), and
+ * its edits fold the same way polls' own replace fold does — same sender
+ * only, here picking the highest `rev` rather than simply "whatever's
+ * latest in the timeline". `duo.card.response` (§2) is never a main-flow
+ * row at all: it isn't `m.room.message`, the same class of fact `isMainFlowRow`
+ * already keeps for reactions and redactions.
+ */
+describe("cards (W-S4-7)", () => {
+  const DUO = "@duo-carol:workspace.example";
+  const OWNER = "@carol:workspace.example";
+  const ASKER = "@bose:workspace.example";
+
+  function cardContent(over: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+    return {
+      v: 1,
+      rev: 1,
+      card_id: "c_01J000",
+      kind: "task",
+      state: "acknowledged",
+      requester: ASKER,
+      title: "Checking with Ana",
+      lines: ["Passed to Ana. You'll get a reply here."],
+      ...over,
+    };
+  }
+
+  function cardEvent(shape: {
+    id: string;
+    sender: string;
+    ts: number;
+    body?: string;
+    card?: Partial<Record<string, unknown>> | null;
+    relatesTo?: { rel_type: string; event_id: string };
+    newCard?: Partial<Record<string, unknown>> | null;
+    newBody?: string;
+  }): MatrixEvent {
+    const content: Record<string, unknown> = {
+      msgtype: "duo.card",
+      body: shape.body ?? "Looking into this — I'll update this message.",
+    };
+    if (shape.card !== undefined && shape.card !== null) {
+      content["duo.card"] = shape.card;
+    }
+    if (shape.relatesTo !== undefined) {
+      content["m.relates_to"] = shape.relatesTo;
+      const newContent: Record<string, unknown> = { msgtype: "duo.card", body: shape.newBody ?? content.body };
+      if (shape.newCard !== undefined && shape.newCard !== null) {
+        newContent["duo.card"] = shape.newCard;
+      }
+      content["m.new_content"] = newContent;
+    }
+    return {
+      getId: () => shape.id,
+      getType: () => "m.room.message",
+      getSender: () => shape.sender,
+      getContent: () => content,
+      getTs: () => shape.ts,
+      isRedacted: () => false,
+    } as unknown as MatrixEvent;
+  }
+
+  function roomWith(events: MatrixEvent[]) {
+    return summaryRoom({
+      roomId: "!project-x:workspace.example",
+      name: "project-x",
+      joinRule: "invite",
+      members: [
+        { userId: OWNER, name: "carol" },
+        { userId: ASKER, name: "Bose" },
+      ],
+      notificationCount: 0,
+      highlightCount: 0,
+      events,
+    });
+  }
+
+  it("a duo-sent duo.card projects to RoomMessage.card with the card's own state", async () => {
+    const events = [cardEvent({ id: "$card1", sender: DUO, ts: 1_000, card: cardContent() })];
+    const client = fakeClient({ rooms: [roomWith(events)] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message?.card).toEqual({
+      cardId: "c_01J000",
+      kind: "task",
+      state: "acknowledged",
+      taskId: null,
+      requester: ASKER,
+      title: "Checking with Ana",
+      lines: ["Passed to Ana. You'll get a reply here."],
+      options: [],
+      chosen: null,
+      milestones: [],
+      result: null,
+      expiresAt: null,
+    });
+  });
+
+  it("the latest-rev edit wins: a same-sender m.replace with a higher rev folds into the base", async () => {
+    const events = [
+      cardEvent({ id: "$card1", sender: DUO, ts: 1_000, card: cardContent({ rev: 1, state: "acknowledged" }) }),
+      cardEvent({
+        id: "$edit1",
+        sender: DUO,
+        ts: 2_000,
+        relatesTo: { rel_type: "m.replace", event_id: "$card1" },
+        newCard: cardContent({ rev: 2, state: "done" }),
+        newBody: "Done.",
+      }),
+    ];
+    const client = fakeClient({ rooms: [roomWith(events)] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message?.card?.state).toBe("done");
+    expect(message?.edited).toBe(true);
+  });
+
+  it("an edit with a LOWER rev than the base already holds is ignored, even though it arrived later in the timeline", async () => {
+    const events = [
+      cardEvent({ id: "$card1", sender: DUO, ts: 1_000, card: cardContent({ rev: 1, state: "acknowledged" }) }),
+      // #3 arrives before #2 in the timeline (a plausible reorder) — the
+      // highest rev still wins, never "whichever event came last".
+      cardEvent({
+        id: "$edit2",
+        sender: DUO,
+        ts: 2_000,
+        relatesTo: { rel_type: "m.replace", event_id: "$card1" },
+        newCard: cardContent({ rev: 3, state: "done" }),
+      }),
+      cardEvent({
+        id: "$edit1",
+        sender: DUO,
+        ts: 3_000,
+        relatesTo: { rel_type: "m.replace", event_id: "$card1" },
+        newCard: cardContent({ rev: 2, state: "working" }),
+      }),
+    ];
+    const client = fakeClient({ rooms: [roomWith(events)] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message?.card?.state).toBe("done"); // rev 3, not rev 2's "working"
+  });
+
+  it("a person-sent duo.card is anti-spoofing refused — it projects as plain text off body, never a card", async () => {
+    const events = [cardEvent({ id: "$card1", sender: ASKER, ts: 1_000, body: "pretending to be my own duo", card: cardContent() })];
+    const client = fakeClient({ rooms: [roomWith(events)] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message?.card).toBeUndefined();
+    expect(message?.body).toBe("pretending to be my own duo");
+  });
+
+  it("a stranger's replace of a card is ignored — the card keeps the sender's own last word", async () => {
+    const events = [
+      cardEvent({ id: "$card1", sender: DUO, ts: 1_000, card: cardContent({ rev: 1, state: "acknowledged" }) }),
+      // The asker — not the card's own sender — tries to "amend" it.
+      cardEvent({
+        id: "$edit1",
+        sender: ASKER,
+        ts: 2_000,
+        relatesTo: { rel_type: "m.replace", event_id: "$card1" },
+        newCard: cardContent({ rev: 2, state: "done" }),
+      }),
+    ];
+    const client = fakeClient({ rooms: [roomWith(events)] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message?.card?.state).toBe("acknowledged");
+    expect(message?.edited).toBe(false);
+  });
+
+  it("an unknown schema version falls back to a text row with the fallback body, never a broken card", async () => {
+    const events = [cardEvent({ id: "$card1", sender: DUO, ts: 1_000, body: "Looking into this — I'll update this message.", card: cardContent({ v: 2 }) })];
+    const client = fakeClient({ rooms: [roomWith(events)] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message?.card).toBeUndefined();
+    expect(message?.body).toBe("Looking into this — I'll update this message.");
+  });
+
+  it("an unrecognized kind falls back to a text row with the fallback body", async () => {
+    const events = [cardEvent({ id: "$card1", sender: DUO, ts: 1_000, body: "fallback text", card: cardContent({ kind: "form" }) })];
+    const client = fakeClient({ rooms: [roomWith(events)] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const [message] = await connection.timeline("!project-x:workspace.example");
+    expect(message?.card).toBeUndefined();
+    expect(message?.body).toBe("fallback text");
+  });
+
+  it("sendCardResponse sends a duo.card.response referencing the card event, by m.reference", async () => {
+    const client = fakeClient();
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    await connection.sendCardResponse("!project-x:workspace.example", "$card1", "c_01J000", "o1", { note: "ok" });
+
+    expect(client.sendEvent).toHaveBeenCalledWith("!project-x:workspace.example", "duo.card.response", {
+      "m.relates_to": { rel_type: "m.reference", event_id: "$card1" },
+      "duo.card.response": { v: 1, card_id: "c_01J000", action_id: "o1", values: { note: "ok" } },
+    });
+  });
+
+  it("a duo.card.response never appears as a main-flow row — it isn't m.room.message at all", async () => {
+    const events = [
+      cardEvent({ id: "$card1", sender: DUO, ts: 1_000, card: cardContent() }),
+      {
+        getId: () => "$response1",
+        getType: () => "duo.card.response",
+        getSender: () => ASKER,
+        getContent: () => ({
+          "m.relates_to": { rel_type: "m.reference", event_id: "$card1" },
+          "duo.card.response": { v: 1, card_id: "c_01J000", action_id: "o1", values: {} },
+        }),
+        getTs: () => 2_000,
+        isRedacted: () => false,
+      } as unknown as MatrixEvent,
+    ];
+    const client = fakeClient({ rooms: [roomWith(events)] });
+    vi.mocked(createClient).mockReturnValue(client);
+    const connection = await connectPrepared(client);
+
+    const messages = await connection.timeline("!project-x:workspace.example");
+    expect(messages).toHaveLength(1); // the card only — the response is never a row of its own
+    expect(messages[0]?.eventId).toBe("$card1");
+  });
+});
+
 describe("#214 — creating a group conversation and inviting people", () => {
   it("createRoom makes a private, invite-only room with the given name and topic", async () => {
     const client = fakeClient();

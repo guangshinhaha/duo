@@ -146,4 +146,35 @@ describe("useDraftReadySocket — the client half of the one push channel (C7, d
     );
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
+
+  // W-S4-9: the owner channel's two card-protocol signals
+  // (`docs/workspace/cards.md` §7) — each invalidates its own root, never
+  // ["drafts"] (a task or a card is never a draft).
+  it("on task-updated, invalidates [\"tasks\"] only", () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    renderHookHost(client);
+
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].message({ type: "task-updated", taskId: "task-1", roomId: "!x:workspace.example", state: "working" });
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["tasks"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["drafts"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cards"] });
+  });
+
+  it("on card-updated, invalidates [\"cards\"] only", () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    renderHookHost(client);
+
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].message({ type: "card-updated", cardId: "card-1", roomId: "!x:workspace.example" });
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["drafts"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["tasks"] });
+  });
 });

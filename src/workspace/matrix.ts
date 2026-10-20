@@ -524,6 +524,60 @@ export interface Poll {
   readonly closed: boolean;
 }
 
+/** W-S4-7: one option a decision card offers — `docs/workspace/cards.md` §2's `options[]`. */
+export interface DuoCardOption {
+  readonly id: string;
+  readonly label: string;
+}
+
+/** W-S4-7: a decision card's chosen option, once someone has (`docs/workspace/cards.md` §2's `chosen`). */
+export interface DuoCardChoice {
+  readonly optionId: string;
+  readonly by: string;
+}
+
+/** W-S4-7: one step of a task card's own history, as the daemon chose to disclose it (≤3, `docs/workspace/cards.md` §8). */
+export interface DuoCardMilestone {
+  readonly state: string;
+  readonly label: string;
+  readonly ts: number;
+}
+
+/** W-S4-7: a task card's result, once `state` is `done` (`docs/workspace/cards.md` §2's `result`). */
+export interface DuoCardResult {
+  readonly text: string;
+  readonly links: readonly { readonly label: string; readonly url: string }[];
+  readonly files: readonly { readonly name: string; readonly mxc: string; readonly mimetype: string; readonly size: number }[];
+}
+
+/**
+ * W-S4-7: a `duo.card` message's own state, projected from `content["duo.card"]`
+ * (`docs/workspace/cards.md` §2) at the latest `rev` this device has seen
+ * from the card's own sender (§3). `kind`/`state` stay the wire's own open
+ * string, never narrowed to a client-side enum: an unrecognized one is
+ * exactly the case this projection refuses to build (the base falls back to
+ * a plain text row instead, per §4) rather than silently widening — so by
+ * the time a `DuoCardView` exists at all, its `kind`/`state` are already
+ * known-good to whatever drew it. Reserved kinds (`form`, `created`,
+ * `permissions`, `draft`, `approval`) never reach this far either: the
+ * daemon's own builder refuses to send them to Matrix in Phase 1.
+ */
+export interface DuoCardView {
+  readonly cardId: string;
+  readonly kind: "task" | "decision" | "result" | "confirm";
+  readonly state: string;
+  readonly taskId: string | null;
+  /** Only this user id may respond to the card — `docs/workspace/cards.md` §6's anti-spoofing rule, enforced daemon-side; carried here only so the render can decide whether to offer a response control at all. */
+  readonly requester: string;
+  readonly title: string;
+  readonly lines: readonly string[];
+  readonly options: readonly DuoCardOption[];
+  readonly chosen: DuoCardChoice | null;
+  readonly milestones: readonly DuoCardMilestone[];
+  readonly result: DuoCardResult | null;
+  readonly expiresAt: number | null;
+}
+
 /**
  * One message of a room timeline, projected (#64): conversation turns —
  * text (`m.text`), and shared files and images (#66: `m.file`/`m.image`)
@@ -574,6 +628,14 @@ export interface RoomMessage {
   readonly file?: SharedFile;
   /** #293: the poll this message IS, when it's an `m.poll.start` — absent for every other turn. */
   readonly poll?: Poll;
+  /**
+   * W-S4-7: the card this message IS, when it's a duo-sent `duo.card` this
+   * device could make sense of — absent for every other turn, including a
+   * person-sent `duo.card` (anti-spoofing, `docs/workspace/cards.md` §6: it
+   * renders as plain text off `body` instead) and a duo-sent one with an
+   * unknown `v`/`kind` (§4: the fallback body, never a broken card).
+   */
+  readonly card?: DuoCardView;
   /** The homeserver's epoch-ms timestamp — server time, not arrival time. */
   readonly originServerTs: number;
   /** True when a same-sender replacement amended these words — the "(edited)" mark is the honesty. */
@@ -919,6 +981,16 @@ export interface WorkspaceConnection {
    * control renders, not here.
    */
   endPoll(roomId: string, pollStartEventId: string): Promise<void>;
+  /**
+   * W-S4-7: a tap on a card's own control — a `duo.card.response`
+   * (`docs/workspace/cards.md` §2), referencing the card event by
+   * `m.reference` the way a poll's own response references its start.
+   * Never a client-side state change: the daemon alone validates and edits
+   * the card (§3, "there is no optimistic client-side state change"), so
+   * this seam's job ends at putting the response on the wire. `values` is
+   * the response's own free-form payload (empty for a plain choice).
+   */
+  sendCardResponse(roomId: string, cardEventId: string, cardId: string, actionId: string, values?: Readonly<Record<string, unknown>>): Promise<void>;
   /**
    * The bytes of a shared file, fetched as this member: the homeserver's
    * authenticated media endpoint (MSC3916) wants the member's token in a
@@ -1469,11 +1541,13 @@ function roomFailure(error: unknown): Error {
 }
 
 /**
- * #293: `client.sendEvent`'s own typing ties `eventType` to the SDK's
- * closed `TimelineEvents` map, which has never heard of an unmerged MSC —
- * this is the one narrow, documented place that relaxes it back to `string`
- * for exactly the three poll event types `PollStartEvent`/`PollResponseEvent`/
- * `PollEndEvent`'s own `.serialize()` produces, never a general escape hatch.
+ * #293, W-S4-7: `client.sendEvent`'s own typing ties `eventType` to the
+ * SDK's closed `TimelineEvents` map, which has never heard of an unmerged
+ * MSC or of this product's own `duo.card.response` — this is the one
+ * narrow, documented place that relaxes it back to `string`, for exactly
+ * the three poll event types `PollStartEvent`/`PollResponseEvent`/
+ * `PollEndEvent`'s own `.serialize()` produces plus `duo.card.response`,
+ * never a general escape hatch.
  */
 function sendUntypedEvent(client: MatrixClient, roomId: string, eventType: string, content: object): Promise<unknown> {
   return (client.sendEvent as unknown as (roomId: string, eventType: string, content: object) => Promise<unknown>)(roomId, eventType, content);
@@ -1593,6 +1667,108 @@ interface Relation {
 
 function relationOf(event: MatrixEvent): Relation | undefined {
   return (event.getContent()?.["m.relates_to"] ?? undefined) as Relation | undefined;
+}
+
+/**
+ * W-S4-7: the card protocol's own two event shapes, defined once each, no
+ * reverse-DNS namespace (`docs/workspace/cards.md` §2, resolved question
+ * Q1) — the one place both names exist, so neither is ever hand-typed
+ * (and risks drifting) elsewhere in this seam.
+ */
+const DUO_CARD_MSGTYPE = "duo.card";
+const DUO_CARD_RESPONSE_TYPE = "duo.card.response";
+
+/** W-S4-7: the schema major version this client knows how to render (`docs/workspace/cards.md` §4). */
+const DUO_CARD_SCHEMA_VERSION = 1;
+
+/** W-S4-7: the kinds the Matrix builder is ever allowed to send (`docs/workspace/cards.md` §2) — `confirm` is owner-only and refused for Matrix, but a card claiming it anyway is just one more "unrecognized" case this projection refuses to build. */
+const DUO_CARD_KINDS: ReadonlySet<string> = new Set(["task", "decision", "result", "confirm"]);
+
+/**
+ * W-S4-7: `content["duo.card"]` (`docs/workspace/cards.md` §2), parsed into
+ * a `DuoCardView` — or null for anything this client doesn't recognize
+ * (wrong `v`, an absent/foreign `kind`, or a shape too malformed to read a
+ * `card_id`/`rev` off of at all), which is exactly the signal the caller
+ * uses to fall back to the plain text row instead (§4: "never a broken
+ * card"). Deliberately permissive about everything else — an over-limit
+ * title or too many milestones is the daemon's own builder's job to have
+ * refused before it ever sent this (`docs/workspace/cards.md` §10's
+ * `test/workspace-cards.test.ts`), not this projection's to re-police.
+ */
+function duoCardOf(content: Record<string, unknown>): { view: DuoCardView; rev: number } | null {
+  const raw = content[DUO_CARD_MSGTYPE] as Record<string, unknown> | undefined;
+  if (raw === undefined || raw === null || typeof raw !== "object") {
+    return null;
+  }
+  if (raw.v !== DUO_CARD_SCHEMA_VERSION) {
+    return null;
+  }
+  const kind = raw.kind;
+  if (typeof kind !== "string" || !DUO_CARD_KINDS.has(kind)) {
+    return null;
+  }
+  const cardId = raw.card_id;
+  const state = raw.state;
+  const requester = raw.requester;
+  const rev = raw.rev;
+  if (typeof cardId !== "string" || typeof state !== "string" || typeof requester !== "string" || typeof rev !== "number") {
+    return null;
+  }
+  const options = Array.isArray(raw.options)
+    ? raw.options
+        .filter((option): option is { id: string; label: string } => typeof option?.id === "string" && typeof option?.label === "string")
+        .map((option) => ({ id: option.id, label: option.label }))
+    : [];
+  const chosenRaw = raw.chosen as { option_id?: unknown; by?: unknown } | undefined;
+  const chosen =
+    chosenRaw !== undefined && typeof chosenRaw.option_id === "string" && typeof chosenRaw.by === "string"
+      ? { optionId: chosenRaw.option_id, by: chosenRaw.by }
+      : null;
+  const milestones = Array.isArray(raw.milestones)
+    ? raw.milestones
+        .filter(
+          (milestone): milestone is { state: string; label: string; ts: number } =>
+            typeof milestone?.state === "string" && typeof milestone?.label === "string" && typeof milestone?.ts === "number",
+        )
+        .map((milestone) => ({ state: milestone.state, label: milestone.label, ts: milestone.ts }))
+    : [];
+  const resultRaw = raw.result as { text?: unknown; links?: unknown; files?: unknown } | undefined;
+  const result =
+    resultRaw !== undefined && typeof resultRaw.text === "string"
+      ? {
+          text: resultRaw.text,
+          links: Array.isArray(resultRaw.links)
+            ? resultRaw.links
+                .filter((link): link is { label: string; url: string } => typeof link?.label === "string" && typeof link?.url === "string")
+                .map((link) => ({ label: link.label, url: link.url }))
+            : [],
+          files: Array.isArray(resultRaw.files)
+            ? resultRaw.files
+                .filter(
+                  (file): file is { name: string; mxc: string; mimetype: string; size: number } =>
+                    typeof file?.name === "string" && typeof file?.mxc === "string" && typeof file?.mimetype === "string" && typeof file?.size === "number",
+                )
+                .map((file) => ({ name: file.name, mxc: file.mxc, mimetype: file.mimetype, size: file.size }))
+            : [],
+        }
+      : null;
+  return {
+    rev,
+    view: {
+      cardId,
+      kind: kind as DuoCardView["kind"],
+      state,
+      taskId: typeof raw.task_id === "string" ? raw.task_id : null,
+      requester,
+      title: typeof raw.title === "string" ? raw.title : "",
+      lines: Array.isArray(raw.lines) ? raw.lines.filter((line): line is string => typeof line === "string") : [],
+      options,
+      chosen,
+      milestones,
+      result,
+      expiresAt: typeof raw.expires_ts === "number" ? raw.expires_ts : null,
+    },
+  };
 }
 
 /**
@@ -1798,7 +1974,14 @@ function isMainFlowRow(event: MatrixEvent): boolean {
     return true;
   }
   const msgtype = event.getContent()?.msgtype;
-  return msgtype === MsgType.Text || msgtype === MsgType.File || msgtype === MsgType.Image || msgtype === MsgType.Audio;
+  // W-S4-7: `duo.card` is a main-flow row like any other `m.room.message` —
+  // a person-sent one still occupies a row (it renders as plain text,
+  // `docs/workspace/cards.md` §6; the anti-spoofing check is the render's,
+  // not this placement test's). `duo.card.response` is never reached here
+  // at all: it isn't `m.room.message` in the first place (the type guard
+  // above already excludes it), which is the whole of "never a main-flow
+  // row" for it.
+  return msgtype === MsgType.Text || msgtype === MsgType.File || msgtype === MsgType.Image || msgtype === MsgType.Audio || msgtype === DUO_CARD_MSGTYPE;
 }
 
 /**
@@ -1896,6 +2079,13 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     // tally is a later pass, read off the responses and end event that
     // reference this base's own event id, so it is never stored here.
     poll: { question: string; options: readonly { id: string; text: string }[] } | undefined;
+    // W-S4-7: the card this base IS, when its msgtype is `duo.card`, the
+    // sender is a duo, and this device could make sense of the shape — and
+    // the `rev` that card's own replacement fold compares against, carried
+    // separately from `card.state`'s own words since a later same-sender
+    // replacement is picked by this number, never by arrival order.
+    card: DuoCardView | undefined;
+    cardRev: number | undefined;
     ts: number;
     edited: boolean;
     redacted: boolean;
@@ -1931,6 +2121,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
         mentionLabels: undefined,
         file: undefined,
         poll: undefined,
+        card: undefined,
+        cardRev: undefined,
         ts: event.getTs(),
         edited: false,
         redacted: true,
@@ -1966,6 +2158,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
         mentionLabels: undefined,
         file: undefined,
         poll: { question: extensibleText(subtype?.question ?? {}), options },
+        card: undefined,
+        cardRev: undefined,
         ts: event.getTs(),
         edited: false,
         redacted: false,
@@ -1977,7 +2171,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
     }
     const msgtype = event.getContent()?.msgtype;
     const isShare = msgtype === MsgType.File || msgtype === MsgType.Image || msgtype === MsgType.Audio;
-    if (msgtype !== MsgType.Text && !isShare) {
+    const isCardMsgtype = msgtype === DUO_CARD_MSGTYPE;
+    if (msgtype !== MsgType.Text && !isShare && !isCardMsgtype) {
       continue;
     }
     if (relation?.rel_type === RelationType.Replace) {
@@ -1992,6 +2187,34 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       const base = targetId !== undefined ? bases.get(targetId) : undefined;
       const newContent = event.getContent()?.["m.new_content"] as { msgtype?: string; body?: string } | undefined;
       const newBody = newContent?.body;
+      if (base?.card !== undefined) {
+        // W-S4-7: a card's own fold (`docs/workspace/cards.md` §3) — same
+        // sender only (a stranger's replace is ignored, never even
+        // considered against `rev`), and among same-sender replacements the
+        // one with the HIGHEST `rev` wins, breaking a tie by
+        // `origin_server_ts` — never simply "the latest one processed",
+        // since the timeline can carry them out of order.
+        if (senderId !== base.senderId) {
+          continue;
+        }
+        const parsed = newContent?.msgtype === DUO_CARD_MSGTYPE ? duoCardOf(event.getContent()?.["m.new_content"] as Record<string, unknown>) : null;
+        const ts = event.getTs();
+        const currentRev = base.cardRev ?? -Infinity;
+        const better = parsed !== null && (parsed.rev > currentRev || (parsed.rev === currentRev && ts >= base.ts));
+        if (better && parsed !== null && targetId !== undefined) {
+          bases.set(targetId, {
+            ...base,
+            body: typeof newContent?.body === "string" ? newContent.body : base.body,
+            card: parsed.view,
+            cardRev: parsed.rev,
+            parts: null,
+            formattedBody: undefined,
+            mentionLabels: undefined,
+            edited: true,
+          });
+        }
+        continue;
+      }
       if (
         base &&
         !base.redacted &&
@@ -2028,6 +2251,58 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
           info?: { mimetype?: unknown; size?: unknown; duration?: unknown };
         }
       | undefined;
+    if (isCardMsgtype) {
+      // W-S4-7: anti-spoofing (`docs/workspace/cards.md` §6) — a `duo.card`
+      // only ever projects to a card when its SENDER is a duo; a person
+      // sending this msgtype (accidentally or not) falls straight through
+      // to the ordinary text base below, rendering `body` like any other
+      // text message, never a card. A duo-sent one this device can't make
+      // sense of (unknown `v`/`kind`, or too malformed to read at all)
+      // falls to the same text path (§4: "never a broken card").
+      const parsed = isDuoUserId(senderId) ? duoCardOf(event.getContent() as Record<string, unknown>) : null;
+      if (parsed !== null) {
+        bases.set(event.getId() ?? "", {
+          msgtype: DUO_CARD_MSGTYPE,
+          senderId,
+          senderName: nameOf(senderId),
+          body: String(content?.body ?? ""),
+          parts: null,
+          formattedBody: undefined,
+          mentionLabels: undefined,
+          file: undefined,
+          poll: undefined,
+          card: parsed.view,
+          cardRev: parsed.rev,
+          ts: event.getTs(),
+          edited: false,
+          redacted: false,
+          threadRootEventId: null,
+          replyToEventId: null,
+          ...localEchoFlagsOf(event),
+        });
+        continue;
+      }
+      bases.set(event.getId() ?? "", {
+        msgtype: MsgType.Text,
+        senderId,
+        senderName: nameOf(senderId),
+        body: String(content?.body ?? ""),
+        parts: null,
+        formattedBody: undefined,
+        mentionLabels: undefined,
+        file: undefined,
+        poll: undefined,
+        card: undefined,
+        cardRev: undefined,
+        ts: event.getTs(),
+        edited: false,
+        redacted: false,
+        threadRootEventId: null,
+        replyToEventId: null,
+        ...localEchoFlagsOf(event),
+      });
+      continue;
+    }
     const body = String(content?.body ?? "");
     // #213: a share's content never carries `formatted_body` for its own
     // caption today — only a text turn's formatted half is read.
@@ -2066,6 +2341,8 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
           }
         : undefined,
       poll: undefined,
+      card: undefined,
+      cardRev: undefined,
       ts: event.getTs(),
       edited: false,
       redacted: false,
@@ -2219,6 +2496,7 @@ function timelineOf(client: MatrixClient, roomId: string, around?: readonly Matr
       mentionLabels: base.mentionLabels,
       file: base.file,
       poll,
+      card: base.card,
       originServerTs: base.ts,
       edited: base.edited,
       redacted: base.redacted,
@@ -3598,6 +3876,16 @@ export async function connect(session: WorkspaceSession, options: ConnectOptions
         await sendUntypedEvent(client, roomId, type, content as object);
       } catch (error) {
         throw workspaceFailure(error, "closing the poll");
+      }
+    },
+    sendCardResponse: async (roomId, cardEventId, cardId, actionId, values = {}) => {
+      try {
+        await sendUntypedEvent(client, roomId, DUO_CARD_RESPONSE_TYPE, {
+          "m.relates_to": { rel_type: RelationType.Reference, event_id: cardEventId },
+          [DUO_CARD_RESPONSE_TYPE]: { v: DUO_CARD_SCHEMA_VERSION, card_id: cardId, action_id: actionId, values },
+        });
+      } catch (error) {
+        throw workspaceFailure(error, "your response");
       }
     },
     loadMedia: async (url) => {
