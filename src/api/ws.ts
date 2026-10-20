@@ -18,7 +18,16 @@ export type WsInbound =
   // this once per workspace question that starts drafting; there is no
   // matching "stopped drafting" message — see `useDraftReadySocket`'s own
   // doc comment for how the client clears it.
-  | { type: "draft-drafting"; roomId: string };
+  | { type: "draft-drafting"; roomId: string }
+  // W-S4-9: the owner channel's two card-protocol signals
+  // (`docs/workspace/cards.md` §7) — ids and state only, never content,
+  // the same discipline `draft-ready` already keeps. `task-updated` fires
+  // on every task state change (acknowledged, working, …); `card-updated`
+  // fires whenever a card this client can read (`audience: "owner"`, §7's
+  // table) changes. Each invalidates its own query root rather than
+  // `["drafts"]`'s — a task or a card is never a draft.
+  | { type: "task-updated"; taskId: string; roomId: string; state: string }
+  | { type: "card-updated"; cardId: string; roomId: string };
 
 const AUTH_CLOSE_CODE = 4001;
 const BACKOFF_FIRST_MS = 1000;
@@ -47,6 +56,13 @@ function wsUrl(baseUrl: string): string {
  * drafting" push — App.tsx clears it itself once the room sees any
  * activity, or after its own timeout, same honesty `draft-ready` itself
  * never needed because a draft, once created, stays queryable forever.
+ *
+ * W-S4-9: `task-updated`/`card-updated` invalidate `["tasks"]`/`["cards"]`
+ * only — never `["drafts"]`, since a task or a card is its own kind of
+ * record, read through `useTasks`/`useTask`/`useOwnerCards`
+ * (`src/api/queries.ts`), not through the draft log. Carries ids and state
+ * only, matching `docs/workspace/cards.md` §7's "never content" rule for
+ * the owner channel.
  *
  * Reconnect has exponential backoff that resets on a successful auth —
  * §3.3: reconnect *refetches*, it never replays, so a close is repaired by
@@ -102,6 +118,14 @@ export function useDraftReadySocket(
       }
       if (parsed.type === "draft-drafting") {
         onDraftingStartedRef.current?.(parsed.roomId);
+        return;
+      }
+      if (parsed.type === "task-updated") {
+        void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+        return;
+      }
+      if (parsed.type === "card-updated") {
+        void queryClient.invalidateQueries({ queryKey: ["cards"] });
       }
     }
 

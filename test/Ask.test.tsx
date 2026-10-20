@@ -1,3 +1,9 @@
+// @ts-expect-error no node types by design
+import { readFileSync } from "node:fs";
+// @ts-expect-error no node types by design
+import { dirname, join } from "node:path";
+// @ts-expect-error no node types by design
+import { fileURLToPath } from "node:url";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Ask } from "../src/routes/Ask.js";
@@ -196,5 +202,19 @@ describe("Ask — the no-install asker page (duo #1/#2, on digital-duo #158/#159
 
     expect(screen.getByTestId("ask-missing-link")).toHaveTextContent("no connection details");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("W-S4-9 — a visitor (ask-token) session never calls the owner's task routes", () => {
+  it("Ask.tsx imports neither queries.ts (useTasks/useOwnerCards live there) nor /tasks or /cards by name", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const source = readFileSync(join(root, "src/routes/Ask.tsx"), "utf8");
+    // The asker page is deliberately outside TanStack Query altogether (see
+    // this file's own header comment) — it never imports api/queries.ts at
+    // all, so there is no route into useTasks/useTask/useOwnerCards from
+    // here, by construction rather than by a runtime guard that could drift.
+    expect(source).not.toMatch(/from ["']\.\.\/api\/queries\.js["']/);
+    expect(source).not.toMatch(/\/tasks\b/);
+    expect(source).not.toMatch(/\/cards\b/);
   });
 });

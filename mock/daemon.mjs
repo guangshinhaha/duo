@@ -370,9 +370,37 @@ function seedState() {
         executedAt: null,
       },
     ],
+    // W-S4-9: the owner's own task view (`docs/workspace/cards.md` §7) —
+    // one open task, seeded against a room a dev build would actually have
+    // open, with its own workspace card alongside it (ids and state only,
+    // the owner-channel rule). `draftId` links back to d-1, the one seeded
+    // draft that already has a channel provenance to show it beside.
+    tasks: [
+      {
+        id: "task-1",
+        roomId: "!project-x:workspace.example",
+        requester: "@bose:workspace.example",
+        state: "acknowledged",
+        draftId: "d-1",
+        createdAt: minutesAgo(20),
+        updatedAt: minutesAgo(20),
+      },
+    ],
+    workspaceCards: [
+      {
+        id: "card-1",
+        taskId: "task-1",
+        roomId: "!project-x:workspace.example",
+        kind: "task",
+        state: "acknowledged",
+        updatedAt: minutesAgo(20),
+      },
+    ],
     askLog: [],
     draftSeq: 4,
     candidateSeq: 1,
+    taskSeq: 1,
+    cardSeq: 1,
   };
   state.escalationDigests = seedEscalationDigests(state.drafts);
   return state;
@@ -866,6 +894,118 @@ export function createMockDaemon({ empty = false, embedTickMs = 400 } = {}) {
           }
           found.executedAt = new Date().toISOString();
           return ok(found);
+        },
+      ],
+      [
+        // W-S4-9: GET /tasks?state= — the owner's own task list
+        // (`docs/workspace/cards.md` §7), oldest first like every other
+        // un-paged listing here.
+        "GET",
+        /^\/tasks$/,
+        () => {
+          const rawState = url.searchParams.get("state");
+          const rows = [...state.tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+          return ok(rawState === null ? rows : rows.filter((task) => task.state === rawState));
+        },
+      ],
+      [
+        // W-S4-9: GET /tasks/:id — carries draftId for the owner, the one
+        // fact `docs/workspace/cards.md` §7 names explicitly.
+        "GET",
+        /^\/tasks\/([^/]+)$/,
+        (m) => {
+          const id = decodeURIComponent(m[1]);
+          const task = state.tasks.find((candidate) => candidate.id === id);
+          return task ? ok(task) : fail(404, "TaskNotFoundError", `No task with id "${id}".`);
+        },
+      ],
+      [
+        // W-S4-9: GET /cards/:id — one card by id, ids/state only.
+        "GET",
+        /^\/cards\/([^/]+)$/,
+        (m) => {
+          const id = decodeURIComponent(m[1]);
+          const card = state.workspaceCards.find((candidate) => candidate.id === id);
+          return card ? ok(card) : fail(404, "CardNotFoundError", `No card with id "${id}".`);
+        },
+      ],
+      [
+        // W-S4-9: GET /cards?roomId=&audience=owner — the owner's own read
+        // of a room's cards (`docs/workspace/cards.md` §7's channel
+        // table). `audience` is required and must be "owner": this route
+        // exists only for the owner view, never the workspace's own copy
+        // (which a member reads off the room's own `duo.card` events,
+        // through the Matrix seam, not this route).
+        "GET",
+        /^\/cards$/,
+        () => {
+          const roomId = url.searchParams.get("roomId");
+          const audience = url.searchParams.get("audience");
+          if (roomId === null || roomId.trim() === "") {
+            return fail(400, "bad_request", "roomId is required");
+          }
+          if (audience !== "owner") {
+            return fail(400, "bad_request", 'audience must be "owner"');
+          }
+          return ok(state.workspaceCards.filter((card) => card.roomId === roomId));
+        },
+      ],
+      [
+        "POST",
+        /^\/mock\/push-task$/,
+        (_m, body) => {
+          // Mock-only (the name says so): fabricates a task update and
+          // lights up the owner channel's `task-updated` signal, so the
+          // push → refetch path (`src/api/ws.ts`) can be walked end to end
+          // against the mock, the same way /mock/push-draft already lets
+          // draft-ready be walked.
+          const roomId = typeof body?.roomId === "string" && body.roomId.trim() !== "" ? body.roomId : "!project-x:workspace.example";
+          const taskState = typeof body?.state === "string" && body.state.trim() !== "" ? body.state : "working";
+          let task = state.tasks.find((candidate) => candidate.roomId === roomId);
+          if (task) {
+            task.state = taskState;
+            task.updatedAt = new Date().toISOString();
+          } else {
+            task = {
+              id: `task-${++state.taskSeq}`,
+              roomId,
+              requester: typeof body?.requester === "string" ? body.requester : "@bose:workspace.example",
+              state: taskState,
+              draftId: null,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            state.tasks.push(task);
+          }
+          broadcast({ type: "task-updated", taskId: task.id, roomId: task.roomId, state: task.state });
+          return { status: 201, body: task };
+        },
+      ],
+      [
+        "POST",
+        /^\/mock\/push-card$/,
+        (_m, body) => {
+          // Mock-only: the card-updated twin of /mock/push-task, for the
+          // same end-to-end walk of the owner channel.
+          const roomId = typeof body?.roomId === "string" && body.roomId.trim() !== "" ? body.roomId : "!project-x:workspace.example";
+          const cardState = typeof body?.state === "string" && body.state.trim() !== "" ? body.state : "working";
+          let card = state.workspaceCards.find((candidate) => candidate.roomId === roomId);
+          if (card) {
+            card.state = cardState;
+            card.updatedAt = new Date().toISOString();
+          } else {
+            card = {
+              id: `card-${++state.cardSeq}`,
+              taskId: typeof body?.taskId === "string" ? body.taskId : null,
+              roomId,
+              kind: "task",
+              state: cardState,
+              updatedAt: new Date().toISOString(),
+            };
+            state.workspaceCards.push(card);
+          }
+          broadcast({ type: "card-updated", cardId: card.id, roomId: card.roomId });
+          return { status: 201, body: card };
         },
       ],
       [

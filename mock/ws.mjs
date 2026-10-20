@@ -106,7 +106,11 @@ function drainFrames(socket, buffer, onMessage) {
 /**
  * Attaches the one push channel to an existing http server. Returns
  * `broadcast(message)` — JSON-stringifies and fan-outs to every authed
- * socket; routes call it with {type:"draft-ready",draftId}.
+ * socket; routes call it with {type:"draft-ready",draftId},
+ * {type:"draft-drafting",roomId}, and — W-S4-9 — {type:"task-updated",
+ * taskId,roomId,state} / {type:"card-updated",cardId,roomId}. One wire
+ * discipline for every signal: ids and state only, never content
+ * (`docs/workspace/cards.md` §7).
  */
 export function attachDraftReadySocket(server) {
   const sockets = new Set();
