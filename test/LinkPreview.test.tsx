@@ -38,11 +38,14 @@ function rooms(): RoomSummary[] {
       roomId: ROOM_ID,
       kind: "group",
       name: "project-x",
+      topic: null,
+      avatarUrl: null,
       members: [{ userId: "@carol:workspace.example", name: "Carol" }],
       latest: null,
       unread: { notifications: 0, mentions: 0 },
       muted: false,
       notifications: "all",
+      canEdit: { name: false, topic: false, avatar: false, pins: false },
     },
   ];
 }
@@ -70,6 +73,9 @@ function fakeConnection(
 ) {
   const connection: WorkspaceConnection = {
     userId: SESSION.userId,
+    profile: vi.fn(async () => ({ name: "Bose", avatarUrl: null })),
+    setDisplayName: vi.fn(async () => {}),
+    setAvatarUrl: vi.fn(async () => "mxc://workspace.example/avatar"),
     rooms: vi.fn(async () => rooms().map((room) => ({ ...room }))),
     timeline: vi.fn(async () => [...timeline]),
     timelineAt: vi.fn(async () => [...timeline]),
@@ -81,14 +87,22 @@ function fakeConnection(
     unreadBoundaryFrom: vi.fn(() => ({ kind: "none" as const })),
     advanceReadMarker: vi.fn(async () => {}),
     searchMessages: vi.fn(async () => ({ hits: [], next: null })),
+    mentions: vi.fn(async () => []),
     send: vi.fn(async () => {}),
     edit: vi.fn(async () => {}),
     delete: vi.fn(async () => {}),
     react: vi.fn(async () => {}),
     unreact: vi.fn(async () => {}),
+    pin: vi.fn(async () => {}),
+    unpin: vi.fn(async () => {}),
     replyInThread: vi.fn(async () => {}),
+    retry: vi.fn(async () => {}),
+    cancel: vi.fn(() => {}),
     markRead: vi.fn(async () => {}),
     markUnread: vi.fn(async () => {}),
+    setRoomName: vi.fn(async () => {}),
+    setRoomTopic: vi.fn(async () => {}),
+    setRoomAvatar: vi.fn(async () => {}),
     startDirect: vi.fn(async () => "!x:workspace.example"),
     createRoom: vi.fn(async () => "!x:workspace.example"),
     createChannel: vi.fn(async () => "!x:workspace.example"),
@@ -103,6 +117,9 @@ function fakeConnection(
       throw new Error("not used here");
     }),
     sendFile: vi.fn(async () => {}),
+    sendPoll: vi.fn(async () => {}),
+    votePoll: vi.fn(async () => {}),
+    endPoll: vi.fn(async () => {}),
     loadMedia: vi.fn(async () => options.image ?? null),
     getUrlPreview: vi.fn(async () => options.preview ?? null),
     searchPeople: vi.fn(async () => []),
@@ -166,7 +183,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 describe("#219 — off by default", () => {
   it("shows no preview card for a link when the member never opted in — and never even asks the homeserver for one", async () => {
-    const connection = await openRoom([message({ eventId: "$1", body: "take a look: https://example.com/page" })]);
+    const connection = await openRoom([message({ eventId: "$1", senderId: "@bose:workspace.example", body: "take a look: https://example.com/page" })]);
     const row = await messageRow("take a look");
     expect(within(row).queryByTestId("link-preview-card")).toBeNull();
     // The point of OFF: this client doesn't even ask — the homeserver fetch
@@ -187,7 +204,7 @@ describe("#219 — opted in", () => {
 
   it("shows a card with title, description and image when the homeserver returns one", async () => {
     await openRoom(
-      [message({ eventId: "$1", body: "take a look: https://example.com/page" })],
+      [message({ eventId: "$1", senderId: "@bose:workspace.example", body: "take a look: https://example.com/page" })],
       {
         preview: { title: "Example Domain", description: "An example page.", image: "mxc://workspace.example/preview1" },
         image: new Blob(["bytes"], { type: "image/png" }),
@@ -203,7 +220,7 @@ describe("#219 — opted in", () => {
 
   it("shows no card and no error when the homeserver has no metadata for the link", async () => {
     const connection = await openRoom(
-      [message({ eventId: "$1", body: "dead link: https://example.com/nothing" })],
+      [message({ eventId: "$1", senderId: "@bose:workspace.example", body: "dead link: https://example.com/nothing" })],
       { preview: null },
     );
     const row = await messageRow("dead link");
@@ -214,7 +231,7 @@ describe("#219 — opted in", () => {
   });
 
   it("renders no card for a message with no link at all", async () => {
-    await openRoom([message({ eventId: "$1", body: "no link in this one" })]);
+    await openRoom([message({ eventId: "$1", senderId: "@bose:workspace.example", body: "no link in this one" })]);
     const row = await messageRow("no link in this one");
     expect(within(row).queryByTestId("link-preview-card")).toBeNull();
   });
