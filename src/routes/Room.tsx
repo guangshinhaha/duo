@@ -34,7 +34,7 @@ import { readTypingPref } from "../typingPrefs.js";
 import { catchUpAllowedForRoom } from "../catchUpPrefs.js";
 import { isCatchUpCardThresholdMet } from "../catchUpThresholds.js";
 import { CatchUpCard } from "../components/CatchUpCard.js";
-import type { ReadReceipt, RoomMemberRef, RoomMessage, TypingMember, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
+import type { ReadReceipt, RoomKind, RoomMemberRef, RoomMessage, TypingMember, UnreadBoundary, WorkspaceConnection } from "../workspace/matrix.js";
 import { escalationOf, plainPreview, readDuoAnswer } from "../workspace/duoAnswer.js";
 import { duoOwnerLabel, isDuoUserId, localpartOf } from "../workspace/identity.js";
 import { duoConversationOf, questionOutcomes, questionOutcomeWords, type QuestionOutcome } from "../workspace/duoConversation.js";
@@ -117,6 +117,11 @@ const UNREAD_DWELL_MS = 900;
 const UNREAD_SEARCH_PAGE_CAP = 10;
 
 export { roomHref, threadHref };
+
+/** "carol's duo, dee's duo" — every duo member's owner label, joined, for a composer hint that names more than one at once (#312 W-S1-3, the attachment-sharing hint). */
+function duoOwnerLabelsJoined(duos: readonly RoomMemberRef[]): string {
+  return duos.map((duo) => `${duoOwnerLabel(duo.userId) ?? localpartOf(duo.userId)}'s duo`).join(", ");
+}
 
 /** The latest reply's author as the id says they are — "carol's duo" from `@duo-carol`, never a chosen name. */
 function threadPreviewLabel(reply: { senderId: string; senderName: string }): string {
@@ -1155,6 +1160,7 @@ export function Room({
               key={roomId}
               initialDraft={room?.draft ?? ""}
               roomId={roomId}
+              roomKind={room?.kind ?? "direct"}
               roomName={roomName}
               members={room?.members ?? []}
               replyTarget={replyTarget}
@@ -2047,6 +2053,7 @@ export function RoomEntry({
 function RoomComposer({
   connection,
   roomId,
+  roomKind,
   roomName,
   members,
   initialDraft = "",
@@ -2058,6 +2065,8 @@ function RoomComposer({
 }: {
   connection: WorkspaceConnection;
   roomId: string;
+  /** #312: a group or channel room with a duo member shows the @mention-gating hint; a direct room never does (S2 keeps it answering everything). */
+  roomKind: RoomKind;
   roomName: string;
   members: readonly RoomMemberRef[];
   /** duo#290: this room's own `draft` (`RoomSummary.draft`), read once to seed the editor — `Room`'s `key={roomId}` on this component is what makes "once" mean "once per room" rather than carrying a stale value across a room switch. */
@@ -2512,6 +2521,17 @@ function RoomComposer({
           <p className="type-body text-[var(--text)]">Drop to attach</p>
         </div>
       )}
+      {/* #312 W-S1-3: a group or channel room with a duo member stays quiet
+          unless addressed (S1) — the composer says so, once, near where the
+          member types, rather than leaving the gate to surprise them the
+          first time it holds its silence. No hint in a direct room: S2
+          keeps a duo answering everything there, so there is no gate to
+          explain. */}
+      {roomKind !== "direct" && duos.length > 0 && (
+        <p className="mb-2 type-provenance text-[var(--muted)]" data-testid="mention-gating-hint">
+          {`${duoOwnerLabelsJoined(duos)} answers only when you @mention it or reply to it.`}
+        </p>
+      )}
       {replyTarget !== null && (
         // #215: what Send is about to quote — the words at hand, not a
         // second fetch, and a cancel that leaves the composer's own text
@@ -2711,7 +2731,7 @@ function RoomComposer({
       {attachments.length > 0 && (
         <p className="mt-2 type-provenance text-[var(--muted)]" data-testid="attachment-note">
           {duos.length > 0
-            ? `${duos.map((duo) => `${duoOwnerLabel(duo.userId) ?? localpartOf(duo.userId)}'s duo`).join(", ")} can read what you attach here when you ask next — text files up to 32 KiB are used to answer (the duo's own reading cap, smaller than this app's share limits); images are shared for people, and a duo can't read images yet — not yet. Sharing never imports: nothing is added to what any duo knows.`
+            ? `${duoOwnerLabelsJoined(duos)} can read what you attach here when you ask next — text files up to 32 KiB are used to answer (the duo's own reading cap, smaller than this app's share limits); images are shared for people, and a duo can't read images yet — not yet. Sharing never imports: nothing is added to what any duo knows.`
             : "Attachments share with the people in this conversation — no duo is here. Sharing never imports: nothing is added to what any duo knows."}
         </p>
       )}
