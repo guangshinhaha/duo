@@ -37,10 +37,21 @@ for the wire reference).
 
 ### duo
 
-The system of record that answers, drafts, escalates, and refuses — one per
-owner, always attributed, never a person. Owner surfaces say "Your duo"; the
-asker page says "the owner's duo" (its reader is not the owner); the roster
-says "Your duo" and "{owner}'s duo". These three are the whole set.
+The system of record that answers, drafts, escalates, and refuses — one
+personal duo per owner, plus up to five desk duos only that owner can use
+(see **desk duo**), always attributed, never a person. Owner surfaces say
+"Your duo"; the asker page says "the owner's duo" (its reader is not the
+owner); the roster says "Your duo" and "{owner}'s duo". These three are the
+whole set for a personal duo.
+
+### desk duo
+
+A duo the owner creates for themselves, besides that one personal duo: up
+to five, and only the owner can use them. Each is set up in about a minute
+via a create flow. Always called a desk duo. The never-say list in rule 1
+still holds — never an employee, nor a teammate, an assistant, staff, a
+chatbot, an intern, or any other noun that makes it a person or a colleague.
+Chatting with someone else's personal duo is unchanged.
 
 ### draft
 
