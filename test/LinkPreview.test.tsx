@@ -120,6 +120,7 @@ function fakeConnection(
     sendPoll: vi.fn(async () => {}),
     votePoll: vi.fn(async () => {}),
     endPoll: vi.fn(async () => {}),
+    sendCardResponse: vi.fn(async () => {}),
     loadMedia: vi.fn(async () => options.image ?? null),
     getUrlPreview: vi.fn(async () => options.preview ?? null),
     searchPeople: vi.fn(async () => []),

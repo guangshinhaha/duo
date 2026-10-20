@@ -266,6 +266,7 @@ function fakeConnection(state: {
     sendPoll: vi.fn(async () => {}),
     votePoll: vi.fn(async () => {}),
     endPoll: vi.fn(async () => {}),
+    sendCardResponse: vi.fn(async () => {}),
     loadMedia: vi.fn(async (url: string): Promise<Blob | null> => new Blob([`bytes of ${url}`], { type: "application/octet-stream" })),
     // #219: no fixture in this file posts a link a card should render —
     // LinkPreview.test.tsx pins the preview itself — so this fake simply
