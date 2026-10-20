@@ -1,6 +1,5 @@
 import type { DuoApiConfig } from "../api/client.js";
 import { useDraftsFeed, usePendingDrafts, useTasks } from "../api/queries.js";
-import type { TaskRecord } from "../api/types.js";
 import { conversationOf } from "../workspace/drafts.js";
 import { roomHref } from "../workspace/links.js";
 import { DeliveryStateLine } from "./DeliveryStateLine.js";
@@ -11,22 +10,7 @@ import { useStickToEnd } from "../shell/stickToEnd.js";
 import { useHeldRooms } from "../shell/waiting.js";
 import type { WorkspaceConnection } from "../workspace/matrix.js";
 import { EscalationCard, isColleagueEscalation } from "./EscalationCard.js";
-
-/** W-S4-9: the owner task line's own words for a task state — the same labels the task chip itself uses (`src/components/cards/TaskCard.tsx`), so the room and the card never disagree about what a state is called. */
-function taskStateWords(state: TaskRecord["state"]): string {
-  switch (state) {
-    case "acknowledged":
-      return "Acknowledged";
-    case "working":
-      return "Working on it";
-    case "needs_decision":
-      return "Needs a decision";
-    case "done":
-      return "Done";
-    case "failed":
-      return "Failed";
-  }
-}
+import { taskStateLabel } from "./cards/TaskCard.js";
 
 /**
  * #68, re-shaped by the chat-first move (#142): the drafts of one
@@ -121,7 +105,7 @@ export function RoomDrafts({
       {roomTasks.map((task) => (
         <p className="mt-2 flex items-center gap-2 type-provenance text-[var(--muted)]" data-testid="room-task-line" key={task.id}>
           <a className="underline" data-testid="room-task-link" href={roomHref(roomId)}>
-            Task · {taskStateWords(task.state)}
+            Task · {taskStateLabel(task.state)}
           </a>
         </p>
       ))}

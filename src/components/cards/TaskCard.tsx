@@ -3,30 +3,51 @@ import type { DuoCardView } from "../../workspace/matrix.js";
 import { CardFrame, StateChip } from "./CardFrame.js";
 
 /**
- * W-S4-8: a task card's state, in the words `docs/workspace/cards.md` §8's
- * state machine names — `acknowledged → working → needs_decision → working
- * → done | failed`. Text labels, never colour alone (accessibility): the
- * icon beside each is decorative (`aria-hidden`), and the chip's own words
- * carry the fact.
+ * W-S4-8: a task state's fixed label, in the words `docs/workspace/cards.md`
+ * §8's state machine names — `acknowledged → working → needs_decision →
+ * working → done | failed`. The one source every task-state surface reads
+ * from (the card chip here and the owner's task line in `RoomDrafts.tsx`),
+ * so the room and the card can never disagree about what a state is called.
  */
-function taskChipOf(state: string): { label: string; tone: "neutral" | "progress" | "signal" | "done" | "failed"; icon: typeof Circle } {
+export function taskStateLabel(state: string): string {
   switch (state) {
     case "acknowledged":
-      return { label: "Acknowledged", tone: "neutral", icon: Circle };
+      return "Acknowledged";
     case "working":
-      return { label: "Working on it", tone: "progress", icon: CircleDot };
+      return "Working on it";
     case "needs_decision":
-      return { label: "Needs a decision", tone: "signal", icon: CircleDot };
+      return "Needs a decision";
     case "done":
-      return { label: "Done", tone: "done", icon: CheckCircle2 };
+      return "Done";
     case "failed":
-      return { label: "Failed", tone: "failed", icon: XCircle };
+      return "Failed";
     default:
       // The Matrix seam (W-S4-7) already refuses to build a `DuoCardView`
       // for a `state` it can't parse as a string at all, but a future
       // state this client doesn't know the words for yet still needs an
       // honest label rather than nothing: the wire's own word, as sent.
-      return { label: state, tone: "neutral", icon: Circle };
+      return state;
+  }
+}
+
+/**
+ * W-S4-8: a task card's state, tone and icon together. Text labels, never
+ * colour alone (accessibility): the icon beside each is decorative
+ * (`aria-hidden`), and the chip's own words carry the fact.
+ */
+function taskChipOf(state: string): { label: string; tone: "neutral" | "progress" | "signal" | "done" | "failed"; icon: typeof Circle } {
+  const label = taskStateLabel(state);
+  switch (state) {
+    case "working":
+      return { label, tone: "progress", icon: CircleDot };
+    case "needs_decision":
+      return { label, tone: "signal", icon: CircleDot };
+    case "done":
+      return { label, tone: "done", icon: CheckCircle2 };
+    case "failed":
+      return { label, tone: "failed", icon: XCircle };
+    default:
+      return { label, tone: "neutral", icon: Circle };
   }
 }
 
