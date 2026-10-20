@@ -4336,3 +4336,60 @@ describe("duo#301 — slash commands in the conversation composer", () => {
     expect(fake.connection.send).not.toHaveBeenCalled();
   });
 });
+
+describe("#312 W-S1-3 — the composer says when a group room's duo stays quiet", () => {
+  it("a group room with a duo member shows the gating hint, attributed to its owner", async () => {
+    seedSession();
+    const fake = fakeConnection({ rooms: roomsFixture(), timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    expect(screen.getByTestId("mention-gating-hint")).toHaveTextContent("carol's duo answers only when you @mention it or reply to it.");
+  });
+
+  it("a channel room with a duo member shows the same hint", async () => {
+    seedSession();
+    const rooms = roomsFixture().map((room) =>
+      room.roomId === "!announce:workspace.example"
+        ? { ...room, members: [...room.members, { userId: "@duo-dee:workspace.example", name: "duo-dee" }] }
+        : room,
+    );
+    const fake = fakeConnection({ rooms, timelines: { "!announce:workspace.example": [] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!announce%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    expect(screen.getByTestId("mention-gating-hint")).toHaveTextContent("dee's duo answers only when you @mention it or reply to it.");
+  });
+
+  it("a group room with no duo member shows no hint", async () => {
+    seedSession();
+    const rooms = roomsFixture().map((room) =>
+      room.roomId === "!project-x:workspace.example" ? { ...room, members: [{ userId: "@bose:workspace.example", name: "Bose" }] } : room,
+    );
+    const fake = fakeConnection({ rooms, timelines: { "!project-x:workspace.example": [...PROJECT_TIMELINE] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!project-x%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    expect(screen.queryByTestId("mention-gating-hint")).toBeNull();
+  });
+
+  it("a direct room with a duo shows no hint — gating is a group/channel concern (S2)", async () => {
+    seedSession();
+    const rooms = roomsFixture().map((room) =>
+      room.roomId === "!direct:workspace.example" ? { ...room, members: [{ userId: "@duo-carol:workspace.example", name: "duo-carol" }] } : room,
+    );
+    const fake = fakeConnection({ rooms, timelines: { "!direct:workspace.example": [] } });
+    vi.mocked(connect).mockResolvedValue(fake.connection);
+    await renderApp();
+    navigate("#chat/!direct%3Aworkspace.example");
+    await screen.findByTestId("room-timeline");
+
+    expect(screen.queryByTestId("mention-gating-hint")).toBeNull();
+  });
+});
