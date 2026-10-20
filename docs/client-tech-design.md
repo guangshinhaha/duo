@@ -193,6 +193,17 @@ The nine rows below (#269's never-answer writes and suggestion, and #270's away/
 | `GET` | `/actions/t4/pending` | `PendingT4RequestForJudgement[]` — the staged irreversible steps (#180) | `actions/t4-guard` |
 | `POST` | `/actions/t4/:id/confirm` | `PendingT4Request` — confirming is this route and only this route; the confirming device's id rides the attempt (#180) | `actions/t4-guard` |
 | `GET` | `/actions/attempts` | `ActionAttemptEntry[]` — every attempt, refused or resolved (#180) | `actions/attempt-log` |
+
+The four rows below (W-S4-9, `docs/workspace/cards.md` §7's "owner task view") are proposed-but-unbuilt
+as this client's own PR lands — contract-first against the daemon's own Phase 1 build plan §3
+(W-S4-6), the same stance #269/#270's rows above took before digital-duo#287 landed them for real.
+Ids and state only, never content, matching `draft-ready`'s own discipline.
+
+| `GET` | `/tasks` | `TaskRecord[]` — the owner's own tasks; `?state=` filters to one state (W-S4-9, `docs/workspace/cards.md` §7) | `api/queries` |
+| `GET` | `/tasks/:id` | `TaskRecord` — carries `draftId` for the owner (W-S4-9) | `api/queries` |
+| `GET` | `/cards` | `OwnerCardSummary[]` — `?roomId=&audience=owner`; the owner's own read of a room's cards, ids and state only (W-S4-9) | `api/queries` |
+| `GET` | `/cards/:id` | `OwnerCardSummary` — one card by id (W-S4-9) | `api/queries` |
+
 | `GET` | `/lifecycle` | `{ lifecycle, transfers }` — the lifecycle record plus every transfer's state (#181) | `continuity/lifecycle`, `continuity/transfer` |
 | `POST` | `/lifecycle/end` | `EndDuoResult` — describes what would go until `confirmed: true`; a confirmed end drops every token, so each device's next request is a 401 (#181; the client's kill switch is Settings' "End this duo", #55 — see *Ending the duo* below) | `continuity/lifecycle` |
 | `POST` | `/corpus/import-paste` | `PasteImportSummary` — the transcript text in the body, down `duo import paste`'s own path (#176) | `ingest/paste-import` |
@@ -245,7 +256,7 @@ The nine rows below (#269's never-answer writes and suggestion, and #270's away/
 | `GET` | `/audit` | `AuditEntry[]` | `permissions/audit` |
 | `GET` | `/mirror/public-answers` | `PublicAnswerLogEntry[]` — every ask-link answer given on the owner's behalf, each with its draft's `sources` resolved at read time; merged with `/audit` into Activity's one newest-first feed (duo#267, digital-duo#267) | `permissions/public-answer-log` |
 | `POST` | `/mirror/public-answers/:id/correct` | `PublicAnswerLogEntry` — body `{ correctedText, threadStillExists? }`; posts a linked correction and demotes the topic's T0 autonomy immediately; 404 unknown id, 409 nothing to correct, 400 blank text (duo#267, digital-duo#267) | `permissions/public-correction` |
-| `GET` | `/ws` | the one push channel — `draft-ready` and, since guangshinhaha/duo#285, `draft-drafting` (`{ type: "draft-drafting", roomId }`, fired when a workspace question starts drafting, before any draft row exists — "your duo is drafting"); auth by first message (#162) | `serve/ws` |
+| `GET` | `/ws` | the one push channel — `draft-ready` and, since guangshinhaha/duo#285, `draft-drafting` (`{ type: "draft-drafting", roomId }`, fired when a workspace question starts drafting, before any draft row exists — "your duo is drafting"); proposed-but-unbuilt (W-S4-9): `task-updated` (`{ type: "task-updated", taskId, roomId, state }`) and `card-updated` (`{ type: "card-updated", cardId, roomId }`), invalidating `["tasks"]`/`["cards"]`, ids and state only; auth by first message (#162) | `serve/ws` |
 
 **Ending the duo (#55).** "Instantly killable" is only true if it is not tied to one laptop, so
 Settings carries the kill switch: `POST /lifecycle/end` twice, and only the second deletes. The
