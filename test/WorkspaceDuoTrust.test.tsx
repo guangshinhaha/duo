@@ -634,7 +634,7 @@ describe("#313 — the instant answer still renders as RoomDuoAnswer, reply-shap
   it("no card renders for an instant answer — it is plain m.text, never duo.card", async () => {
     await openRoom([
       message({ eventId: "$1", senderId: "@bose:workspace.example", body: "what's our refund policy?" }),
-      message({ eventId: "$2", senderId: DUO, body: answered("0.91"), replyToEventId: "$1" }),
+      message({ eventId: "$2", senderId: DUO, body: answered("0.91") }),
     ]);
     const row = await duoRow("Refunds within 30 days, full amount.");
     expect(within(row).queryByTestId("duo-card")).toBeNull();
