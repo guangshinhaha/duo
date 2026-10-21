@@ -590,3 +590,57 @@ describe("#67 — the docs say what the surface does", () => {
     expect(doc).toMatch(/boundary/i);
   });
 });
+
+/*
+ * #313 (S3, "Instant answer"): regression pins only — the daemon composes
+ * an instant answer exactly as #67 above already covers, and this client's
+ * `RoomDuoAnswer` already renders it. What's new for S3 is the daemon
+ * widening the wire shape in a shared room to a plain reply relation
+ * (`m.relates_to["m.in_reply_to"]`, no `rel_type` — the same shape #215's
+ * quote already reads into `replyToEventId`). These pins exist so that
+ * widening, and the card rendering W-S4-7..10 added since, can never
+ * silently turn a composed answer back into unstyled words or a card.
+ */
+describe("#313 — the instant answer still renders as RoomDuoAnswer, reply-shaped or not", () => {
+  it("a duo's m.text answer with sources still renders composed, sources and trust line intact", async () => {
+    await openRoom([
+      message({ eventId: "$1", senderId: "@bose:workspace.example", body: "what's our refund policy?" }),
+      message({ eventId: "$2", senderId: DUO, body: answered("0.91") }),
+    ]);
+    const row = await duoRow("Refunds within 30 days, full amount.");
+    const sources = within(row).getAllByTestId("duo-source");
+    expect(sources).toHaveLength(2);
+    expect(within(row).getByTestId("duo-trust")).toHaveAttribute("data-trust", "confident");
+    expect(within(row).getByTestId("duo-evidence")).toHaveTextContent("Evidence up to 3 days old");
+    // Still composed, not plain words: the scaffolding doesn't leak as raw text.
+    expect(row.textContent).not.toContain("Sources:");
+  });
+
+  it("a reply-shaped duo answer (m.relates_to m.in_reply_to) still renders as RoomDuoAnswer, not plain words", async () => {
+    await openRoom([
+      message({ eventId: "$1", senderId: "@bose:workspace.example", body: "what's our refund policy?" }),
+      message({ eventId: "$2", senderId: DUO, body: answered("0.91"), replyToEventId: "$1" }),
+    ]);
+    const row = await duoRow("Refunds within 30 days, full amount.");
+    // The reply relation rides alongside the composed answer — the quote
+    // above it, and the very same RoomDuoAnswer scaffolding below it.
+    expect(within(row).getByTestId("reply-quote")).toHaveTextContent("what's our refund policy?");
+    expect(within(row).getAllByTestId("duo-source")).toHaveLength(2);
+    expect(within(row).getByTestId("duo-trust")).toHaveAttribute("data-trust", "confident");
+    expect(within(row).getByTestId("duo-evidence")).toHaveTextContent("Evidence up to 3 days old");
+    expect(within(row).queryByTestId("duo-card")).toBeNull();
+  });
+
+  it("no card renders for an instant answer — it is plain m.text, never duo.card", async () => {
+    await openRoom([
+      message({ eventId: "$1", senderId: "@bose:workspace.example", body: "what's our refund policy?" }),
+      message({ eventId: "$2", senderId: DUO, body: answered("0.91") }),
+    ]);
+    const row = await duoRow("Refunds within 30 days, full amount.");
+    expect(within(row).queryByTestId("duo-card")).toBeNull();
+    expect(within(row).queryByTestId("duo-card-title")).toBeNull();
+    // The answer's own trust line renders in its place — it's RoomDuoAnswer,
+    // not a card's frame, that drew this row.
+    expect(within(row).getByTestId("duo-trust")).toBeInTheDocument();
+  });
+});
